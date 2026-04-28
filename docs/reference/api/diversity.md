@@ -1,0 +1,3 @@
+# variopt.diversity
+
+::: variopt.diversity

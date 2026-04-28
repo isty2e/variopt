@@ -1,0 +1,475 @@
+"""Evaluation-record artifact definitions."""
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Generic, Protocol, TypeVar
+
+import numpy as np
+
+from variopt.generic_runtime import FrozenGenericSlotsCompat
+
+from ..direction import OptimizationDirection
+from ..typevars import CandidateT
+from .requests import (
+    EvaluationRequest,
+    InteractionEvaluationSpec,
+    InteractionEvaluationUnit,
+    Proposal,
+    ProposalEvaluationSpec,
+    normalize_evaluation_request,
+)
+
+ObservationCandidateT = TypeVar("ObservationCandidateT")
+ObjectiveVectorCandidateT = TypeVar("ObjectiveVectorCandidateT")
+
+
+class RequestAlignedEvaluationRecord(Protocol):
+    """Minimal request-aligned evaluation record contract.
+
+    Notes
+    -----
+    This protocol captures the semantic boundary shared by
+    :class:`EvaluationRecord` and its concrete subclasses: the record must own
+    exactly one canonical request. The core request-local execution stack
+    depends on this alignment contract even when it does not care about the
+    concrete record subclass.
+    """
+
+    @property
+    def request(self) -> object:
+        """Return the canonical request that produced the record."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class EvaluationRecord(FrozenGenericSlotsCompat, Generic[CandidateT]):
+    """Immutable semantic record over one canonical request.
+
+    Parameters
+    ----------
+    request : EvaluationRequest[CandidateT]
+        Canonical request that produced the record.
+    candidate : CandidateT
+        Candidate evaluated for ``request``.
+    """
+
+    request: EvaluationRequest[CandidateT]
+    candidate: CandidateT
+
+    @property
+    def proposal(self) -> Proposal[CandidateT]:
+        """Return the proposal compatibility view.
+
+        Returns
+        -------
+        Proposal[CandidateT]
+            Proposal owned by :attr:`request`.
+        """
+        return self.request.proposal
+
+    @property
+    def proposal_evaluation_spec(self) -> ProposalEvaluationSpec | None:
+        """Return the request-spec compatibility view.
+
+        Returns
+        -------
+        ProposalEvaluationSpec | None
+            Request-local metadata attached to :attr:`request`.
+        """
+        return self.request.proposal_evaluation_spec
+
+
+@dataclass(frozen=True, slots=True)
+class InteractionEvaluationRecord(FrozenGenericSlotsCompat, Generic[CandidateT]):
+    """Immutable semantic record over one interaction unit.
+
+    Parameters
+    ----------
+    interaction_unit : InteractionEvaluationUnit[CandidateT]
+        Canonical interaction unit that produced the record.
+    """
+
+    interaction_unit: InteractionEvaluationUnit[CandidateT]
+
+    @property
+    def requests(self) -> tuple[EvaluationRequest[CandidateT], ...]:
+        """Return the request participants.
+
+        Returns
+        -------
+        tuple[EvaluationRequest[CandidateT], ...]
+            Requests contained in the interaction unit.
+        """
+        return self.interaction_unit.requests
+
+    @property
+    def proposals(self) -> tuple[Proposal[CandidateT], ...]:
+        """Return the proposal compatibility view.
+
+        Returns
+        -------
+        tuple[Proposal[CandidateT], ...]
+            Proposals carried by the interaction unit.
+        """
+        return self.interaction_unit.proposals
+
+    @property
+    def candidates(self) -> tuple[CandidateT, ...]:
+        """Return the participating candidates.
+
+        Returns
+        -------
+        tuple[CandidateT, ...]
+            Candidates carried by the interaction unit.
+        """
+        return self.interaction_unit.candidates
+
+    @property
+    def interaction_evaluation_spec(self) -> InteractionEvaluationSpec | None:
+        """Return the interaction-spec compatibility view.
+
+        Returns
+        -------
+        InteractionEvaluationSpec | None
+            Shared metadata attached to the interaction unit.
+        """
+        return self.interaction_unit.interaction_evaluation_spec
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class Observation(EvaluationRecord[CandidateT]):
+    """Immutable scalar evaluation result.
+
+    Parameters
+    ----------
+    request : EvaluationRequest[CandidateT] | None, optional
+        Existing canonical request.
+    proposal : Proposal[CandidateT] | None, optional
+        Proposal to lower into a canonical request.
+    proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
+        Optional request metadata used when lowering ``proposal``.
+    candidate : CandidateT
+        Candidate evaluated by the request.
+    value : float
+        Raw scalar objective value.
+    score : float
+        Canonical minimization score derived from ``value`` and the optimization
+        direction.
+    elapsed_seconds : float | None, optional
+        Optional wall-clock runtime for the evaluation.
+    """
+
+    value: float
+    score: float
+    elapsed_seconds: float | None = None
+
+    def __init__(
+        self,
+        *,
+        request: EvaluationRequest[CandidateT] | None = None,
+        proposal: Proposal[CandidateT] | None = None,
+        proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
+        candidate: CandidateT,
+        value: float,
+        score: float,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        """Create one canonical scalar observation.
+
+        Parameters
+        ----------
+        request : EvaluationRequest[CandidateT] | None, optional
+            Existing canonical request.
+        proposal : Proposal[CandidateT] | None, optional
+            Proposal to lower into a canonical request.
+        proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
+            Optional request metadata used when lowering ``proposal``.
+        candidate : CandidateT
+            Candidate evaluated by the request.
+        value : float
+            Raw scalar objective value.
+        score : float
+            Canonical minimization score used for ordering.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+        """
+        normalized_request = normalize_evaluation_request(
+            request=request,
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+        )
+        super(Observation, self).__init__(
+            request=normalized_request,
+            candidate=candidate,
+        )
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "score", score)
+        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        """Validate scalar observation payloads.
+
+        Raises
+        ------
+        ValueError
+            If ``value`` or ``score`` is non-finite, or if ``elapsed_seconds``
+            is negative.
+        """
+        if not np.isfinite(self.value):
+            msg = "value must be finite"
+            raise ValueError(msg)
+
+        if not np.isfinite(self.score):
+            msg = "score must be finite"
+            raise ValueError(msg)
+
+        if self.elapsed_seconds is not None and self.elapsed_seconds < 0.0:
+            msg = "elapsed_seconds must be non-negative"
+            raise ValueError(msg)
+
+    @staticmethod
+    def from_objective_value(
+        *,
+        request: EvaluationRequest[ObservationCandidateT] | None = None,
+        proposal: Proposal[ObservationCandidateT] | None = None,
+        proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
+        candidate: ObservationCandidateT,
+        value: float,
+        direction: OptimizationDirection,
+        elapsed_seconds: float | None = None,
+    ) -> "Observation[ObservationCandidateT]":
+        """Build an observation from a raw scalar objective value.
+
+        Parameters
+        ----------
+        request : EvaluationRequest[ObservationCandidateT] | None, optional
+            Existing canonical request.
+        proposal : Proposal[ObservationCandidateT] | None, optional
+            Proposal to lower into a canonical request.
+        proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
+            Optional request metadata used when lowering ``proposal``.
+        candidate : ObservationCandidateT
+            Candidate evaluated by the request.
+        value : float
+            Raw scalar objective value.
+        direction : OptimizationDirection
+            Direction used to normalize ``value`` into the canonical
+            minimization score.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+
+        Returns
+        -------
+        Observation[ObservationCandidateT]
+            Scalar observation with both raw value and canonical score.
+        """
+        normalized_value = float(value)
+        return Observation(
+            request=request,
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            candidate=candidate,
+            value=normalized_value,
+            score=direction.normalize_objective_value(normalized_value),
+            elapsed_seconds=elapsed_seconds,
+        )
+
+
+def normalize_objective_vector(
+    *,
+    values: Sequence[float],
+    field_name: str,
+) -> tuple[float, ...]:
+    """Normalize a float sequence into a canonical objective vector.
+
+    Parameters
+    ----------
+    values : Sequence[float]
+        Raw objective values or scores.
+    field_name : str
+        Human-readable field name used in validation errors.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Finite non-empty tuple of floats.
+
+    Raises
+    ------
+    ValueError
+        If ``values`` is empty or contains a non-finite number.
+    """
+    normalized_values = tuple(float(value) for value in values)
+    if len(normalized_values) == 0:
+        msg = f"{field_name} must not be empty"
+        raise ValueError(msg)
+
+    if not bool(np.all(np.isfinite(normalized_values))):
+        msg = f"{field_name} must contain only finite values"
+        raise ValueError(msg)
+
+    return normalized_values
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ObjectiveVectorRecord(EvaluationRecord[CandidateT]):
+    """Immutable multi-objective evaluation record.
+
+    Parameters
+    ----------
+    request : EvaluationRequest[CandidateT] | None, optional
+        Existing canonical request.
+    proposal : Proposal[CandidateT] | None, optional
+        Proposal to lower into a canonical request.
+    proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
+        Optional request metadata used when lowering ``proposal``.
+    candidate : CandidateT
+        Candidate evaluated by the request.
+    objective_values : Sequence[float]
+        Raw objective values.
+    objective_scores : Sequence[float]
+        Canonical minimization scores aligned with ``objective_values``.
+    elapsed_seconds : float | None, optional
+        Optional wall-clock runtime for the evaluation.
+    """
+
+    objective_values: tuple[float, ...]
+    objective_scores: tuple[float, ...]
+    elapsed_seconds: float | None = None
+
+    def __init__(
+        self,
+        *,
+        request: EvaluationRequest[CandidateT] | None = None,
+        proposal: Proposal[CandidateT] | None = None,
+        proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
+        candidate: CandidateT,
+        objective_values: Sequence[float],
+        objective_scores: Sequence[float],
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        """Create one canonical vector-valued evaluation record.
+
+        Parameters
+        ----------
+        request : EvaluationRequest[CandidateT] | None, optional
+            Existing canonical request.
+        proposal : Proposal[CandidateT] | None, optional
+            Proposal to lower into a canonical request.
+        proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
+            Optional request metadata used when lowering ``proposal``.
+        candidate : CandidateT
+            Candidate evaluated by the request.
+        objective_values : Sequence[float]
+            Raw objective values.
+        objective_scores : Sequence[float]
+            Canonical minimization scores aligned with ``objective_values``.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+        """
+        normalized_request = normalize_evaluation_request(
+            request=request,
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+        )
+        normalized_objective_values = normalize_objective_vector(
+            values=objective_values,
+            field_name="objective_values",
+        )
+        normalized_objective_scores = normalize_objective_vector(
+            values=objective_scores,
+            field_name="objective_scores",
+        )
+        super(ObjectiveVectorRecord, self).__init__(
+            request=normalized_request,
+            candidate=candidate,
+        )
+        object.__setattr__(self, "objective_values", normalized_objective_values)
+        object.__setattr__(self, "objective_scores", normalized_objective_scores)
+        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        """Validate multi-objective record payloads.
+
+        Raises
+        ------
+        ValueError
+            If the objective vectors have different lengths or if
+            ``elapsed_seconds`` is negative.
+        """
+        if len(self.objective_values) != len(self.objective_scores):
+            msg = "objective_values and objective_scores must have the same length"
+            raise ValueError(msg)
+
+        if self.elapsed_seconds is not None and self.elapsed_seconds < 0.0:
+            msg = "elapsed_seconds must be non-negative"
+            raise ValueError(msg)
+
+    @staticmethod
+    def from_objective_values(
+        *,
+        request: EvaluationRequest[ObjectiveVectorCandidateT] | None = None,
+        proposal: Proposal[ObjectiveVectorCandidateT] | None = None,
+        proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
+        candidate: ObjectiveVectorCandidateT,
+        objective_values: Sequence[float],
+        directions: Sequence[OptimizationDirection],
+        elapsed_seconds: float | None = None,
+    ) -> "ObjectiveVectorRecord[ObjectiveVectorCandidateT]":
+        """Build a vector record from raw objective values.
+
+        Parameters
+        ----------
+        request : EvaluationRequest[ObjectiveVectorCandidateT] | None, optional
+            Existing canonical request.
+        proposal : Proposal[ObjectiveVectorCandidateT] | None, optional
+            Proposal to lower into a canonical request.
+        proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
+            Optional request metadata used when lowering ``proposal``.
+        candidate : ObjectiveVectorCandidateT
+            Candidate evaluated by the request.
+        objective_values : Sequence[float]
+            Raw objective values.
+        directions : Sequence[OptimizationDirection]
+            Direction for each objective value.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+
+        Returns
+        -------
+        ObjectiveVectorRecord[ObjectiveVectorCandidateT]
+            Vector-valued record with normalized objective scores.
+
+        Raises
+        ------
+        ValueError
+            If ``directions`` does not align with ``objective_values``.
+        """
+        normalized_objective_values = normalize_objective_vector(
+            values=objective_values,
+            field_name="objective_values",
+        )
+        normalized_directions = tuple(directions)
+        if len(normalized_directions) != len(normalized_objective_values):
+            msg = "directions must align with objective_values"
+            raise ValueError(msg)
+
+        objective_scores = tuple(
+            direction.normalize_objective_value(value)
+            for value, direction in zip(
+                normalized_objective_values,
+                normalized_directions,
+                strict=True,
+            )
+        )
+        return ObjectiveVectorRecord(
+            request=request,
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            candidate=candidate,
+            objective_values=normalized_objective_values,
+            objective_scores=objective_scores,
+            elapsed_seconds=elapsed_seconds,
+        )

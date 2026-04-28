@@ -1,0 +1,117 @@
+site_name: variopt
+site_description: Typed optimization toolkit for structured search spaces.
+docs_dir: docs
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths:
+            - src
+          options:
+            docstring_style: numpy
+            members_order: source
+            filters:
+              - "!^_"
+            separate_signature: true
+            show_root_full_path: false
+            show_root_heading: true
+            show_root_toc_entry: false
+            show_signature_annotations: true
+            show_source: false
+            show_bases: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            group_by_category: true
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path:
+        - .
+        - docs
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Introduction: getting-started/introduction.md
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - Tutorials:
+      - Overview: tutorials/index.md
+      - First Optimization Run: tutorials/first-optimization.md
+      - Structured Spaces: tutorials/structured-spaces.md
+  - How-To Guides:
+      - Overview: guides/index.md
+      - Choose an Optimizer: guides/choose-an-optimizer.md
+      - Choose an Evaluator: guides/choose-an-evaluator.md
+      - Canonical Usage Patterns: guides/canonical-usage-patterns.md
+      - Customize an Optimizer Profile: guides/customize-optimizer-profile.md
+      - Local Optimization Methods: guides/local-optimization-methods.md
+  - Concepts:
+      - Overview: concepts/index.md
+      - Optimization Model: concepts/optimization-model.md
+      - Spaces and Candidates: concepts/spaces-and-candidates.md
+      - Study and Execution Models: concepts/study-and-execution-models.md
+      - CSA: concepts/csa.md
+      - Population Algorithms: concepts/population-algorithms.md
+      - Local Search: concepts/local-search.md
+  - Reference:
+      - Overview: reference/index.md
+      - API Surface:
+          - Overview: reference/api.md
+          - variopt: reference/api/variopt.md
+          - variopt.spaces: reference/api/spaces.md
+          - variopt.sampling: reference/api/sampling.md
+          - variopt.diversity: reference/api/diversity.md
+          - variopt.evaluators: reference/api/evaluators.md
+          - variopt.study: reference/api/study.md
+          - variopt.artifacts: reference/api/artifacts.md
+          - variopt.algorithms.population: reference/api/population.md
+          - variopt.algorithms.population.csa: reference/api/csa.md
+          - variopt.algorithms.local_search: reference/api/local-search.md
+      - Checkpointing: reference/checkpointing.md
+      - Presets and Contracts: reference/presets-and-contracts.md
+      - Glossary: reference/glossary.md
+      - Stability Policy: reference/stability.md
+      - Changelog: changelog.md

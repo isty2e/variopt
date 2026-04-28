@@ -1,0 +1,337 @@
+"""Geometry compilation and generic structured-distance helpers."""
+
+from typing import TypeVar
+
+from ..composites.record_space import RecordSpace
+from ..composites.tuple_space import TupleSpace
+from ..permutation import PermutationSpace
+from ..scalar import CategoricalSpace, IntegerSpace, RealSpace
+from ..structured import StructuredLeafSpace, StructuredSearchSpace
+from ..types import SpaceCandidateValue
+from .composites import (
+    ArraySpaceGeometry,
+    BinaryArraySpaceGeometry,
+    IntegerArraySpaceGeometry,
+    RealArraySpaceGeometry,
+    RecordSpaceGeometry,
+    TupleSpaceGeometry,
+    collect_child_geometries,
+    collect_field_geometries,
+)
+from .contracts import CompiledStructuredGeometryProvider, StructuredSpaceGeometry
+from .leaf import (
+    BuiltinChildSpace,
+    is_builtin_child_space,
+    is_builtin_structured_space,
+    is_categorical_leaf_space,
+)
+from .parts import StructuredDistanceParts
+from .permutation import PermutationSpaceGeometry
+from .scalar import CategoricalSpaceGeometry, IntegerSpaceGeometry, RealSpaceGeometry
+
+BoundaryT = TypeVar("BoundaryT")
+CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
+
+
+def distance_parts(
+    space: StructuredSearchSpace[BoundaryT, CandidateT],
+    left: CandidateT,
+    right: CandidateT,
+) -> StructuredDistanceParts:
+    """Return canonical structured distance parts for two candidates.
+
+    Parameters
+    ----------
+    space : StructuredSearchSpace[BoundaryT, CandidateT]
+        Structured search space shared by ``left`` and ``right``.
+    left : CandidateT
+        Left canonical candidate.
+    right : CandidateT
+        Right canonical candidate.
+
+    Returns
+    -------
+    StructuredDistanceParts
+        Structured distance decomposition between the two candidates.
+    """
+    geometry = compile_structured_geometry(space)
+    if geometry is not None:
+        return geometry.distance_parts(left, right)
+
+    return generic_distance_parts(space, left, right)
+
+
+def generic_distance_parts(
+    space: StructuredSearchSpace[BoundaryT, CandidateT],
+    left: CandidateT,
+    right: CandidateT,
+) -> StructuredDistanceParts:
+    """Return canonical distance parts through the generic leaf traversal path.
+
+    Parameters
+    ----------
+    space : StructuredSearchSpace[BoundaryT, CandidateT]
+        Structured search space shared by ``left`` and ``right``.
+    left : CandidateT
+        Left canonical candidate.
+    right : CandidateT
+        Right canonical candidate.
+
+    Returns
+    -------
+    StructuredDistanceParts
+        Structured distance decomposition produced by generic leaf traversal.
+
+    Raises
+    ------
+    ValueError
+        If the space exposes no active or mismatched leaves.
+    """
+    space.validate(left)
+    space.validate(right)
+
+    declared_leaf_paths = space.leaf_paths()
+    left_active_leaf_paths = set(space.active_leaf_paths(left))
+    right_active_leaf_paths = set(space.active_leaf_paths(right))
+
+    shared_leaf_count = 0
+    topology_mismatch_leaf_count = 0
+    squared_distance = 0.0
+
+    for path in declared_leaf_paths:
+        left_active = path in left_active_leaf_paths
+        right_active = path in right_active_leaf_paths
+        if left_active and right_active:
+            shared_leaf_count += 1
+            squared_distance += normalized_squared_leaf_distance(
+                space=space.leaf_space_at_path(path),
+                left=space.leaf_value_at_path(left, path),
+                right=space.leaf_value_at_path(right, path),
+            )
+            continue
+
+        if left_active or right_active:
+            topology_mismatch_leaf_count += 1
+
+    if shared_leaf_count + topology_mismatch_leaf_count == 0:
+        msg = "structured diversity metric requires at least one leaf path"
+        raise ValueError(msg)
+    return StructuredDistanceParts(
+        overlap_squared_distance=squared_distance,
+        shared_leaf_count=shared_leaf_count,
+        topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+    )
+
+
+def normalized_squared_leaf_distance(
+    *,
+    space: StructuredLeafSpace,
+    left: SpaceCandidateValue,
+    right: SpaceCandidateValue,
+) -> float:
+    """Return one normalized squared distance between canonical leaf values.
+
+    Parameters
+    ----------
+    space : StructuredLeafSpace
+        Leaf space shared by ``left`` and ``right``.
+    left : SpaceCandidateValue
+        Left canonical leaf value.
+    right : SpaceCandidateValue
+        Right canonical leaf value.
+
+    Returns
+    -------
+    float
+        Normalized squared leaf distance.
+
+    Raises
+    ------
+    TypeError
+        If ``space`` is not a supported built-in leaf space.
+    """
+    if isinstance(space, RealSpace):
+        return RealSpaceGeometry(space).distance_parts(
+            left,
+            right,
+        ).overlap_squared_distance
+
+    if isinstance(space, IntegerSpace):
+        return IntegerSpaceGeometry(space).distance_parts(
+            left,
+            right,
+        ).overlap_squared_distance
+
+    if is_categorical_leaf_space(space):
+        return CategoricalSpaceGeometry(space).distance_parts(
+            left,
+            right,
+        ).overlap_squared_distance
+
+    msg = f"unsupported structured leaf space for diversity: {type(space)!r}"
+    raise TypeError(msg)
+
+
+def compile_builtin_structured_geometry(
+    space: StructuredSearchSpace[BoundaryT, CandidateT],
+) -> StructuredSpaceGeometry | None:
+    """Compile one fast geometry for built-in structured spaces.
+
+    Parameters
+    ----------
+    space : StructuredSearchSpace[BoundaryT, CandidateT]
+        Structured space to compile.
+
+    Returns
+    -------
+    StructuredSpaceGeometry | None
+        Compiled built-in geometry, or ``None`` when ``space`` is not part of
+        the built-in geometry family.
+    """
+    if not is_builtin_structured_space(space):
+        return None
+    return compile_builtin_child_space_geometry(space)
+
+
+def compile_structured_geometry(
+    space: StructuredSearchSpace[BoundaryT, CandidateT],
+) -> StructuredSpaceGeometry | None:
+    """Return one compiled geometry from sidecar providers or built-ins.
+
+    Third-party structured spaces may opt into compiled geometry through the
+    sidecar ``CompiledStructuredGeometryProvider`` protocol. Built-in
+    realizations remain the fallback when no provider is present.
+
+    Parameters
+    ----------
+    space : StructuredSearchSpace[BoundaryT, CandidateT]
+        Structured space to compile.
+
+    Returns
+    -------
+    StructuredSpaceGeometry | None
+        Provider-supplied geometry when available, otherwise a built-in
+        geometry, or ``None`` if neither path can compile one.
+    """
+    provider_geometry = compile_provider_structured_geometry(space)
+    if provider_geometry is not None:
+        return provider_geometry
+    return compile_builtin_structured_geometry(space)
+
+
+def compile_provider_structured_geometry(
+    space: StructuredSearchSpace[BoundaryT, CandidateT],
+) -> StructuredSpaceGeometry | None:
+    """Return one compiled geometry from an optional sidecar provider.
+
+    Parameters
+    ----------
+    space : StructuredSearchSpace[BoundaryT, CandidateT]
+        Structured space to inspect for a provider implementation.
+
+    Returns
+    -------
+    StructuredSpaceGeometry | None
+        Provider-compiled geometry, or ``None`` when the space has no provider
+        or declines compilation.
+    """
+    if not isinstance(space, CompiledStructuredGeometryProvider):
+        return None
+
+    geometry = space.compile_structured_geometry()
+    if geometry is None:
+        return None
+    return geometry
+
+
+def compile_builtin_child_space_geometry(
+    space: BuiltinChildSpace,
+) -> StructuredSpaceGeometry | None:
+    """Compile one fast geometry for one built-in child space.
+
+    Parameters
+    ----------
+    space : BuiltinChildSpace
+        Built-in child space to compile.
+
+    Returns
+    -------
+    StructuredSpaceGeometry | None
+        Compiled geometry for ``space``, or ``None`` when one of its nested
+        child spaces cannot be compiled.
+    """
+    if isinstance(space, RealSpace):
+        return RealSpaceGeometry(space)
+
+    if isinstance(space, IntegerSpace):
+        return IntegerSpaceGeometry(space)
+
+    if isinstance(space, CategoricalSpace):
+        return CategoricalSpaceGeometry(space)
+
+    if isinstance(space, PermutationSpace):
+        return PermutationSpaceGeometry(space)
+
+    if isinstance(space, TupleSpace):
+        child_geometries = collect_child_geometries(
+            tuple(
+                compile_builtin_child_space_geometry(child_space)
+                if is_builtin_child_space(child_space)
+                else None
+                for child_space in space.child_spaces
+            ),
+        )
+        if child_geometries is None:
+            return None
+        return TupleSpaceGeometry(
+            arity=len(space.child_spaces),
+            child_geometries=child_geometries,
+        )
+
+    if isinstance(space, RecordSpace):
+        field_geometries = collect_field_geometries(
+            tuple(
+                (
+                    name,
+                    (
+                        compile_builtin_child_space_geometry(child_space)
+                        if is_builtin_child_space(child_space)
+                        else None
+                    ),
+                )
+                for name, child_space in space.fields
+            ),
+        )
+        if field_geometries is None:
+            return None
+        return RecordSpaceGeometry(field_geometries=field_geometries)
+
+    element_space = space.element_space
+    if isinstance(element_space, IntegerSpace):
+        if (
+            element_space.low == 0
+            and element_space.high == 1
+            and element_space.scale == "linear"
+        ):
+            return BinaryArraySpaceGeometry(
+                length=space.length,
+                element_space=element_space,
+            )
+        return IntegerArraySpaceGeometry(
+            length=space.length,
+            element_space=element_space,
+        )
+
+    if isinstance(element_space, RealSpace):
+        return RealArraySpaceGeometry(
+            length=space.length,
+            element_space=element_space,
+        )
+
+    if not is_builtin_child_space(element_space):
+        return None
+
+    element_geometry = compile_builtin_child_space_geometry(element_space)
+    if element_geometry is None:
+        return None
+    return ArraySpaceGeometry(length=space.length, element_geometry=element_geometry)

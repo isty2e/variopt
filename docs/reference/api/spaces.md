@@ -1,0 +1,3 @@
+# `variopt.spaces`
+
+::: variopt.spaces

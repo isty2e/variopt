@@ -1,0 +1,3 @@
+# `variopt.artifacts`
+
+::: variopt.artifacts

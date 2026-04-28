@@ -1,0 +1,292 @@
+"""Optional MPI-backed evaluator for synchronous batch execution."""
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from importlib import import_module
+from typing import Generic, Protocol, TypeVar, cast
+
+from typing_extensions import TypeVar as DefaultTypeVar
+from typing_extensions import override
+
+from ..artifacts import EvaluationRequest, Observation, RequestAlignedEvaluationRecord
+from ..evaluation_pipeline import evaluate_request_outcome
+from ..execution import ExecutionResources, NestedParallelismPolicy
+from ..outcomes import EvaluationOutcome
+from ..problem import Problem
+from ..typevars import CandidateT
+from .base import Evaluator
+
+BoundaryT = TypeVar("BoundaryT")
+CandidateExecutorT = TypeVar("CandidateExecutorT")
+MpiExecutorRecordT = TypeVar(
+    "MpiExecutorRecordT",
+    bound=RequestAlignedEvaluationRecord,
+)
+MpiEvaluatorRecordT = DefaultTypeVar(
+    "MpiEvaluatorRecordT",
+    bound=RequestAlignedEvaluationRecord,
+    default=Observation[CandidateT],
+)
+
+
+class MpiFuture(Protocol, Generic[CandidateExecutorT, MpiExecutorRecordT]):
+    """Typed view of one MPI-backed future.
+
+    Notes
+    -----
+    The MPI evaluator only relies on a small future surface: ordered result
+    retrieval for already submitted work items.
+    """
+
+    def result(
+        self,
+    ) -> tuple[int, EvaluationOutcome[CandidateExecutorT, MpiExecutorRecordT]]:
+        """Return one completed result or raise the worker failure.
+
+        Returns
+        -------
+        tuple[int, EvaluationOutcome[CandidateExecutorT, MpiExecutorRecordT]]
+            Original logical index and its evaluation outcome.
+        """
+        ...
+
+
+class MpiExecutor(Protocol, Generic[CandidateExecutorT, MpiExecutorRecordT]):
+    """Typed view of one MPI executor.
+
+    Notes
+    -----
+    The evaluator keeps the executor protocol intentionally small so the MPI
+    backend can be swapped or mocked without affecting evaluator semantics.
+    """
+
+    def submit(
+        self,
+        function: Callable[
+            ...,
+            tuple[
+                int,
+                EvaluationOutcome[CandidateExecutorT, MpiExecutorRecordT],
+            ],
+        ],
+        /,
+        *args: object,
+        **kwargs: object,
+    ) -> MpiFuture[CandidateExecutorT, MpiExecutorRecordT]:
+        """Submit one callable for proposal-local execution.
+
+        Parameters
+        ----------
+        function : Callable[..., tuple[int, EvaluationOutcome[CandidateExecutorT, MpiExecutorRecordT]]]
+            Callable to execute on the MPI worker.
+        *args : object
+            Positional arguments forwarded to ``function``.
+        **kwargs : object
+            Keyword arguments forwarded to ``function``.
+
+        Returns
+        -------
+        MpiFuture[CandidateExecutorT, MpiExecutorRecordT]
+            Future representing the submitted work item.
+        """
+        ...
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Tear down the executor.
+
+        Parameters
+        ----------
+        wait : bool, default=True
+            Whether to wait for worker completion before returning.
+        """
+        ...
+
+
+class MpiExecutorFactory(Protocol, Generic[CandidateExecutorT, MpiExecutorRecordT]):
+    """Factory for creating one MPI executor instance.
+
+    Notes
+    -----
+    The evaluator uses a factory rather than constructing executors directly so
+    tests and custom runtimes can inject their own executor implementation.
+    """
+
+    def __call__(
+        self,
+        *,
+        max_workers: int | None = None,
+    ) -> MpiExecutor[CandidateExecutorT, MpiExecutorRecordT]:
+        """Create an executor configured for one evaluator batch.
+
+        Parameters
+        ----------
+        max_workers : int | None, optional
+            Optional worker limit for the created executor.
+
+        Returns
+        -------
+        MpiExecutor[CandidateExecutorT, MpiExecutorRecordT]
+            Concrete executor instance.
+        """
+        ...
+
+
+def _evaluate_indexed_proposal_outcome(
+    *,
+    index: int,
+    problem: Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+    request: EvaluationRequest[CandidateT],
+) -> tuple[int, EvaluationOutcome[CandidateT, MpiEvaluatorRecordT]]:
+    """Execute one request and carry its original logical index."""
+    return (
+        index,
+        evaluate_request_outcome(
+            problem=problem,
+            request=request,
+        ),
+    )
+
+
+def _build_execution_resources(*, max_workers: int | None) -> ExecutionResources:
+    """Return evaluator-owned execution resources for one MPI batch."""
+    return ExecutionResources(
+        parallel_owner="evaluator",
+        nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+        owner_worker_count=max_workers,
+        owner_backend="mpi",
+    )
+
+
+def _validate_mpi_configuration(*, max_workers: int | None) -> None:
+    """Reject invalid MPI evaluator configuration."""
+    if max_workers is not None and max_workers <= 0:
+        msg = "max_workers must be positive when provided"
+        raise ValueError(msg)
+
+
+@dataclass(slots=True)
+class MpiEvaluator(
+    Evaluator[
+        Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+        EvaluationRequest[CandidateT],
+        EvaluationOutcome[CandidateT, MpiEvaluatorRecordT],
+    ],
+    Generic[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+):
+    """MPI-backed synchronous batch evaluator.
+
+    Parameters
+    ----------
+    max_workers : int | None, optional
+        Optional worker limit for the MPI executor.
+    _executor_factory : MpiExecutorFactory[CandidateT, MpiEvaluatorRecordT] | None, optional
+        Optional executor factory used primarily for testing or custom runtime
+        integration.
+
+    Notes
+    -----
+    This evaluator is intentionally narrow: it preserves the canonical ordered
+    batch contract and treats MPI purely as an optional execution backend.
+    RunMethod semantics remain unchanged.
+    """
+
+    max_workers: int | None = None
+    _executor_factory: MpiExecutorFactory[CandidateT, MpiEvaluatorRecordT] | None = field(
+        default=None,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Validate MPI evaluator configuration."""
+        _validate_mpi_configuration(max_workers=self.max_workers)
+
+    @override
+    def execution_resources(self) -> ExecutionResources:
+        """Return execution resources for MPI evaluation.
+
+        Returns
+        -------
+        ExecutionResources
+            Resource contract describing evaluator-owned MPI parallelism.
+        """
+        return _build_execution_resources(max_workers=self.max_workers)
+
+    def _create_default_executor(self) -> MpiExecutor[CandidateT, MpiEvaluatorRecordT]:
+        """Create the default mpi4py-backed executor or raise a helpful error."""
+        try:
+            mpi4py_futures = import_module("mpi4py.futures")
+        except ImportError as error:
+            msg = (
+                "mpi4py is required for MpiEvaluator. "
+                "Install the optional mpi extra to use this backend."
+            )
+            raise ImportError(msg) from error
+
+        executor_class = cast(
+            Callable[..., MpiExecutor[CandidateT, MpiEvaluatorRecordT]],
+            getattr(mpi4py_futures, "MPIPoolExecutor"),
+        )
+        return executor_class(max_workers=self.max_workers)
+
+    def _create_executor(self) -> MpiExecutor[CandidateT, MpiEvaluatorRecordT]:
+        """Return one concrete executor for one evaluator batch."""
+        if self._executor_factory is None:
+            return self._create_default_executor()
+
+        return self._executor_factory(max_workers=self.max_workers)
+
+    @override
+    def evaluate(
+        self,
+        problem: Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+        requests: Sequence[EvaluationRequest[CandidateT]],
+    ) -> tuple[EvaluationOutcome[CandidateT, MpiEvaluatorRecordT], ...]:
+        """Execute a request batch through MPI.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT]
+            Problem that defines evaluation semantics.
+        requests : Sequence[EvaluationRequest[CandidateT]]
+            Request batch to execute.
+
+        Returns
+        -------
+        tuple[EvaluationOutcome[CandidateT, MpiEvaluatorRecordT], ...]
+            Ordered outcomes aligned one-to-one with ``requests``.
+        """
+        executor = self._create_executor()
+
+        try:
+            futures = tuple(
+                executor.submit(
+                    _evaluate_indexed_proposal_outcome,
+                    index=index,
+                    problem=problem,
+                    request=request,
+                )
+                for index, request in enumerate(requests)
+            )
+            return tuple(
+                self._resolve_ordered_outcome(
+                    future=future,
+                    expected_index=expected_index,
+                )
+                for expected_index, future in enumerate(futures)
+            )
+        finally:
+            executor.shutdown(wait=True)
+
+    def _resolve_ordered_outcome(
+        self,
+        *,
+        future: MpiFuture[CandidateT, MpiEvaluatorRecordT],
+        expected_index: int,
+    ) -> EvaluationOutcome[CandidateT, MpiEvaluatorRecordT]:
+        """Return one future result and verify logical batch alignment."""
+        resolved_index, outcome = future.result()
+        if resolved_index != expected_index:
+            msg = "MPI executor returned a misaligned proposal outcome"
+            raise ValueError(msg)
+
+        return outcome

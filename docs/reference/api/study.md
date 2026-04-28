@@ -1,0 +1,3 @@
+# `variopt.study`
+
+::: variopt.study

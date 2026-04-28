@@ -1,0 +1,275 @@
+"""Record-shaped composite search space."""
+
+from collections.abc import Mapping
+
+import numpy as np
+from typing_extensions import override
+
+from ..structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
+from ..types import SpaceBoundaryValue, SpaceCandidateValue
+from .adapters import (
+    CompositeChildSpace,
+    group_child_replacements,
+    leaf_value_at_child_space,
+    normalize_child_space,
+    replace_leaf_values_in_child_space,
+    sample_child_space,
+    validate_child_space,
+)
+from .records import RecordCandidate
+
+
+class RecordSpace(
+    StructuredSearchSpace[
+        Mapping[str, SpaceBoundaryValue] | RecordCandidate,
+        RecordCandidate,
+    ]
+):
+    """Named-field heterogeneous record search space.
+
+    Parameters
+    ----------
+    **fields : CompositeChildSpace
+        Mapping from field name to child space.
+    """
+
+    _fields: tuple[tuple[str, CompositeChildSpace], ...]
+
+    def __init__(self, **fields: CompositeChildSpace) -> None:
+        """Create a record search space from named child spaces.
+
+        Parameters
+        ----------
+        **fields : CompositeChildSpace
+            Mapping from field name to child space.
+
+        Raises
+        ------
+        ValueError
+            If no fields are supplied.
+        """
+        if len(fields) == 0:
+            msg = "RecordSpace requires at least one named field"
+            raise ValueError(msg)
+
+        self._fields = tuple(fields.items())
+
+    @property
+    def fields(self) -> tuple[tuple[str, CompositeChildSpace], ...]:
+        """Return the declared record fields.
+
+        Returns
+        -------
+        tuple[tuple[str, CompositeChildSpace], ...]
+            Field-name and child-space pairs in canonical order.
+        """
+        return self._fields
+
+    @override
+    def normalize(
+        self,
+        raw_candidate: Mapping[str, SpaceBoundaryValue] | RecordCandidate,
+    ) -> RecordCandidate:
+        """Normalize a record-shaped boundary candidate.
+
+        Parameters
+        ----------
+        raw_candidate : Mapping[str, SpaceBoundaryValue] | RecordCandidate
+            Boundary-level candidate expected to be a mapping or
+            :class:`RecordCandidate`.
+
+        Returns
+        -------
+        RecordCandidate
+            Canonical record candidate.
+        """
+        if isinstance(raw_candidate, RecordCandidate):
+            self.validate(raw_candidate)
+            return raw_candidate
+        raw_mapping = raw_candidate
+
+        expected_names = tuple(name for name, _ in self._fields)
+        actual_names = tuple(raw_mapping.keys())
+
+        if set(actual_names) != set(expected_names) or len(actual_names) != len(expected_names):
+            msg = "record candidate keys must exactly match the declared fields"
+            raise ValueError(msg)
+
+        entries = tuple(
+            (
+                name,
+                normalize_child_space(space, raw_mapping[name]),
+            )
+            for name, space in self._fields
+        )
+        return RecordCandidate(entries=entries)
+
+    @override
+    def validate(self, candidate: RecordCandidate) -> None:
+        """Validate a canonical record candidate.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Candidate expected to be a canonical :class:`RecordCandidate`.
+        """
+        if type(candidate) is not RecordCandidate:
+            msg = "record candidate must be canonical RecordCandidate"
+            raise TypeError(msg)
+
+        expected_names = tuple(name for name, _ in self._fields)
+        actual_names = tuple(candidate.keys())
+
+        if actual_names != expected_names:
+            msg = "record candidate keys must exactly match the declared fields"
+            raise ValueError(msg)
+
+        for name, space in self._fields:
+            validate_child_space(space, candidate[name])
+
+    @override
+    def sample(self, random_state: np.random.RandomState) -> RecordCandidate:
+        """Sample a canonical record candidate.
+
+        Parameters
+        ----------
+        random_state : numpy.random.RandomState
+            Random-state object that owns all stochasticity for the sample.
+
+        Returns
+        -------
+        RecordCandidate
+            Canonical sampled record candidate.
+        """
+        entries = tuple(
+            (name, sample_child_space(space, random_state))
+            for name, space in self._fields
+        )
+        return RecordCandidate(entries=entries)
+
+    @override
+    def leaf_paths(self) -> tuple[LeafPath, ...]:
+        """Return editable record leaf paths.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Canonical leaf paths prefixed by record field name.
+        """
+        paths: list[LeafPath] = []
+        for name, child_space in self._fields:
+            for child_path in child_space.leaf_paths():
+                paths.append((name,) + child_path)
+        return tuple(paths)
+
+    @override
+    def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
+        """Return the leaf space at a record path.
+
+        Parameters
+        ----------
+        path : LeafPath
+            Leaf path whose first segment identifies the record field.
+
+        Returns
+        -------
+        StructuredLeafSpace
+            Leaf space declared for ``path``.
+        """
+        if len(path) == 0:
+            msg = "record paths must include at least one segment"
+            raise TypeError(msg)
+
+        segment = path[0]
+        if not isinstance(segment, str):
+            msg = f"path {path!r} is invalid for record child traversal"
+            raise TypeError(msg)
+
+        child_space = dict(self._fields).get(segment)
+        if child_space is None:
+            msg = f"path {path!r} references an unknown record field"
+            raise TypeError(msg)
+        return child_space.leaf_space_at_path(path[1:])
+
+    @override
+    def leaf_value_at_path(
+        self,
+        candidate: RecordCandidate,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return the leaf value stored at a record path.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate.
+        path : LeafPath
+            Leaf path whose first segment identifies the record field.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+        """
+        self.validate(candidate)
+        if len(path) == 0:
+            msg = "record paths must include at least one segment"
+            raise TypeError(msg)
+
+        segment = path[0]
+        if not isinstance(segment, str):
+            msg = f"path {path!r} is invalid for record candidate traversal"
+            raise TypeError(msg)
+
+        child_space = dict(self._fields).get(segment)
+        if child_space is None:
+            msg = f"path {path!r} references an unknown record field"
+            raise TypeError(msg)
+        return leaf_value_at_child_space(
+            child_space,
+            candidate[segment],
+            path[1:],
+        )
+
+    @override
+    def replace_leaf_values(
+        self,
+        candidate: RecordCandidate,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> RecordCandidate:
+        """Return a record candidate with selected leaves replaced.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate to update.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by field-prefixed leaf paths.
+
+        Returns
+        -------
+        RecordCandidate
+            Updated canonical record candidate.
+        """
+        self.validate(candidate)
+        grouped_replacements = group_child_replacements(replacements)
+        if len(grouped_replacements) == 0:
+            return candidate
+
+        replaced_entries: list[tuple[str, SpaceCandidateValue]] = []
+        for name, child_space in self._fields:
+            child_replacements = grouped_replacements.get(name)
+            if child_replacements is None:
+                replaced_entries.append((name, candidate[name]))
+                continue
+            replaced_entries.append(
+                (
+                    name,
+                    replace_leaf_values_in_child_space(
+                        child_space,
+                        candidate[name],
+                        child_replacements,
+                    ),
+                )
+            )
+        return RecordCandidate(entries=tuple(replaced_entries))

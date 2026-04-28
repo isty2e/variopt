@@ -1,0 +1,481 @@
+"""Generic study step and run orchestration."""
+
+from dataclasses import dataclass
+from typing import Generic, Protocol, cast
+
+from typing_extensions import TypeVar
+
+from variopt.generic_runtime import FrozenGenericSlotsCompat
+
+from ..artifacts import (
+    EvaluationRequest,
+    Observation,
+    Proposal,
+    RunReport,
+    RunResult,
+    Trace,
+    TraceEvent,
+)
+from ..evaluators.base import Evaluator
+from ..execution import (
+    EXACT_ASYNC_EXECUTION_MODEL,
+    STALE_ASYNC_EXECUTION_MODEL,
+    SYNC_BATCH_EXECUTION_MODEL,
+    ExecutionAssimilationMode,
+    ExecutionModel,
+)
+from ..kernel import Kernel, ProposalBatchQuery
+from ..methods import RunMethod
+from ..outcomes import EvaluationOutcome
+from ..problem import Problem
+from ..typevars import CandidateT, RunMethodStateT
+from .common import (
+    StudyEvaluationRecordT,
+    build_evaluation_requests,
+    trace_value_for_records,
+    validate_aligned_outcomes,
+)
+from .exact_async.orchestration import evaluate_batch_exact_async
+from .validation import require_async_evaluator, validate_execution_request
+
+BoundaryT = TypeVar("BoundaryT")
+
+
+@dataclass(frozen=True, slots=True)
+class StudyStepResult(FrozenGenericSlotsCompat, Generic[CandidateT, RunMethodStateT, StudyEvaluationRecordT]):
+    """Canonical in-process result for one ask/evaluate/tell study step.
+
+    Parameters
+    ----------
+    outcomes : tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
+        Evaluator outcomes returned for the step.
+    state : RunMethodStateT
+        Run-method state after assimilating ``outcomes``.
+    """
+
+    outcomes: tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
+    state: RunMethodStateT
+
+
+class StudyExecutionOwner(
+    Protocol[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+):
+    """Protocol for the subset of Study state generic execution needs.
+
+    Notes
+    -----
+    The generic execution helpers operate on this protocol instead of the
+    concrete :class:`variopt.study.Study` class so the same orchestration can
+    be reused across sync, exact-async, and stale-async study tiers.
+    """
+
+    @property
+    def problem(
+        self,
+    ) -> Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]:
+        """Return the configured problem."""
+        ...
+
+    @property
+    def run_method(
+        self,
+    ) -> RunMethod[
+        RunMethodStateT,
+        Proposal[CandidateT],
+        StudyEvaluationRecordT,
+    ]:
+        """Return the configured run method."""
+        ...
+
+    @property
+    def evaluator(
+        self,
+    ) -> Evaluator[
+        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
+        EvaluationRequest[CandidateT],
+        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+    ]:
+        """Return the configured evaluator."""
+        ...
+
+    @property
+    def kernel(
+        self,
+    ) -> Kernel[
+        ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
+        tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+    ]:
+        """Return the configured kernel."""
+        ...
+
+
+def evaluate_batch_sync(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    query: ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
+) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+    """Execute one request batch through the synchronous evaluator path.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Study-like owner exposing the problem, evaluator, and kernel.
+    query : ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT]
+        Proposal batch and evaluation metadata to execute.
+
+    Returns
+    -------
+    tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
+        Outcomes returned by the synchronous evaluator in request order.
+    """
+    requests = build_evaluation_requests(
+        query.proposals,
+        proposal_evaluation_specs=query.proposal_evaluation_specs,
+    )
+    return tuple(study.evaluator.evaluate(query.problem, requests))
+
+
+def evaluate_step(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    state: RunMethodStateT,
+    batch_size: int,
+    *,
+    execution_model: ExecutionModel,
+) -> StudyStepResult[CandidateT, RunMethodStateT, StudyEvaluationRecordT]:
+    """Run one ask/kernel/evaluate/tell step and return outcomes and state.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Study-like owner exposing the problem, run method, evaluator, and
+        kernel.
+    state : RunMethodStateT
+        Run-method state to advance.
+    batch_size : int
+        Maximum number of proposals to request from the run method.
+    execution_model : ExecutionModel
+        Execution model controlling whether evaluation is synchronous or
+        exact-async.
+
+    Returns
+    -------
+    StudyStepResult[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Evaluator outcomes and the next run-method state.
+
+    Raises
+    ------
+    ValueError
+        If ``batch_size`` is invalid or the run method returns an invalid
+        proposal batch.
+    RuntimeError
+        If the run method is exhausted or returns no proposals.
+    """
+    if batch_size <= 0:
+        msg = "batch_size must be positive"
+        raise ValueError(msg)
+
+    if study.run_method.is_exhausted(state):
+        msg = "run_method is exhausted"
+        raise RuntimeError(msg)
+
+    proposals, next_state = study.run_method.ask(state, batch_size=batch_size)
+    if len(proposals) == 0:
+        msg = "run_method returned no proposals"
+        raise RuntimeError(msg)
+
+    if len(proposals) > batch_size:
+        msg = "run_method returned more proposals than requested"
+        raise ValueError(msg)
+
+    if execution_model == EXACT_ASYNC_EXECUTION_MODEL:
+        def batch_executor(
+            query: ProposalBatchQuery[
+                BoundaryT,
+                CandidateT,
+                StudyEvaluationRecordT,
+            ],
+        ) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+            return evaluate_batch_exact_async(
+                require_async_evaluator(study),
+                query.problem,
+                build_evaluation_requests(
+                    query.proposals,
+                    proposal_evaluation_specs=query.proposal_evaluation_specs,
+                ),
+            )
+    else:
+        def batch_executor(
+            query: ProposalBatchQuery[
+                BoundaryT,
+                CandidateT,
+                StudyEvaluationRecordT,
+            ],
+        ) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+            return evaluate_batch_sync(study, query)
+    proposal_kernel_hints = study.run_method.proposal_kernel_hints(
+        next_state,
+        proposals,
+    )
+    proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
+        next_state,
+        proposals,
+    )
+    query = ProposalBatchQuery(
+        problem=study.problem,
+        proposals=proposals,
+        execution_resources=study.evaluator.execution_resources(),
+        proposal_evaluation_specs=proposal_evaluation_specs,
+        proposal_kernel_hints=proposal_kernel_hints,
+    )
+    outcomes = study.kernel.run(query, batch_executor)
+    requests = build_evaluation_requests(
+        proposals,
+        proposal_evaluation_specs=proposal_evaluation_specs,
+    )
+    validate_aligned_outcomes(requests, outcomes)
+    records = tuple(outcome.record for outcome in outcomes)
+    next_state = study.run_method.tell(next_state, records)
+    return StudyStepResult(outcomes=outcomes, state=next_state)
+
+
+def step(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    state: RunMethodStateT,
+    batch_size: int = 1,
+    *,
+    execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
+) -> tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]:
+    """Run one ask/evaluate/tell step and return records and next state.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Study-like owner exposing the problem, run method, evaluator, and
+        kernel.
+    state : RunMethodStateT
+        Run-method state to advance.
+    batch_size : int, default=1
+        Maximum number of proposals to request from the run method.
+    execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
+        Execution model controlling evaluation behavior.
+
+    Returns
+    -------
+    tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]
+        Step records and the next run-method state.
+
+    Raises
+    ------
+    NotImplementedError
+        If ``execution_model`` requests stale-async semantics.
+    """
+    if (
+        execution_model.assimilation_mode
+        is ExecutionAssimilationMode.STALE_INCREMENTAL
+    ):
+        msg = (
+            "stale_async execution model is only supported by "
+            "Study.run and Study.optimize"
+        )
+        raise NotImplementedError(msg)
+
+    validate_execution_request(
+        study,
+        batch_size=batch_size,
+        execution_model=execution_model,
+    )
+    step_result = evaluate_step(
+        study,
+        state,
+        batch_size,
+        execution_model=execution_model,
+    )
+    return tuple(outcome.record for outcome in step_result.outcomes), step_result.state
+
+
+def run(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    max_evaluations: int,
+    batch_size: int = 1,
+    *,
+    execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
+    count_evaluation_cost: bool = False,
+    initial_state: RunMethodStateT | None = None,
+) -> tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
+    """Run repeated ask/evaluate/tell steps and return one generic run report.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Study-like owner exposing the problem, run method, evaluator, and
+        kernel.
+    max_evaluations : int
+        Evaluation budget to consume.
+    batch_size : int, default=1
+        Maximum number of proposals requested per step.
+    execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
+        Execution model controlling evaluation behavior.
+    count_evaluation_cost : bool, default=False
+        Whether to debit the budget using evaluator-reported evaluation counts
+        instead of completed record count.
+    initial_state : RunMethodStateT | None, default=None
+        Optional initial run-method state. ``None`` creates a fresh state.
+
+    Returns
+    -------
+    tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]
+        Run report and the final run-method state.
+
+    Raises
+    ------
+    ValueError
+        If ``max_evaluations`` is negative or ``execution_model`` requests
+        stale-async semantics.
+    """
+    if max_evaluations < 0:
+        msg = "max_evaluations must be non-negative"
+        raise ValueError(msg)
+
+    if execution_model == STALE_ASYNC_EXECUTION_MODEL:
+        msg = "stale_async execution is handled by the stale_async study tier"
+        raise ValueError(msg)
+
+    validate_execution_request(
+        study,
+        batch_size=batch_size,
+        execution_model=execution_model,
+    )
+
+    records: list[StudyEvaluationRecordT] = []
+    trace = Trace()
+    remaining = max_evaluations
+    state = (
+        study.run_method.create_initial_state()
+        if initial_state is None
+        else initial_state
+    )
+
+    while remaining > 0 and not study.run_method.is_exhausted(state):
+        current_batch_size = min(batch_size, remaining)
+        step_result = evaluate_step(
+            study,
+            state,
+            batch_size=current_batch_size,
+            execution_model=execution_model,
+        )
+        batch_records = tuple(outcome.record for outcome in step_result.outcomes)
+        state = step_result.state
+        records.extend(batch_records)
+        batch_evaluation_count = sum(
+            outcome.evaluation_count for outcome in step_result.outcomes
+        )
+        if count_evaluation_cost:
+            remaining -= batch_evaluation_count
+        else:
+            remaining -= len(batch_records)
+        trace = trace.append(
+            TraceEvent(
+                kind="study.step",
+                message=f"evaluated {len(batch_records)} proposal(s)",
+                value=trace_value_for_records(batch_records),
+            ),
+        )
+
+    return (
+        RunReport[CandidateT, StudyEvaluationRecordT].from_records(
+            records=records,
+            evaluation_count=max_evaluations - remaining,
+            trace=trace,
+        ),
+        state,
+    )
+
+
+def optimize(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    max_evaluations: int,
+    batch_size: int = 1,
+    *,
+    execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
+    count_evaluation_cost: bool = False,
+    initial_state: RunMethodStateT | None = None,
+) -> tuple[RunResult[CandidateT], RunMethodStateT]:
+    """Run repeated ask/evaluate/tell steps until the budget is exhausted.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Study-like owner exposing the problem, run method, evaluator, and
+        kernel.
+    max_evaluations : int
+        Evaluation budget to consume.
+    batch_size : int, default=1
+        Maximum number of proposals requested per step.
+    execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
+        Execution model controlling evaluation behavior.
+    count_evaluation_cost : bool, default=False
+        Whether to debit the budget using evaluator-reported evaluation counts
+        instead of completed record count.
+    initial_state : RunMethodStateT | None, default=None
+        Optional initial run-method state. ``None`` creates a fresh state.
+
+    Returns
+    -------
+    tuple[RunResult[CandidateT], RunMethodStateT]
+        Scalar optimization result and the final run-method state.
+
+    Raises
+    ------
+    TypeError
+        If the study does not emit scalar :class:`Observation` records.
+    """
+    run_report, state = run(
+        study,
+        max_evaluations=max_evaluations,
+        batch_size=batch_size,
+        execution_model=execution_model,
+        count_evaluation_cost=count_evaluation_cost,
+        initial_state=initial_state,
+    )
+    observations: list[Observation[CandidateT]] = []
+    for record in run_report.records:
+        if not isinstance(record, Observation):
+            msg = (
+                "Study.optimize currently requires scalar Observation records; "
+                "use Study.run for non-scalar evaluation protocols"
+            )
+            raise TypeError(msg)
+        observations.append(cast(Observation[CandidateT], record))
+
+    return (
+        RunResult[CandidateT].from_observations(
+            observations=tuple(observations),
+            evaluation_count=run_report.evaluation_count,
+            trace=run_report.trace,
+        ),
+        state,
+    )
