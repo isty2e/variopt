@@ -1,7 +1,7 @@
 """Private bank query primitives shared by CSA bank update components."""
 
 from collections.abc import Sequence
-from typing import Protocol, TypeVar
+from typing import ClassVar, Generic, Protocol, TypeVar
 
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
@@ -41,6 +41,113 @@ class CandidateEntry(Protocol[EntryCandidateT]):
             Objective value associated with the entry.
         """
         ...
+
+
+class BankDistanceWorkspace(Generic[CandidateT]):
+    """Operation-local pairwise distance workspace for one bank snapshot.
+
+    Parameters
+    ----------
+    entries : Sequence[CandidateEntry[CandidateT]]
+        Bank entries whose pairwise distances may be requested.
+    diversity_metric : DiversityMetric[CandidateT]
+        Diversity metric used to compute and validate distances.
+
+    Notes
+    -----
+    This workspace is intentionally mutable and request-local. It must not be
+    stored in checkpoint state or persistent optimizer state.
+    """
+
+    entries: Sequence[CandidateEntry[CandidateT]]
+    diversity_metric: DiversityMetric[CandidateT]
+    distances: dict[tuple[int, int], float]
+
+    __slots__: ClassVar[tuple[str, ...]] = (
+        "distances",
+        "diversity_metric",
+        "entries",
+    )
+
+    def __init__(
+        self,
+        *,
+        entries: Sequence[CandidateEntry[CandidateT]],
+        diversity_metric: DiversityMetric[CandidateT],
+    ) -> None:
+        self.entries = entries
+        self.diversity_metric = diversity_metric
+        self.distances = {}
+
+    def distance(self, left_index: int, right_index: int) -> float:
+        """Return one validated pairwise distance, computing it at most once.
+
+        Parameters
+        ----------
+        left_index : int
+            Index of the left bank entry.
+        right_index : int
+            Index of the right bank entry.
+
+        Returns
+        -------
+        float
+            Validated pairwise distance between the two entries.
+        """
+        if left_index == right_index:
+            return 0.0
+
+        key = (
+            (left_index, right_index)
+            if left_index < right_index
+            else (right_index, left_index)
+        )
+        distance = self.distances.get(key)
+        if distance is not None:
+            return distance
+
+        left_entry = self.entries[key[0]]
+        right_entry = self.entries[key[1]]
+        distance = require_valid_distance(
+            self.diversity_metric.distance(
+                left_entry.candidate,
+                right_entry.candidate,
+            ),
+        )
+        self.distances[key] = distance
+        return distance
+
+    def crowding_counts(self, *, distance_cutoff: float) -> tuple[int, ...]:
+        """Count near neighbors for each entry using cached pair distances.
+
+        Parameters
+        ----------
+        distance_cutoff : float
+            Distance threshold below which two entries are considered
+            neighbors.
+
+        Returns
+        -------
+        tuple[int, ...]
+            Near-neighbor count for each entry.
+
+        Raises
+        ------
+        ValueError
+            Raised when ``distance_cutoff`` is negative.
+        """
+        if distance_cutoff < 0.0:
+            msg = "distance_cutoff must be non-negative"
+            raise ValueError(msg)
+
+        counts = [0] * len(self.entries)
+        for left_index in range(len(self.entries) - 1):
+            for right_index in range(left_index + 1, len(self.entries)):
+                if self.distance(left_index, right_index) < distance_cutoff:
+                    counts[left_index] += 1
+                    counts[right_index] += 1
+
+        return tuple(counts)
 
 
 def nearest_entry(
@@ -247,11 +354,19 @@ def crowding_aware_scores(
     if len(entries) == 0:
         return tuple(base_scores)
 
-    counts = crowding_counts(
-        entries=entries,
-        diversity_metric=diversity_metric,
-        distance_cutoff=distance_cutoff,
-    )
+    if niche_quality_policy.mode == "disabled" or niche_quality_policy.ratio == 0.0:
+        distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
+        counts = crowding_counts(
+            entries=entries,
+            diversity_metric=diversity_metric,
+            distance_cutoff=distance_cutoff,
+        )
+    else:
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+        counts = distance_workspace.crowding_counts(distance_cutoff=distance_cutoff)
     maximum_count = max(counts, default=0)
     if maximum_count == 0:
         return tuple(base_scores)
@@ -270,6 +385,7 @@ def crowding_aware_scores(
         counts=counts,
         score_scale=score_scale,
         policy=niche_quality_policy,
+        distance_workspace=distance_workspace,
     )
     return tuple(
         score + crowding_penalty + niche_penalty
@@ -291,6 +407,7 @@ def niche_quality_penalties(
     counts: Sequence[int],
     score_scale: float,
     policy: CSANicheQualityPolicy,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> tuple[float, ...]:
     """Compute additional removal penalties from local niche quality.
 
@@ -310,6 +427,9 @@ def niche_quality_penalties(
         Score scale used to normalize penalties.
     policy : CSANicheQualityPolicy
         Niche-quality policy controlling the penalty mode.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local pairwise distance workspace shared with
+        crowding counts.
 
     Returns
     -------
@@ -324,12 +444,19 @@ def niche_quality_penalties(
     if policy.mode == "disabled" or policy.ratio == 0.0 or len(entries) == 0:
         return (0.0,) * len(entries)
 
+    if distance_workspace is None:
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+
     if policy.mode == "mean":
         niche_scores = mean_niche_scores(
             base_scores=base_scores,
             entries=entries,
             diversity_metric=diversity_metric,
             distance_cutoff=distance_cutoff,
+            distance_workspace=distance_workspace,
         )
         niche_score_span = max(niche_scores) - min(niche_scores)
         if niche_score_span == 0.0:
@@ -354,6 +481,7 @@ def niche_quality_penalties(
             entries=entries,
             diversity_metric=diversity_metric,
             distance_cutoff=distance_cutoff,
+            distance_workspace=distance_workspace,
         )
         niche_score_span = max(niche_scores) - min(niche_scores)
         if niche_score_span == 0.0:
@@ -382,6 +510,7 @@ def mean_niche_scores(
     entries: Sequence[CandidateEntry[CandidateT]],
     diversity_metric: DiversityMetric[CandidateT],
     distance_cutoff: float,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> tuple[float, ...]:
     """Compute the mean score inside each entry's cutoff-neighborhood.
 
@@ -395,6 +524,8 @@ def mean_niche_scores(
         Diversity metric used to compute local neighborhoods.
     distance_cutoff : float
         Distance threshold below which two entries are considered neighbors.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local pairwise distance workspace.
 
     Returns
     -------
@@ -410,17 +541,17 @@ def mean_niche_scores(
         msg = "base_scores and entries must have the same length"
         raise ValueError(msg)
 
+    if distance_workspace is None:
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+
     sums = list(base_scores)
     counts = [1] * len(entries)
-    for left_index, left_entry in enumerate(entries[:-1]):
-        for right_index, right_entry in enumerate(
-            entries[left_index + 1 :],
-            start=left_index + 1,
-        ):
-            distance = require_valid_distance(
-                diversity_metric.distance(left_entry.candidate, right_entry.candidate),
-            )
-            if distance < distance_cutoff:
+    for left_index in range(len(entries) - 1):
+        for right_index in range(left_index + 1, len(entries)):
+            if distance_workspace.distance(left_index, right_index) < distance_cutoff:
                 sums[left_index] += base_scores[right_index]
                 sums[right_index] += base_scores[left_index]
                 counts[left_index] += 1
@@ -438,6 +569,7 @@ def best_mean_niche_scores(
     entries: Sequence[CandidateEntry[CandidateT]],
     diversity_metric: DiversityMetric[CandidateT],
     distance_cutoff: float,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> tuple[float, ...]:
     """Compute a mixed niche score combining local best and local mean.
 
@@ -451,23 +583,33 @@ def best_mean_niche_scores(
         Diversity metric used to compute local neighborhoods.
     distance_cutoff : float
         Distance threshold below which two entries are considered neighbors.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local pairwise distance workspace.
 
     Returns
     -------
     tuple[float, ...]
         Mixed niche score for each entry.
     """
+    if distance_workspace is None:
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+
     mean_scores = mean_niche_scores(
         base_scores=base_scores,
         entries=entries,
         diversity_metric=diversity_metric,
         distance_cutoff=distance_cutoff,
+        distance_workspace=distance_workspace,
     )
     best_scores = best_niche_scores(
         base_scores=base_scores,
         entries=entries,
         diversity_metric=diversity_metric,
         distance_cutoff=distance_cutoff,
+        distance_workspace=distance_workspace,
     )
     return tuple(
         0.5 * (mean_score + best_score)
@@ -481,6 +623,7 @@ def best_niche_scores(
     entries: Sequence[CandidateEntry[CandidateT]],
     diversity_metric: DiversityMetric[CandidateT],
     distance_cutoff: float,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> tuple[float, ...]:
     """Compute the best score inside each entry's cutoff-neighborhood.
 
@@ -494,6 +637,8 @@ def best_niche_scores(
         Diversity metric used to compute local neighborhoods.
     distance_cutoff : float
         Distance threshold below which two entries are considered neighbors.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local pairwise distance workspace.
 
     Returns
     -------
@@ -509,16 +654,16 @@ def best_niche_scores(
         msg = "base_scores and entries must have the same length"
         raise ValueError(msg)
 
+    if distance_workspace is None:
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+
     best_scores = list(base_scores)
-    for left_index, left_entry in enumerate(entries[:-1]):
-        for right_index, right_entry in enumerate(
-            entries[left_index + 1 :],
-            start=left_index + 1,
-        ):
-            distance = require_valid_distance(
-                diversity_metric.distance(left_entry.candidate, right_entry.candidate),
-            )
-            if distance < distance_cutoff:
+    for left_index in range(len(entries) - 1):
+        for right_index in range(left_index + 1, len(entries)):
+            if distance_workspace.distance(left_index, right_index) < distance_cutoff:
                 left_score = base_scores[left_index]
                 right_score = base_scores[right_index]
                 if right_score < best_scores[left_index]:

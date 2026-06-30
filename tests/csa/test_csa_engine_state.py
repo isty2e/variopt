@@ -2,9 +2,10 @@
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
-from variopt import Proposal
+from variopt import Observation, Proposal
 from variopt.algorithms.population.csa.banking.bank import Bank, BankEntry
 from variopt.algorithms.population.csa.banking.clustering import (
     CSAClusteringPolicy,
@@ -73,6 +74,115 @@ class CSAPendingProposalsTests:
 
         with pytest.raises(ValueError, match="distinct proposal ids"):
             _ = CSAPendingProposals[int](proposals=(proposal, proposal))
+
+
+class GenerationQueueTests:
+    """Regression tests for CSA generated-candidate queue behavior."""
+
+    def test_dequeue_advances_head_without_copying_candidates(self) -> None:
+        queue = GenerationQueue(
+            candidates=(
+                GeneratedCandidate(candidate=11),
+                GeneratedCandidate(candidate=12),
+            ),
+        )
+
+        first_candidate, next_queue = queue.dequeue()
+        second_candidate, empty_queue = next_queue.dequeue()
+
+        assert first_candidate.candidate == 11
+        assert second_candidate.candidate == 12
+        assert next_queue.candidates is queue.candidates
+        assert empty_queue.candidates is queue.candidates
+        assert next_queue.head_index == 1
+        assert empty_queue.head_index == 2
+        assert empty_queue.is_empty
+
+    def test_rejects_invalid_head_index(self) -> None:
+        with pytest.raises(ValueError, match="head_index"):
+            _ = GenerationQueue[int](
+                candidates=(GeneratedCandidate(candidate=11),),
+                head_index=2,
+            )
+
+    def test_rejects_negative_head_index(self) -> None:
+        with pytest.raises(ValueError, match="head_index"):
+            _ = GenerationQueue[int](
+                candidates=(GeneratedCandidate(candidate=11),),
+                head_index=-1,
+            )
+
+    def test_exhausted_nonempty_queue_behaves_as_empty(self) -> None:
+        queue = GenerationQueue(
+            candidates=(GeneratedCandidate(candidate=11),),
+            head_index=1,
+        )
+
+        assert queue.is_empty
+        with pytest.raises(RuntimeError, match="empty generation queue"):
+            _ = queue.dequeue()
+        with pytest.raises(ValueError, match="empty queue"):
+            _ = GenerationRuntimeState[int]().begin(queue)
+
+    def test_runtime_with_exhausted_queue_and_no_buffers_is_inactive(self) -> None:
+        runtime: GenerationRuntimeState[int] = GenerationRuntimeState(
+            queue=GenerationQueue(
+                candidates=(GeneratedCandidate(candidate=11),),
+                head_index=1,
+            ),
+        )
+
+        assert not runtime.is_active
+        assert not runtime.ready_to_commit
+
+    def test_runtime_with_exhausted_queue_and_buffer_is_ready_to_commit(self) -> None:
+        observation: Observation[int] = Observation(
+            proposal=Proposal(candidate=11, proposal_id="csa-0"),
+            candidate=11,
+            value=121.0,
+            score=121.0,
+        )
+        runtime: GenerationRuntimeState[int] = GenerationRuntimeState(
+            queue=GenerationQueue(
+                candidates=(GeneratedCandidate(candidate=11),),
+                head_index=1,
+            ),
+            buffered_observations=(observation,),
+        )
+
+        buffered_observations, idle_runtime = runtime.release_buffer()
+
+        assert runtime.ready_to_commit
+        assert buffered_observations == (observation,)
+        assert not idle_runtime.is_active
+
+    def test_shuffled_queue_preserves_all_candidates_with_zero_head_index(self) -> None:
+        candidates: tuple[GeneratedCandidate[int], ...] = (
+            GeneratedCandidate(candidate=1),
+            GeneratedCandidate(candidate=2),
+            GeneratedCandidate(candidate=3),
+        )
+
+        queue: GenerationQueue[int] = GenerationQueue[int].from_candidates(
+            candidates,
+            shuffle=True,
+            random_state=np.random.RandomState(0),
+        )
+        first_candidate, queue = queue.dequeue()
+        second_candidate, queue = queue.dequeue()
+        third_candidate, queue = queue.dequeue()
+
+        assert queue.head_index == 3
+        assert queue.is_empty
+        assert queue.candidates is not candidates
+        assert sorted(entry.candidate for entry in queue.candidates) == [1, 2, 3]
+        assert sorted(
+            (
+                first_candidate.candidate,
+                second_candidate.candidate,
+                third_candidate.candidate,
+            )
+        ) == [1, 2, 3]
 
 
 class CSAEngineStateTests:
@@ -194,7 +304,11 @@ class CSAAskEngineTests:
         )
 
         assert candidate.candidate == 11
-        assert next_state.generation_state.queue.candidates == (GeneratedCandidate(candidate=12),)
+        assert next_state.generation_state.queue.candidates == (
+            GeneratedCandidate(candidate=11),
+            GeneratedCandidate(candidate=12),
+        )
+        assert next_state.generation_state.queue.head_index == 1
 
 
 def build_engine_state() -> CSAEngineState[int]:

@@ -3,6 +3,7 @@
 from typing import Literal, cast
 
 import pytest
+from typing_extensions import override
 
 from tests.csa_support import (
     AbsoluteDistance,
@@ -18,6 +19,7 @@ from tests.csa_support import (
     CSANicheQualityPolicy,
     CSAOptimizerTestCase,
     CSAScoreModel,
+    DiversityMetric,
     IntegerSpace,
     NaNDistance,
     NegativeDistance,
@@ -34,6 +36,25 @@ from tests.csa_support import (
     make_optimizer,
     significant_update_indices,
 )
+from variopt.algorithms.population.csa.banking.queries import (
+    BankDistanceWorkspace,
+    best_mean_niche_scores,
+    crowding_aware_scores,
+)
+
+
+class CountingDistance(DiversityMetric[int]):
+    """Absolute distance metric that counts pairwise distance calls."""
+
+    call_count: int
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.call_count += 1
+        return float(abs(left - right))
 
 
 class BankUpdatePolicyTests:
@@ -42,6 +63,131 @@ class BankUpdatePolicyTests:
     def test_policy_rejects_negative_crowding_penalty_ratio(self) -> None:
         with pytest.raises(ValueError, match="crowding_penalty_ratio must be non-negative"):
             _ = CSABankUpdatePolicy(crowding_penalty_ratio=-0.1)
+
+    def test_crowding_aware_best_mean_reuses_pairwise_distances(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+            BankEntry(candidate=2, value=7.0),
+            BankEntry(candidate=10, value=1.0),
+        )
+        metric = CountingDistance()
+
+        scores = crowding_aware_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+            penalty_ratio=1.0,
+            niche_quality_policy=CSANicheQualityPolicy(
+                mode="best_mean",
+                ratio=1.0,
+            ),
+        )
+
+        assert len(scores) == len(entries)
+        assert metric.call_count == 6
+
+    def test_distance_workspace_caches_zero_distance_symmetric_pair(self) -> None:
+        entries = (
+            BankEntry(candidate=1, value=1.0),
+            BankEntry(candidate=1, value=2.0),
+        )
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        first_distance = workspace.distance(0, 1)
+        second_distance = workspace.distance(1, 0)
+
+        assert first_distance == 0.0
+        assert second_distance == 0.0
+        assert metric.call_count == 1
+
+    def test_distance_workspace_caches_nonzero_symmetric_pair(self) -> None:
+        entries = (
+            BankEntry(candidate=1, value=1.0),
+            BankEntry(candidate=4, value=2.0),
+        )
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        first_distance = workspace.distance(1, 0)
+        second_distance = workspace.distance(0, 1)
+
+        assert first_distance == 3.0
+        assert second_distance == 3.0
+        assert metric.call_count == 1
+
+    def test_single_entry_distance_workspace_crowding_skips_metric(self) -> None:
+        entries = (BankEntry(candidate=1, value=1.0),)
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        counts = workspace.crowding_counts(distance_cutoff=1.0)
+
+        assert counts == (0,)
+        assert metric.call_count == 0
+
+    def test_crowding_aware_empty_scores_skips_distance_metric(self) -> None:
+        metric = CountingDistance()
+
+        scores = crowding_aware_scores(
+            base_scores=(),
+            entries=(),
+            diversity_metric=metric,
+            distance_cutoff=1.0,
+            penalty_ratio=1.0,
+            niche_quality_policy=CSANicheQualityPolicy(
+                mode="best_mean",
+                ratio=1.0,
+            ),
+        )
+
+        assert scores == ()
+        assert metric.call_count == 0
+
+    def test_best_mean_niche_scores_reuses_pairwise_distances(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+            BankEntry(candidate=2, value=7.0),
+            BankEntry(candidate=10, value=1.0),
+        )
+        metric = CountingDistance()
+
+        scores = best_mean_niche_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+        )
+
+        assert len(scores) == len(entries)
+        assert metric.call_count == 6
+
+    def test_zero_ratio_niche_policy_only_pays_crowding_distance_cost(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+            BankEntry(candidate=2, value=7.0),
+            BankEntry(candidate=10, value=1.0),
+        )
+        metric = CountingDistance()
+
+        scores = crowding_aware_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+            penalty_ratio=1.0,
+            niche_quality_policy=CSANicheQualityPolicy(
+                mode="best_mean",
+                ratio=0.0,
+            ),
+        )
+
+        assert len(scores) == len(entries)
+        assert metric.call_count == 6
 
     def test_admit_appends_until_full(self) -> None:
         bank = Bank[int](capacity=2)
