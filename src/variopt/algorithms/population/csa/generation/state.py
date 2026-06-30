@@ -37,15 +37,33 @@ class GenerationQueue(FrozenGenericSlotsCompat, Generic[CandidateT]):
     Parameters
     ----------
     candidates : tuple[GeneratedCandidate[CandidateT], ...], default=()
-        Generated candidates waiting to be issued as proposals.
+        Backing tuple of generated candidates. Entries before ``head_index``
+        have already been issued.
+    head_index : int, default=0
+        Index of the next candidate to issue.
     """
 
     candidates: tuple[GeneratedCandidate[CandidateT], ...] = ()
+    head_index: int = 0
+
+    def __post_init__(self) -> None:
+        """Validate queue bounds and normalize the backing candidate tuple.
+
+        Raises
+        ------
+        ValueError
+            If ``head_index`` falls outside the backing tuple bounds.
+        """
+        candidates = tuple(self.candidates)
+        object.__setattr__(self, "candidates", candidates)
+        if self.head_index < 0 or self.head_index > len(candidates):
+            msg = "head_index must be between zero and the candidate count"
+            raise ValueError(msg)
 
     @property
     def is_empty(self) -> bool:
         """Return whether the queue is empty."""
-        return len(self.candidates) == 0
+        return self.head_index == len(self.candidates)
 
     @classmethod
     def from_candidates(
@@ -98,7 +116,13 @@ class GenerationQueue(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "cannot dequeue from an empty generation queue"
             raise RuntimeError(msg)
 
-        return self.candidates[0], type(self)(candidates=self.candidates[1:])
+        return (
+            self.candidates[self.head_index],
+            type(self)(
+                candidates=self.candidates,
+                head_index=self.head_index + 1,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)

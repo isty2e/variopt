@@ -75,6 +75,36 @@ class CSAPendingProposalsTests:
             _ = CSAPendingProposals[int](proposals=(proposal, proposal))
 
 
+class GenerationQueueTests:
+    """Regression tests for CSA generated-candidate queue behavior."""
+
+    def test_dequeue_advances_head_without_copying_candidates(self) -> None:
+        queue = GenerationQueue(
+            candidates=(
+                GeneratedCandidate(candidate=11),
+                GeneratedCandidate(candidate=12),
+            ),
+        )
+
+        first_candidate, next_queue = queue.dequeue()
+        second_candidate, empty_queue = next_queue.dequeue()
+
+        assert first_candidate.candidate == 11
+        assert second_candidate.candidate == 12
+        assert next_queue.candidates is queue.candidates
+        assert empty_queue.candidates is queue.candidates
+        assert next_queue.head_index == 1
+        assert empty_queue.head_index == 2
+        assert empty_queue.is_empty
+
+    def test_rejects_invalid_head_index(self) -> None:
+        with pytest.raises(ValueError, match="head_index"):
+            _ = GenerationQueue[int](
+                candidates=(GeneratedCandidate(candidate=11),),
+                head_index=2,
+            )
+
+
 class CSAEngineStateTests:
     """Regression tests for CSAEngineState invariants and helpers."""
 
@@ -194,7 +224,11 @@ class CSAAskEngineTests:
         )
 
         assert candidate.candidate == 11
-        assert next_state.generation_state.queue.candidates == (GeneratedCandidate(candidate=12),)
+        assert next_state.generation_state.queue.candidates == (
+            GeneratedCandidate(candidate=11),
+            GeneratedCandidate(candidate=12),
+        )
+        assert next_state.generation_state.queue.head_index == 1
 
 
 def build_engine_state() -> CSAEngineState[int]:
