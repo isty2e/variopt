@@ -5,12 +5,22 @@ to the reference page for the underlying symbol. For the narrative explanation
 of how these pieces fit together, see
 [Optimization Model](../concepts/optimization-model.md).
 
+## CandidateRefinement
+
+Execution-side provenance for a candidate transformed before evaluation.
+Carries the source candidate, the candidate actually evaluated, and any known
+structured leaf paths changed by refinement. See
+[`CandidateRefinement`][variopt.CandidateRefinement].
+
 ## EvaluationOutcome
 
 The runtime pairing of an `EvaluationRecord` with the evaluation cost it
-charged against the study budget. Produced by an `Evaluator`, consumed by
-`Study`, and lowered to its contained record before `RunMethod.tell` is called.
-See [`EvaluationOutcome`][variopt.EvaluationOutcome].
+charged against the study budget, optional kernel diagnostics, and optional
+candidate-refinement provenance. Produced by an `Evaluator` or kernel path,
+consumed by `Study`, exposed to outcome-aware methods through
+`RunMethod.tell_outcomes`, and lowered to its contained record before the
+canonical `RunMethod.tell` path. See
+[`EvaluationOutcome`][variopt.EvaluationOutcome].
 
 ## DiversityMetric
 

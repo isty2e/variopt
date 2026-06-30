@@ -30,14 +30,19 @@ class RequestAlignedEvaluationRecord(Protocol):
     -----
     This protocol captures the semantic boundary shared by
     :class:`EvaluationRecord` and its concrete subclasses: the record must own
-    exactly one canonical request. The core request-local execution stack
-    depends on this alignment contract even when it does not care about the
-    concrete record subclass.
+    exactly one canonical request and the candidate evaluated for that request.
+    The core request-local execution stack depends on this alignment contract
+    even when it does not care about the concrete record subclass.
     """
 
     @property
     def request(self) -> object:
         """Return the canonical request that produced the record."""
+        ...
+
+    @property
+    def candidate(self) -> object:
+        """Return the candidate evaluated for the request."""
         ...
 
 

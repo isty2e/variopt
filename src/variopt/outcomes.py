@@ -1,5 +1,6 @@
 """Execution-side evaluation outcome artifacts."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Generic, cast
 
@@ -9,6 +10,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .artifacts import Observation, RequestAlignedEvaluationRecord
 from .kernel import KernelDiagnostics
+from .spaces import LeafPath
 from .typevars import CandidateT
 
 OutcomeRecordT = TypeVar(
@@ -16,6 +18,97 @@ OutcomeRecordT = TypeVar(
     bound=RequestAlignedEvaluationRecord,
     default=Observation[CandidateT],
 )
+
+
+def _normalize_changed_leaf_paths(
+    changed_leaf_paths: Sequence[LeafPath],
+) -> tuple[LeafPath, ...]:
+    normalized_paths: list[LeafPath] = []
+    for path in changed_leaf_paths:
+        normalized_path = tuple(path)
+        for segment in normalized_path:
+            if type(segment) is not int and type(segment) is not str:
+                msg = "changed_leaf_paths must contain only int or str path segments"
+                raise TypeError(msg)
+        normalized_paths.append(normalized_path)
+
+    if len(set(normalized_paths)) != len(normalized_paths):
+        msg = "changed_leaf_paths must not contain duplicate paths"
+        raise ValueError(msg)
+
+    return tuple(normalized_paths)
+
+
+def _require_matching_candidate(
+    *,
+    record_candidate: object,
+    refined_candidate: object,
+) -> None:
+    try:
+        candidates_match = bool(record_candidate == refined_candidate)
+    except ValueError as error:
+        msg = "candidate equality must produce a scalar truth value"
+        raise TypeError(msg) from error
+
+    if not candidates_match:
+        msg = "refinement refined_candidate must match the outcome record candidate"
+        raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class CandidateRefinement(FrozenGenericSlotsCompat, Generic[CandidateT]):
+    """Execution provenance for a candidate transformed before evaluation.
+
+    Parameters
+    ----------
+    source_candidate : CandidateT
+        Candidate requested by the caller or upstream search method before
+        refinement.
+    refined_candidate : CandidateT
+        Candidate that was actually evaluated after refinement.
+    changed_leaf_paths : Sequence[LeafPath], default=()
+        Structured leaf paths whose canonical values changed during
+        refinement. An empty sequence means no structured path attribution is
+        available; absence of refinement should be represented by
+        ``EvaluationOutcome.refinement is None``.
+    """
+
+    source_candidate: CandidateT
+    refined_candidate: CandidateT
+    changed_leaf_paths: tuple[LeafPath, ...] = ()
+
+    def __init__(
+        self,
+        *,
+        source_candidate: CandidateT,
+        refined_candidate: CandidateT,
+        changed_leaf_paths: Sequence[LeafPath] = (),
+    ) -> None:
+        """Create one canonical candidate-refinement payload.
+
+        Parameters
+        ----------
+        source_candidate : CandidateT
+            Candidate before execution-side refinement.
+        refined_candidate : CandidateT
+            Candidate after execution-side refinement.
+        changed_leaf_paths : Sequence[LeafPath], default=()
+            Structured leaf paths changed by refinement.
+
+        Raises
+        ------
+        TypeError
+            If any path segment is not a canonical ``int`` or ``str``.
+        ValueError
+            If ``changed_leaf_paths`` contains duplicate paths.
+        """
+        object.__setattr__(self, "source_candidate", source_candidate)
+        object.__setattr__(self, "refined_candidate", refined_candidate)
+        object.__setattr__(
+            self,
+            "changed_leaf_paths",
+            _normalize_changed_leaf_paths(changed_leaf_paths),
+        )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -32,6 +125,9 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         Logical evaluation cost associated with the outcome.
     kernel_diagnostics : KernelDiagnostics | None, optional
         Optional execution-side diagnostics emitted by the kernel.
+    refinement : CandidateRefinement[CandidateT] | None, optional
+        Optional execution-side provenance for candidate refinement before
+        evaluation.
 
     Notes
     -----
@@ -43,6 +139,7 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
     record: OutcomeRecordT
     evaluation_count: int = 1
     kernel_diagnostics: KernelDiagnostics | None = None
+    refinement: CandidateRefinement[CandidateT] | None = None
 
     def __init__(
         self,
@@ -51,6 +148,7 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         observation: Observation[CandidateT] | None = None,
         evaluation_count: int = 1,
         kernel_diagnostics: KernelDiagnostics | None = None,
+        refinement: CandidateRefinement[CandidateT] | None = None,
     ) -> None:
         """Create one canonical evaluation outcome.
 
@@ -64,6 +162,8 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             Logical evaluation cost associated with the outcome.
         kernel_diagnostics : KernelDiagnostics | None, optional
             Optional kernel-side diagnostics.
+        refinement : CandidateRefinement[CandidateT] | None, optional
+            Optional candidate-refinement provenance.
 
         Raises
         ------
@@ -87,6 +187,7 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         object.__setattr__(self, "record", normalized_record)
         object.__setattr__(self, "evaluation_count", evaluation_count)
         object.__setattr__(self, "kernel_diagnostics", kernel_diagnostics)
+        object.__setattr__(self, "refinement", refinement)
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -100,6 +201,12 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
+
+        if self.refinement is not None:
+            _require_matching_candidate(
+                record_candidate=self.record.candidate,
+                refined_candidate=self.refinement.refined_candidate,
+            )
 
     @property
     def observation(self) -> Observation[CandidateT]:

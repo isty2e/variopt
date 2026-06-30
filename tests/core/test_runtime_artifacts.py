@@ -8,6 +8,8 @@ from tests.problem_artifact_support import (
     LabelRecord,
 )
 from variopt import (
+    CandidateRefinement,
+    EvaluationOutcome,
     EvaluationRecord,
     EvaluationRequest,
     NondominatedRunSurface,
@@ -94,6 +96,95 @@ class RuntimeArtifactsTests:
         assert observation.proposal.candidate == 4
         assert observation.candidate == 3
         assert observation.value == 9.0
+
+    def test_candidate_refinement_normalizes_changed_leaf_paths(self) -> None:
+        refinement = CandidateRefinement(
+            source_candidate={"x": 1, "y": 2},
+            refined_candidate={"x": 3, "y": 2},
+            changed_leaf_paths=[("x",), ("nested", 0)],
+        )
+
+        assert refinement.changed_leaf_paths == (("x",), ("nested", 0))
+
+    def test_candidate_refinement_rejects_duplicate_changed_leaf_paths(self) -> None:
+        with pytest.raises(ValueError):
+            _ = CandidateRefinement(
+                source_candidate=(1, 2),
+                refined_candidate=(3, 2),
+                changed_leaf_paths=((0,), (0,)),
+            )
+
+    def test_evaluation_outcome_defaults_to_no_refinement_payload(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+
+        outcome = EvaluationOutcome(observation=observation)
+
+        assert outcome.record == observation
+        assert outcome.refinement is None
+
+    def test_evaluation_outcome_preserves_scalar_refinement_payload(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=3,
+            value=9.0,
+            score=9.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+
+        outcome = EvaluationOutcome(
+            observation=observation,
+            evaluation_count=2,
+            refinement=refinement,
+        )
+
+        assert outcome.refinement == refinement
+        assert outcome.evaluation_count == 2
+
+    def test_evaluation_outcome_preserves_non_scalar_refinement_payload(self) -> None:
+        request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
+        record = LabelRecord(
+            request=request,
+            candidate=3,
+            label="parity:1",
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+
+        outcome: EvaluationOutcome[int, LabelRecord] = EvaluationOutcome(
+            record=record,
+            refinement=refinement,
+        )
+
+        assert outcome.record == record
+        assert outcome.refinement == refinement
+
+    def test_evaluation_outcome_rejects_mismatched_refined_candidate(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=3,
+            value=9.0,
+            score=9.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError):
+            _ = EvaluationOutcome(observation=observation, refinement=refinement)
 
     def test_observation_rejects_negative_elapsed_seconds(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")

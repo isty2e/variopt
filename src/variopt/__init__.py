@@ -41,7 +41,7 @@ from .objective import (
     ScalarEvaluationProtocol,
 )
 from .operators import VariationOperator
-from .outcomes import EvaluationOutcome
+from .outcomes import CandidateRefinement, EvaluationOutcome
 from .problem import InteractionProblem, Problem
 from .spaces import (
     ArraySpace,
@@ -57,6 +57,7 @@ from .study import Study
 
 __all__ = [
     "ArraySpace",
+    "CandidateRefinement",
     "CategoricalSpace",
     "DiversityMetric",
     "EvaluationOutcome",
