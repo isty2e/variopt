@@ -90,6 +90,35 @@ class CSAClusteringRuntimeTests:
         assert next_state.distance_cutoff == 2.0
         assert next_state.minimum_distance_cutoff == 1.0
 
+    def test_explicit_initial_cutoff_mirrors_missing_minimum_without_inference(self) -> None:
+        bank = Bank(
+            capacity=2,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+            ),
+        )
+        state = CSAProgressionState(
+            cutoff_state=CSACutoffState(),
+            stage_state=CSAStageState(
+                base_capacity=bank.capacity,
+                max_capacity=bank.capacity,
+            ),
+        )
+
+        next_state = initialize_cutoff_if_needed(
+            bank=bank,
+            state=state,
+            infer_average_distance=reject_average_distance,
+            cutoff_schedule=CSACutoffSchedule(
+                initial_distance_cutoff=2.0,
+                minimum_distance_cutoff=None,
+            ),
+        )
+
+        assert next_state.distance_cutoff == 2.0
+        assert next_state.minimum_distance_cutoff == 2.0
+
     def test_disabled_clustering_does_not_infer_average_distance(self) -> None:
         bank = Bank(
             capacity=2,
@@ -133,6 +162,83 @@ class CSAClusteringRuntimeTests:
 
         assert result.clustering_state.cluster_distance == 2.0
         assert len(result.clustering_state.cluster_labels) == len(bank.entries)
+
+    def test_aligned_empty_clustering_does_not_infer_average_distance(self) -> None:
+        result = run_empty_cluster_batch(
+            bank=Bank[int](capacity=2),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=True),
+                cluster_distance=2.0,
+                cluster_labels=(),
+            ),
+            infer_average_distance=reject_average_distance,
+        )
+
+        assert result.clustering_state.cluster_distance == 2.0
+        assert result.clustering_state.cluster_labels == ()
+
+    def test_misaligned_clustering_infers_average_distance_once(self) -> None:
+        call_count = 0
+
+        def count_average_distance(entries: Sequence[BankEntry[int]]) -> float:
+            nonlocal call_count
+            call_count += 1
+            assert tuple(entry.candidate for entry in entries) == (0, 10)
+            return 6.0
+
+        result = run_empty_cluster_batch(
+            bank=Bank(
+                capacity=2,
+                entries=(
+                    BankEntry(candidate=0, value=0.0),
+                    BankEntry(candidate=10, value=10.0),
+                ),
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=True),
+                cluster_distance=2.0,
+                cluster_labels=(1,),
+            ),
+            infer_average_distance=count_average_distance,
+        )
+
+        assert call_count == 1
+        assert result.clustering_state.cluster_distance == 4.0
+        assert len(result.clustering_state.cluster_labels) == 2
+
+    def test_inferred_cutoff_initialization_infers_average_distance_once(self) -> None:
+        call_count = 0
+        bank = Bank(
+            capacity=2,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+            ),
+        )
+        state = CSAProgressionState(
+            cutoff_state=CSACutoffState(),
+            stage_state=CSAStageState(
+                base_capacity=bank.capacity,
+                max_capacity=bank.capacity,
+            ),
+        )
+
+        def count_average_distance(entries: Sequence[BankEntry[int]]) -> float:
+            nonlocal call_count
+            call_count += 1
+            assert tuple(entry.candidate for entry in entries) == (0, 10)
+            return 10.0
+
+        next_state = initialize_cutoff_if_needed(
+            bank=bank,
+            state=state,
+            infer_average_distance=count_average_distance,
+            cutoff_schedule=CSACutoffSchedule(),
+        )
+
+        assert call_count == 1
+        assert next_state.distance_cutoff == 5.0
+        assert next_state.minimum_distance_cutoff == 2.0
 
     def test_appended_close_candidate_inherits_nearest_cluster(self) -> None:
         runtime: CSAClusteringState[int] = CSAClusteringState(

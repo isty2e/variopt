@@ -10,9 +10,11 @@ from tests.study_support import (
     SessionRecordingAsyncEvaluator,
     SquareObjective,
 )
-from variopt import IntegerSpace, Problem, Proposal, Study
+from variopt import EvaluationRequest, IntegerSpace, Problem, Proposal, Study
+from variopt.artifacts import ProposalEvaluationSpec
 from variopt.evaluators import EvaluationBatchSessionState, SequentialEvaluator
 from variopt.execution import EXACT_ASYNC_EXECUTION_MODEL
+from variopt.study.common import build_evaluation_requests
 
 
 class StudyExactAsyncTests:
@@ -89,6 +91,48 @@ class StudyExactAsyncTests:
         )
 
         assert evaluator.opened_batch_sizes == (2,)
+
+    def test_direct_step_exact_async_reuses_request_batch_for_validation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        build_call_count = 0
+        original_builder = build_evaluation_requests
+
+        def counting_builder(
+            proposals: tuple[Proposal[int], ...],
+            *,
+            proposal_evaluation_specs: (
+                tuple[ProposalEvaluationSpec | None, ...] | None
+            ),
+        ) -> tuple[EvaluationRequest[int], ...]:
+            nonlocal build_call_count
+            build_call_count += 1
+            return original_builder(
+                proposals,
+                proposal_evaluation_specs=proposal_evaluation_specs,
+            )
+
+        monkeypatch.setattr(
+            "variopt.study.execution.build_evaluation_requests",
+            counting_builder,
+        )
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
+        )
+        evaluator = OutOfOrderAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        _ = study.step(
+            optimizer.create_initial_state(),
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert build_call_count == 1
 
     def test_step_exact_async_runs_through_custom_kernel(self) -> None:
         problem = Problem(

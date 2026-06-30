@@ -35,8 +35,9 @@ from variopt.execution import (
     SEQUENTIAL_EXECUTION_MODEL,
     NestedParallelismPolicy,
 )
-from variopt.kernel import DirectKernel, ProposalLocalSearchContext
+from variopt.kernel import DirectKernel, ProposalBatchQuery, ProposalLocalSearchContext
 from variopt.study.common import build_evaluation_requests
+from variopt.study.execution import evaluate_batch_sync
 
 
 class StudyTests:
@@ -174,6 +175,96 @@ class StudyTests:
         _ = study.step(optimizer.create_initial_state(), batch_size=1)
 
         assert build_call_count == 1
+
+    def test_transformed_kernel_step_does_not_reuse_unrelated_request_batch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        build_call_count = 0
+        original_builder = build_evaluation_requests
+
+        def counting_builder(
+            proposals: tuple[Proposal[int], ...],
+            *,
+            proposal_evaluation_specs: (
+                tuple[ProposalEvaluationSpec | None, ...] | None
+            ),
+        ) -> tuple[EvaluationRequest[int], ...]:
+            nonlocal build_call_count
+            build_call_count += 1
+            return original_builder(
+                proposals,
+                proposal_evaluation_specs=proposal_evaluation_specs,
+            )
+
+        monkeypatch.setattr(
+            "variopt.study.execution.build_evaluation_requests",
+            counting_builder,
+        )
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=DecrementKernel(),
+        )
+
+        observations, _ = study.step(optimizer.create_initial_state(), batch_size=1)
+
+        assert observations[0].proposal.candidate == 3
+        assert observations[0].candidate == 2
+        assert build_call_count == 2
+
+    def test_evaluate_batch_sync_uses_supplied_requests_without_rebuilding(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def reject_builder(
+            proposals: tuple[Proposal[int], ...],
+            *,
+            proposal_evaluation_specs: (
+                tuple[ProposalEvaluationSpec | None, ...] | None
+            ),
+        ) -> tuple[EvaluationRequest[int], ...]:
+            _ = proposals
+            _ = proposal_evaluation_specs
+            raise AssertionError("requests should be supplied by the caller")
+
+        monkeypatch.setattr(
+            "variopt.study.execution.build_evaluation_requests",
+            reject_builder,
+        )
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        proposals = (Proposal(candidate=3, proposal_id="p-1"),)
+        requests = build_evaluation_requests(
+            proposals,
+            proposal_evaluation_specs=None,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=proposals,
+            execution_resources=evaluator.execution_resources(),
+        )
+
+        outcomes = evaluate_batch_sync(study, query, requests=requests)
+
+        assert outcomes[0].record.candidate == 3
+        assert outcomes[0].record.value == 9.0
 
     def test_step_uses_problem_evaluation_protocol_basis(self) -> None:
         problem = Problem(
