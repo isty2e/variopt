@@ -3,6 +3,7 @@
 from typing import Literal, cast
 
 import pytest
+from typing_extensions import override
 
 from tests.csa_support import (
     AbsoluteDistance,
@@ -18,6 +19,7 @@ from tests.csa_support import (
     CSANicheQualityPolicy,
     CSAOptimizerTestCase,
     CSAScoreModel,
+    DiversityMetric,
     IntegerSpace,
     NaNDistance,
     NegativeDistance,
@@ -34,6 +36,21 @@ from tests.csa_support import (
     make_optimizer,
     significant_update_indices,
 )
+from variopt.algorithms.population.csa.banking.queries import crowding_aware_scores
+
+
+class CountingDistance(DiversityMetric[int]):
+    """Absolute distance metric that counts pairwise distance calls."""
+
+    call_count: int
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.call_count += 1
+        return float(abs(left - right))
 
 
 class BankUpdatePolicyTests:
@@ -42,6 +59,30 @@ class BankUpdatePolicyTests:
     def test_policy_rejects_negative_crowding_penalty_ratio(self) -> None:
         with pytest.raises(ValueError, match="crowding_penalty_ratio must be non-negative"):
             _ = CSABankUpdatePolicy(crowding_penalty_ratio=-0.1)
+
+    def test_crowding_aware_best_mean_reuses_pairwise_distances(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+            BankEntry(candidate=2, value=7.0),
+            BankEntry(candidate=10, value=1.0),
+        )
+        metric = CountingDistance()
+
+        scores = crowding_aware_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+            penalty_ratio=1.0,
+            niche_quality_policy=CSANicheQualityPolicy(
+                mode="best_mean",
+                ratio=1.0,
+            ),
+        )
+
+        assert len(scores) == len(entries)
+        assert metric.call_count == 6
 
     def test_admit_appends_until_full(self) -> None:
         bank = Bank[int](capacity=2)
