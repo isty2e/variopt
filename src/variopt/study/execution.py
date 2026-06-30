@@ -117,6 +117,8 @@ def evaluate_batch_sync(
         StudyEvaluationRecordT,
     ],
     query: ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
+    *,
+    requests: tuple[EvaluationRequest[CandidateT], ...] | None = None,
 ) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
     """Execute one request batch through the synchronous evaluator path.
 
@@ -126,17 +128,23 @@ def evaluate_batch_sync(
         Study-like owner exposing the problem, evaluator, and kernel.
     query : ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT]
         Proposal batch and evaluation metadata to execute.
+    requests : tuple[EvaluationRequest[CandidateT], ...] | None, default=None
+        Optional prebuilt request batch aligned with ``query``.
 
     Returns
     -------
     tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
         Outcomes returned by the synchronous evaluator in request order.
     """
-    requests = build_evaluation_requests(
-        query.proposals,
-        proposal_evaluation_specs=query.proposal_evaluation_specs,
+    resolved_requests = (
+        build_evaluation_requests(
+            query.proposals,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        if requests is None
+        else requests
     )
-    return tuple(study.evaluator.evaluate(query.problem, requests))
+    return tuple(study.evaluator.evaluate(query.problem, resolved_requests))
 
 
 def evaluate_step(
@@ -196,6 +204,35 @@ def evaluate_step(
         msg = "run_method returned more proposals than requested"
         raise ValueError(msg)
 
+    request_batches: list[
+        tuple[
+            ProposalBatchQuery[
+                BoundaryT,
+                CandidateT,
+                StudyEvaluationRecordT,
+            ],
+            tuple[EvaluationRequest[CandidateT], ...],
+        ]
+    ] = []
+
+    def requests_for_query(
+        query: ProposalBatchQuery[
+            BoundaryT,
+            CandidateT,
+            StudyEvaluationRecordT,
+        ],
+    ) -> tuple[EvaluationRequest[CandidateT], ...]:
+        for cached_query, cached_requests in request_batches:
+            if cached_query is query:
+                return cached_requests
+
+        requests = build_evaluation_requests(
+            query.proposals,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        request_batches.append((query, requests))
+        return requests
+
     if execution_model == EXACT_ASYNC_EXECUTION_MODEL:
         def batch_executor(
             query: ProposalBatchQuery[
@@ -207,10 +244,7 @@ def evaluate_step(
             return evaluate_batch_exact_async(
                 require_async_evaluator(study),
                 query.problem,
-                build_evaluation_requests(
-                    query.proposals,
-                    proposal_evaluation_specs=query.proposal_evaluation_specs,
-                ),
+                requests_for_query(query),
             )
     else:
         def batch_executor(
@@ -220,7 +254,11 @@ def evaluate_step(
                 StudyEvaluationRecordT,
             ],
         ) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
-            return evaluate_batch_sync(study, query)
+            return evaluate_batch_sync(
+                study,
+                query,
+                requests=requests_for_query(query),
+            )
     proposal_kernel_hints = study.run_method.proposal_kernel_hints(
         next_state,
         proposals,
@@ -237,10 +275,7 @@ def evaluate_step(
         proposal_kernel_hints=proposal_kernel_hints,
     )
     outcomes = study.kernel.run(query, batch_executor)
-    requests = build_evaluation_requests(
-        proposals,
-        proposal_evaluation_specs=proposal_evaluation_specs,
-    )
+    requests = requests_for_query(query)
     validate_aligned_outcomes(requests, outcomes)
     records = tuple(outcome.record for outcome in outcomes)
     next_state = study.run_method.tell(next_state, records)

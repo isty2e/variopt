@@ -20,6 +20,7 @@ from tests.study_support import (
     SquareObjective,
 )
 from variopt import (
+    EvaluationRequest,
     IntegerSpace,
     OptimizationDirection,
     Problem,
@@ -27,6 +28,7 @@ from variopt import (
     RunReport,
     Study,
 )
+from variopt.artifacts import ProposalEvaluationSpec
 from variopt.evaluators import SequentialEvaluator
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -34,6 +36,7 @@ from variopt.execution import (
     NestedParallelismPolicy,
 )
 from variopt.kernel import DirectKernel, ProposalLocalSearchContext
+from variopt.study.common import build_evaluation_requests
 
 
 class StudyTests:
@@ -132,6 +135,45 @@ class StudyTests:
         assert observations[0].candidate == 3
         assert observations[0].value == 9.0
         assert observations[0].score == 9.0
+
+    def test_direct_step_reuses_request_batch_for_validation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        build_call_count = 0
+        original_builder = build_evaluation_requests
+
+        def counting_builder(
+            proposals: tuple[Proposal[int], ...],
+            *,
+            proposal_evaluation_specs: (
+                tuple[ProposalEvaluationSpec | None, ...] | None
+            ),
+        ) -> tuple[EvaluationRequest[int], ...]:
+            nonlocal build_call_count
+            build_call_count += 1
+            return original_builder(
+                proposals,
+                proposal_evaluation_specs=proposal_evaluation_specs,
+            )
+
+        monkeypatch.setattr(
+            "variopt.study.execution.build_evaluation_requests",
+            counting_builder,
+        )
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        _ = study.step(optimizer.create_initial_state(), batch_size=1)
+
+        assert build_call_count == 1
 
     def test_step_uses_problem_evaluation_protocol_basis(self) -> None:
         problem = Problem(
