@@ -204,16 +204,22 @@ def evaluate_step(
         msg = "run_method returned more proposals than requested"
         raise ValueError(msg)
 
-    request_batches: list[
-        tuple[
-            ProposalBatchQuery[
-                BoundaryT,
-                CandidateT,
-                StudyEvaluationRecordT,
-            ],
-            tuple[EvaluationRequest[CandidateT], ...],
-        ]
-    ] = []
+    proposal_kernel_hints = study.run_method.proposal_kernel_hints(
+        next_state,
+        proposals,
+    )
+    proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
+        next_state,
+        proposals,
+    )
+    top_level_query = ProposalBatchQuery(
+        problem=study.problem,
+        proposals=proposals,
+        execution_resources=study.evaluator.execution_resources(),
+        proposal_evaluation_specs=proposal_evaluation_specs,
+        proposal_kernel_hints=proposal_kernel_hints,
+    )
+    top_level_requests: tuple[EvaluationRequest[CandidateT], ...] | None = None
 
     def requests_for_query(
         query: ProposalBatchQuery[
@@ -222,15 +228,16 @@ def evaluate_step(
             StudyEvaluationRecordT,
         ],
     ) -> tuple[EvaluationRequest[CandidateT], ...]:
-        for cached_query, cached_requests in request_batches:
-            if cached_query is query:
-                return cached_requests
+        nonlocal top_level_requests
+        if query is top_level_query and top_level_requests is not None:
+            return top_level_requests
 
         requests = build_evaluation_requests(
             query.proposals,
             proposal_evaluation_specs=query.proposal_evaluation_specs,
         )
-        request_batches.append((query, requests))
+        if query is top_level_query:
+            top_level_requests = requests
         return requests
 
     if execution_model == EXACT_ASYNC_EXECUTION_MODEL:
@@ -259,23 +266,8 @@ def evaluate_step(
                 query,
                 requests=requests_for_query(query),
             )
-    proposal_kernel_hints = study.run_method.proposal_kernel_hints(
-        next_state,
-        proposals,
-    )
-    proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
-        next_state,
-        proposals,
-    )
-    query = ProposalBatchQuery(
-        problem=study.problem,
-        proposals=proposals,
-        execution_resources=study.evaluator.execution_resources(),
-        proposal_evaluation_specs=proposal_evaluation_specs,
-        proposal_kernel_hints=proposal_kernel_hints,
-    )
-    outcomes = study.kernel.run(query, batch_executor)
-    requests = requests_for_query(query)
+    outcomes = study.kernel.run(top_level_query, batch_executor)
+    requests = requests_for_query(top_level_query)
     validate_aligned_outcomes(requests, outcomes)
     records = tuple(outcome.record for outcome in outcomes)
     next_state = study.run_method.tell(next_state, records)

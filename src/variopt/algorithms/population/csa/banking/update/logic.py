@@ -96,6 +96,8 @@ def apply_bank_update_batch(
     shadow_growth_state = growth_state
     shadow_clustering_state = clustering_state
     if shadow_clustering_state.requires_initialization(entries=shadow_bank.entries):
+        # Guard before calling ensure_initialized: Python evaluates arguments
+        # eagerly, so this branch owns average-distance inference laziness.
         shadow_clustering_state = shadow_clustering_state.ensure_initialized(
             entries=shadow_bank.entries,
             reference_average_distance=infer_average_distance(shadow_bank.entries),
