@@ -213,6 +213,13 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                 continue
 
             if current_stage_index == len(self.stages) - 1:
+                refinement = None
+                if completed_steps > 0:
+                    refinement = runtime.candidate_refinement(
+                        source_candidate=proposal.candidate,
+                        refined_candidate=current_candidate,
+                    )
+
                 return EvaluationOutcome(
                     record=Observation.from_objective_value(
                         proposal=proposal,
@@ -231,9 +238,17 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                             + " after exhausting the configured variable-neighborhood stages"
                         ),
                     ),
+                    refinement=refinement,
                 )
 
             current_stage_index += 1
+
+        refinement = None
+        if completed_steps > 0:
+            refinement = runtime.candidate_refinement(
+                source_candidate=proposal.candidate,
+                refined_candidate=current_candidate,
+            )
 
         return EvaluationOutcome(
             record=Observation.from_objective_value(
@@ -250,6 +265,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                 status=KernelStatus.STOPPED,
                 message="max_steps reached before variable-neighborhood termination",
             ),
+            refinement=refinement,
         )
 
     @override

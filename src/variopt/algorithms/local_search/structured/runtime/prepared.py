@@ -14,7 +14,7 @@ from .....kernel import (
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from .....outcomes import EvaluationOutcome
+from .....outcomes import CandidateRefinement, EvaluationOutcome
 from .....spaces import LeafPath
 from ..neighborhood import (
     BoundaryT,
@@ -280,6 +280,45 @@ class PreparedStructuredLocalSearchRuntime(FrozenGenericSlotsCompat,
             ordered_schedule.append((path, leaf_space))
 
         return tuple(ordered_schedule)
+
+    def candidate_refinement(
+        self,
+        *,
+        source_candidate: StructuredCandidateT,
+        refined_candidate: StructuredCandidateT,
+    ) -> CandidateRefinement[StructuredCandidateT] | None:
+        """Return candidate-refinement provenance for a changed candidate.
+
+        Parameters
+        ----------
+        source_candidate : StructuredCandidateT
+            Candidate before structured local-search refinement.
+        refined_candidate : StructuredCandidateT
+            Candidate returned by structured local-search refinement.
+
+        Returns
+        -------
+        CandidateRefinement[StructuredCandidateT] | None
+            Refinement payload with changed leaf paths, or ``None`` when the
+            source and refined candidates have identical structured leaf values.
+        """
+        space = self.neighborhood.space
+        space.validate(source_candidate)
+        space.validate(refined_candidate)
+        changed_leaf_paths = tuple(
+            path
+            for path in self.neighborhood.leaf_paths
+            if space.leaf_value_at_path(source_candidate, path)
+            != space.leaf_value_at_path(refined_candidate, path)
+        )
+        if len(changed_leaf_paths) == 0:
+            return None
+
+        return CandidateRefinement(
+            source_candidate=source_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=changed_leaf_paths,
+        )
 
 
 def prepare_structured_local_search_runtime(

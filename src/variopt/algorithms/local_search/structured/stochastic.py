@@ -231,6 +231,13 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
             else:
                 message = "no improving move found in the sampled discrete neighborhood"
 
+        refinement = None
+        if completed_steps > 0:
+            refinement = runtime.candidate_refinement(
+                source_candidate=proposal.candidate,
+                refined_candidate=current_candidate,
+            )
+
         return EvaluationOutcome(
             record=Observation.from_objective_value(
                 proposal=proposal,
@@ -246,6 +253,7 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
                 status=status,
                 message=message,
             ),
+            refinement=refinement,
         )
 
     @override

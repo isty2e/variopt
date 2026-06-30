@@ -180,6 +180,7 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
         incumbent_score = incumbent_record.score
         evaluation_count = incumbent_result.evaluation_count
         completed_steps = incumbent_result.completed_steps
+        accepted_refinement = completed_steps > 0
         kick_count = 0
         terminal_message = "max_kicks reached before iterated local-search termination"
 
@@ -214,10 +215,18 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 incumbent_candidate = kicked_record.candidate
                 incumbent_value = kicked_record.value
                 incumbent_score = kicked_record.score
+                accepted_refinement = True
 
         status = KernelStatus.STOPPED
         if completed_steps >= episode_max_steps:
             terminal_message = "max_steps reached before iterated local-search termination"
+
+        refinement = None
+        if accepted_refinement:
+            refinement = runtime.candidate_refinement(
+                source_candidate=proposal.candidate,
+                refined_candidate=incumbent_candidate,
+            )
 
         return EvaluationOutcome(
             record=Observation.from_objective_value(
@@ -234,6 +243,7 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 status=status,
                 message=terminal_message,
             ),
+            refinement=refinement,
         )
 
     @override

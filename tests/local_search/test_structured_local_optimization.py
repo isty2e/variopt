@@ -341,6 +341,10 @@ class StructuredHillClimbKernelTests:
         assert outcome.kernel_diagnostics.backend == "structured.local_search"
         assert outcome.kernel_diagnostics.method == "leafwise_first_improvement"
         assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == 5
+        assert outcome.refinement.refined_candidate == 2
+        assert outcome.refinement.changed_leaf_paths == ((),)
 
     def test_categorical_hill_climber_moves_through_declared_alternatives(self) -> None:
         color_space: CategoricalSpace[Color] = CategoricalSpace(("red", "green", "blue"))
@@ -363,6 +367,10 @@ class StructuredHillClimbKernelTests:
         assert outcome.observation.value == 0.0
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == "red"
+        assert outcome.refinement.refined_candidate == "blue"
+        assert outcome.refinement.changed_leaf_paths == ((),)
 
     def test_hill_climber_recurses_over_array_leaves(self) -> None:
         problem = Problem(
@@ -383,6 +391,10 @@ class StructuredHillClimbKernelTests:
         assert outcome.observation.value == 0.0
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == (0, 0)
+        assert outcome.refinement.refined_candidate == (1, 2)
+        assert outcome.refinement.changed_leaf_paths == ((0,), (1,))
 
     def test_hill_climber_stops_when_step_budget_is_exhausted(self) -> None:
         space = RecordSpace(
@@ -436,6 +448,7 @@ class StructuredHillClimbKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "local search disabled by run-method context"
+        assert outcome.refinement is None
 
     def test_context_can_override_step_budget(self) -> None:
         space = RecordSpace(
@@ -670,6 +683,7 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics.method == "sampled_leafwise_first_improvement"
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "no improving move found in the sampled discrete neighborhood"
+        assert outcome.refinement is None
 
     def test_stochastic_kernel_converges_when_sampling_covers_full_neighborhood(
         self,
@@ -696,6 +710,7 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
         assert outcome.kernel_diagnostics.message == "no improving move found in the full discrete neighborhood"
+        assert outcome.refinement is None
 
     def test_stochastic_kernel_can_cap_categorical_neighbors_per_leaf(self) -> None:
         problem = Problem(
@@ -747,6 +762,10 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "max_steps reached before stochastic local-search termination"
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == 0
+        assert outcome.refinement.refined_candidate == outcome.observation.candidate
+        assert outcome.refinement.changed_leaf_paths == ((),)
 
     def test_stochastic_kernel_rejects_dynamic_topology_space(self) -> None:
         problem = Problem(
@@ -832,6 +851,10 @@ class StructuredVariableNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics.method == "variable_neighborhood_search"
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "max_steps reached before variable-neighborhood termination"
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == (0, 0, 0)
+        assert outcome.refinement.refined_candidate == (1, 1, 1)
+        assert outcome.refinement.changed_leaf_paths == ((0,), (1,), (2,))
 
     def test_variable_neighborhood_kernel_uses_sampled_stage_terminal_status(
         self,
@@ -866,6 +889,7 @@ class StructuredVariableNeighborhoodKernelTests:
                 "no improving move found in the sampled variable neighborhood "
                 "after exhausting the configured variable-neighborhood stages"
             )
+        assert outcome.refinement is None
 
     def test_variable_neighborhood_kernel_rejects_invalid_stage_metadata(
         self,
@@ -929,6 +953,10 @@ class StructuredIteratedLocalSearchKernelTests:
         assert outcome.kernel_diagnostics.method == "iterated_local_search"
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "max_kicks reached before iterated local-search termination"
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == (0, 0)
+        assert outcome.refinement.refined_candidate == (1, 1)
+        assert outcome.refinement.changed_leaf_paths == ((0,), (1,))
 
     def test_iterated_local_search_kernel_requires_strict_improvement_to_accept(
         self,
@@ -958,6 +986,7 @@ class StructuredIteratedLocalSearchKernelTests:
         assert outcome.observation.candidate == (0, 0, 0)
         assert outcome.observation.value == 1.0
         assert outcome.evaluation_count == 11
+        assert outcome.refinement is None
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "max_kicks reached before iterated local-search termination"
