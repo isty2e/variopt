@@ -6,7 +6,7 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....artifacts import Proposal, ProposalEvaluationSpec
+from .....artifacts import CandidateRefinement, Proposal, ProposalEvaluationSpec
 from .....kernel import (
     KernelDiagnostics,
     KernelStatus,
@@ -14,7 +14,7 @@ from .....kernel import (
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from .....outcomes import CandidateRefinement, EvaluationOutcome
+from .....outcomes import EvaluationOutcome
 from .....spaces import LeafPath
 from ..neighborhood import (
     BoundaryT,

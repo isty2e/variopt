@@ -23,6 +23,15 @@ from variopt import (
 from variopt.artifacts import Trace, TraceEvent
 
 
+class AmbiguousEqualityCandidate:
+    """Candidate whose equality cannot be reduced to a scalar truth value."""
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ = other
+        raise ValueError("ambiguous candidate equality")
+
+
 class RuntimeArtifactConformanceTests(contract_cases.ArtifactConformanceCase[int]):
     """Runtime-artifact conformance for Proposal, Observation, RunResult, and Trace."""
 
@@ -310,6 +319,130 @@ class RuntimeArtifactsTests:
         assert report.records == (record_one, record_two)
         assert report.evaluation_count == 3
         assert report.trace.events == ()
+        assert report.refinements == ()
+
+    def test_run_report_preserves_record_aligned_refinements(self) -> None:
+        proposal_one = Proposal(candidate=4, proposal_id="p-1")
+        proposal_two = Proposal(candidate=2, proposal_id="p-2")
+        record_one = LabelRecord(
+            request=EvaluationRequest(proposal=proposal_one),
+            candidate=3,
+            label="parity:1",
+        )
+        record_two = LabelRecord(
+            request=EvaluationRequest(proposal=proposal_two),
+            candidate=2,
+            label="parity:0",
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+
+        report = RunReport[int, LabelRecord].from_records(
+            records=(record_one, record_two),
+            refinements=(refinement, None),
+        )
+
+        assert report.refinements == (refinement, None)
+
+    def test_run_report_rejects_unaligned_refinements(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        record = LabelRecord(
+            request=EvaluationRequest(proposal=proposal),
+            candidate=3,
+            label="parity:1",
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError):
+            _ = RunReport[int, LabelRecord].from_records(
+                records=(record,),
+                refinements=(refinement, None),
+            )
+
+    def test_run_report_canonicalizes_all_none_refinements(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        record = LabelRecord(
+            request=EvaluationRequest(proposal=proposal),
+            candidate=4,
+            label="parity:0",
+        )
+
+        report = RunReport[int, LabelRecord].from_records(
+            records=(record,),
+            refinements=(None,),
+        )
+
+        assert report.refinements == ()
+
+    def test_run_report_constructor_canonicalizes_all_none_refinements(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        record = LabelRecord(
+            request=EvaluationRequest(proposal=proposal),
+            candidate=4,
+            label="parity:0",
+        )
+
+        report = RunReport[int, LabelRecord](
+            records=(record,),
+            evaluation_count=1,
+            refinements=(None,),
+        )
+
+        assert report.refinements == ()
+
+    def test_run_report_rejects_zero_record_refinement_metadata(self) -> None:
+        with pytest.raises(ValueError):
+            _ = RunReport[int, LabelRecord].from_records(
+                records=(),
+                refinements=(None,),
+            )
+
+    def test_run_report_rejects_mismatched_refinement_candidate(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        record = LabelRecord(
+            request=EvaluationRequest(proposal=proposal),
+            candidate=3,
+            label="parity:1",
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError):
+            _ = RunReport[int, LabelRecord].from_records(
+                records=(record,),
+                refinements=(refinement,),
+            )
+
+    def test_run_report_rejects_ambiguous_refinement_candidate_equality(
+        self,
+    ) -> None:
+        candidate = AmbiguousEqualityCandidate()
+        proposal = Proposal(candidate=candidate, proposal_id="p-1")
+        record = EvaluationRecord(
+            request=EvaluationRequest(proposal=proposal),
+            candidate=candidate,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=candidate,
+            refined_candidate=candidate,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(TypeError):
+            _ = RunReport[AmbiguousEqualityCandidate, EvaluationRecord[AmbiguousEqualityCandidate]].from_records(
+                records=(record,),
+                refinements=(refinement,),
+            )
 
     def test_nondominated_run_surface_from_report_preserves_frontier_order(self) -> None:
         record_one = ObjectiveVectorRecord.from_objective_values(

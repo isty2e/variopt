@@ -3,6 +3,7 @@
 
 import variopt
 from variopt.artifacts import (
+    CandidateRefinement,
     EvaluationRequest,
     NondominatedRunSurface,
     Observation,
@@ -32,7 +33,7 @@ from variopt.kernel import (
 )
 from variopt.methods import RunMethod
 from variopt.objective import Objective
-from variopt.outcomes import CandidateRefinement, EvaluationOutcome
+from variopt.outcomes import EvaluationOutcome
 from variopt.problem import Problem
 from variopt.sampling import CandidateSampler
 from variopt.spaces import SearchSpace, SpaceBoundaryValue, SpaceCandidateValue

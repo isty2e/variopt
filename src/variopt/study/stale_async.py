@@ -7,6 +7,7 @@ from typing import Generic, Protocol
 from typing_extensions import TypeVar
 
 from ..artifacts import (
+    CandidateRefinement,
     EvaluationRequest,
     Proposal,
     ProposalEvaluationSpec,
@@ -316,6 +317,7 @@ def run_stale_async(
     _validate_stale_async_run_request(study, batch_size=batch_size)
 
     records: list[StudyEvaluationRecordT] = []
+    refinements: list[CandidateRefinement[CandidateT] | None] | None = None
     trace = Trace()
     remaining = max_evaluations
     state = (
@@ -359,7 +361,21 @@ def run_stale_async(
                     group_records = tuple(
                         outcome.record for outcome in completed_group
                     )
+                    group_refinements = tuple(
+                        outcome.refinement for outcome in completed_group
+                    )
+                    records_before_group = len(records)
                     records.extend(group_records)
+                    if refinements is not None:
+                        refinements.extend(group_refinements)
+                    elif any(
+                        refinement is not None for refinement in group_refinements
+                    ):
+                        refinement_history: list[
+                            CandidateRefinement[CandidateT] | None
+                        ] = [None for _index in range(records_before_group)]
+                        refinement_history.extend(group_refinements)
+                        refinements = refinement_history
                     state = study.run_method.tell(state, group_records)
                     group_evaluation_count = sum(
                         outcome.evaluation_count for outcome in completed_group
@@ -399,6 +415,7 @@ def run_stale_async(
             records=records,
             evaluation_count=max_evaluations - remaining,
             trace=trace,
+            refinements=None if refinements is None else tuple(refinements),
         ),
         state,
     )

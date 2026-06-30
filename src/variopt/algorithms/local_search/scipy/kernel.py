@@ -8,7 +8,12 @@ from typing_extensions import override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ....artifacts import Observation, Proposal, ProposalEvaluationSpec
+from ....artifacts import (
+    CandidateRefinement,
+    Observation,
+    Proposal,
+    ProposalEvaluationSpec,
+)
 from ....kernel import (
     Kernel,
     KernelDiagnostics,
@@ -17,7 +22,7 @@ from ....kernel import (
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from ....outcomes import CandidateRefinement, EvaluationOutcome
+from ....outcomes import EvaluationOutcome
 from ....spaces.projections import ContinuousStructuredSpaceCodec
 from ....spaces.types import SpaceCandidateValue
 from .contracts import ScipyMinimizeMethod

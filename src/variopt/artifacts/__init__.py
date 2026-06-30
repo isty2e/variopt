@@ -5,6 +5,7 @@ implementation is split by ontology tier:
 
 - request-plane artifacts
 - evaluation-record artifacts
+- candidate-refinement provenance artifacts
 - terminal/report surfaces
 """
 
@@ -15,6 +16,7 @@ from .records import (
     Observation,
     RequestAlignedEvaluationRecord,
 )
+from .refinement import CandidateRefinement
 from .requests import (
     EvaluationRequest,
     InteractionEvaluationSpec,
@@ -31,6 +33,7 @@ from .terminal import (
 )
 
 __all__ = [
+    "CandidateRefinement",
     "EvaluationRecord",
     "EvaluationRequest",
     "InteractionEvaluationRecord",

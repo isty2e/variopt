@@ -9,9 +9,10 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..typevars import CandidateT
-from .records import ObjectiveVectorRecord, Observation
+from .records import ObjectiveVectorRecord, Observation, RequestAlignedEvaluationRecord
+from .refinement import CandidateRefinement
 
-RunRecordT = TypeVar("RunRecordT")
+RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,11 +98,15 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
+    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
+        Optional record-aligned refinement provenance. An empty tuple means no
+        refinement metadata was recorded for the run.
     """
 
     records: tuple[RunRecordT, ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate report accounting invariants.
@@ -109,8 +114,12 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         Raises
         ------
         ValueError
-            If ``evaluation_count`` is negative or smaller than
-            ``len(records)``.
+            If ``evaluation_count`` is negative, smaller than ``len(records)``,
+            if non-empty refinement metadata is not aligned with records, or
+            if a refinement's evaluated candidate disagrees with the aligned
+            record candidate.
+        TypeError
+            If candidate equality does not produce a scalar truth value.
         """
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
@@ -120,12 +129,47 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             msg = "evaluation_count must be at least the number of records"
             raise ValueError(msg)
 
+        if self.refinements != () and len(self.refinements) != len(self.records):
+            msg = "refinements must be empty or align with records"
+            raise ValueError(msg)
+
+        if self.refinements == ():
+            return
+
+        if all(refinement is None for refinement in self.refinements):
+            object.__setattr__(self, "refinements", ())
+            return
+
+        for record, refinement in zip(
+            self.records,
+            self.refinements,
+            strict=True,
+        ):
+            if refinement is None:
+                continue
+
+            try:
+                candidates_match = bool(
+                    record.candidate == refinement.refined_candidate
+                )
+            except ValueError as error:
+                msg = "candidate equality must produce a scalar truth value"
+                raise TypeError(msg) from error
+
+            if not candidates_match:
+                msg = (
+                    "refinement refined_candidate must match the aligned "
+                    "report record candidate"
+                )
+                raise ValueError(msg)
+
     @classmethod
     def from_records(
         cls,
         records: Sequence[RunRecordT],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
     ) -> Self:
         """Build a terminal report from an arbitrary record sequence.
 
@@ -137,6 +181,10 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             Optional logical evaluation cost. Defaults to ``len(records)``.
         trace : Trace | None, optional
             Optional diagnostics trace. Defaults to an empty trace.
+        refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
+            Optional record-aligned refinement provenance. ``None`` keeps the
+            compact no-metadata sentinel. Aligned all-``None`` metadata is
+            canonicalized to the same sentinel.
 
         Returns
         -------
@@ -145,6 +193,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         """
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
+        refinement_tuple = () if refinements is None else tuple(refinements)
         normalized_evaluation_count = len(record_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
@@ -153,6 +202,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             records=record_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
+            refinements=refinement_tuple,
         )
 
 

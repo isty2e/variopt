@@ -1,6 +1,7 @@
 """Public interfaces for the variopt package."""
 
 from .artifacts import (
+    CandidateRefinement,
     EvaluationRecord,
     EvaluationRequest,
     NondominatedRunSurface,
@@ -41,7 +42,7 @@ from .objective import (
     ScalarEvaluationProtocol,
 )
 from .operators import VariationOperator
-from .outcomes import CandidateRefinement, EvaluationOutcome
+from .outcomes import EvaluationOutcome
 from .problem import InteractionProblem, Problem
 from .spaces import (
     ArraySpace,

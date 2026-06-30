@@ -120,7 +120,9 @@ The search-state owner. Proposes candidates via `ask`, consumes records via
 ## RunReport
 
 The generic terminal report produced by `Study.run(...)`. Covers any
-`EvaluationRecord` type. See [`RunReport`][variopt.RunReport].
+`EvaluationRecord` type and may carry record-aligned
+`CandidateRefinement` provenance when a kernel or evaluator changed candidates
+before evaluation. See [`RunReport`][variopt.RunReport].
 
 ## RunResult
 
