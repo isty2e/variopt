@@ -285,6 +285,90 @@ class RuntimeArtifactsTests:
         assert result.observations == (observation_one, observation_two)
         assert result.evaluation_count == 2
         assert result.trace == trace
+        assert result.refinements == ()
+
+    def test_run_result_preserves_observation_aligned_refinements(self) -> None:
+        proposal_one = Proposal(candidate=4, proposal_id="p-1")
+        proposal_two = Proposal(candidate=2, proposal_id="p-2")
+        observation_one: Observation[int] = Observation(
+            proposal=proposal_one,
+            candidate=3,
+            value=9.0,
+            score=9.0,
+        )
+        observation_two: Observation[int] = Observation(
+            proposal=proposal_two,
+            candidate=2,
+            value=4.0,
+            score=4.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+
+        result = RunResult[int].from_observations(
+            observations=(observation_one, observation_two),
+            refinements=(refinement, None),
+        )
+
+        assert result.refinements == (refinement, None)
+
+    def test_run_result_rejects_unaligned_refinements(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+
+        with pytest.raises(ValueError):
+            _ = RunResult[int].from_observations(
+                observations=(observation,),
+                refinements=(None, None),
+            )
+
+    def test_run_result_rejects_mismatched_refinement_candidate(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=3,
+            value=9.0,
+            score=9.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError):
+            _ = RunResult[int].from_observations(
+                observations=(observation,),
+                refinements=(refinement,),
+            )
+
+    def test_run_result_canonicalizes_all_none_refinements(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+
+        result = RunResult[int].from_observations(
+            observations=(observation,),
+            refinements=(None,),
+        )
+
+        assert result.refinements == ()
+
+    def test_run_result_rejects_zero_observation_refinement_metadata(self) -> None:
+        with pytest.raises(ValueError):
+            _ = RunResult[int].from_observations(
+                observations=(),
+                refinements=(None,),
+            )
 
     def test_objective_vector_record_rejects_empty_objective_values(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
@@ -494,6 +578,102 @@ class RuntimeArtifactsTests:
         assert surface.records == report.records
         assert surface.evaluation_count == 5
         assert surface.trace == trace
+        assert surface.refinements == ()
+
+    def test_nondominated_run_surface_from_report_preserves_refinements(
+        self,
+    ) -> None:
+        record_one = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=3,
+            objective_values=(3.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        record_two = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            objective_values=(1.0, 3.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+        report = RunReport[int, ObjectiveVectorRecord[int]].from_records(
+            records=(record_one, record_two),
+            refinements=(refinement, None),
+        )
+
+        surface = NondominatedRunSurface[int].from_report(report)
+
+        assert surface.records == report.records
+        assert surface.refinements == (refinement, None)
+
+    def test_nondominated_run_surface_rejects_unaligned_refinements(self) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            objective_values=(4.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+
+        with pytest.raises(ValueError):
+            _ = NondominatedRunSurface[int].from_records(
+                records=(record,),
+                refinements=(None, None),
+            )
+
+    def test_nondominated_run_surface_rejects_mismatched_refinement_candidate(
+        self,
+    ) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=3,
+            objective_values=(3.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError):
+            _ = NondominatedRunSurface[int].from_records(
+                records=(record,),
+                refinements=(refinement,),
+            )
+
+    def test_nondominated_run_surface_canonicalizes_all_none_refinements(self) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            objective_values=(4.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+
+        surface = NondominatedRunSurface[int].from_records(
+            records=(record,),
+            refinements=(None,),
+        )
+
+        assert surface.refinements == ()
 
     def test_nondominated_run_surface_rejects_mixed_objective_dimensions(self) -> None:
         record_one = ObjectiveVectorRecord.from_objective_values(

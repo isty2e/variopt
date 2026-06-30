@@ -466,6 +466,7 @@ class StudyTests:
         assert result.best_observation.value == 1.0
         assert result.best_observation.score == 1.0
         assert len(result.trace.events) == 2
+        assert result.refinements == ()
 
     def test_run_returns_terminal_run_report_for_scalar_observations(self) -> None:
         problem = Problem(
@@ -665,7 +666,45 @@ class StudyTests:
         assert result.observations[0].candidate == 2
         assert result.observations[0].value == 4.0
         assert result.observations[0].score == 4.0
+        assert len(result.refinements) == 1
+        refinement = result.refinements[0]
+        assert refinement is not None
+        assert refinement.source_candidate == 4
+        assert refinement.refined_candidate == 2
         assert len(final_state.tell_history) == 1
+
+    def test_optimize_backfills_unrefined_history_when_late_refinement_appears(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=0, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RefinementKernel(),
+        )
+
+        result, _ = study.optimize(max_evaluations=2)
+
+        assert tuple(
+            observation.proposal.proposal_id for observation in result.observations
+        ) == ("p-1", "p-2")
+        assert len(result.refinements) == 2
+        assert result.refinements[0] is None
+        late_refinement = result.refinements[1]
+        assert late_refinement is not None
+        assert late_refinement.source_candidate == 3
+        assert late_refinement.refined_candidate == result.observations[1].candidate
 
     def test_study_passes_evaluator_execution_resources_to_kernel(self) -> None:
         problem = Problem(

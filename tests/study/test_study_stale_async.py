@@ -108,6 +108,49 @@ class StudyStaleAsyncTests:
                 for observation in observation_batch
             ) == ("p-2", "p-1")
 
+    def test_optimize_stale_async_projects_completion_order_refinements(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            evaluation_protocol=ShiftedObservationProtocol(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=14, proposal_id="p-1"),
+                Proposal(candidate=12, proposal_id="p-2"),
+            ),
+        )
+        evaluator = OutOfOrderAsyncEvaluator(attach_refinement=True)
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, final_state = study.optimize(
+            max_evaluations=2,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert tuple(
+                observation.proposal.proposal_id
+                for observation in result.observations
+            ) == ("p-2", "p-1")
+        assert tuple(observation.candidate for observation in result.observations) == (
+            11,
+            13,
+        )
+        assert len(result.refinements) == 2
+        first_refinement = result.refinements[0]
+        second_refinement = result.refinements[1]
+        assert first_refinement is not None
+        assert second_refinement is not None
+        assert first_refinement.source_candidate == 12
+        assert first_refinement.refined_candidate == 11
+        assert second_refinement.source_candidate == 14
+        assert second_refinement.refined_candidate == 13
+        assert tuple(
+                observation.proposal.proposal_id
+                for observation_batch in final_state.tell_history
+                for observation in observation_batch
+            ) == ("p-2", "p-1")
+
     def test_run_stale_async_rejects_non_direct_kernel(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=20),

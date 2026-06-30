@@ -65,7 +65,9 @@ locally improved report. Kernels own local search, not global search. See
 
 The multi-objective terminal sibling of `RunResult`. Materialised from a
 `RunReport` of `ObjectiveVectorRecord`s; exposes the non-dominated candidate
-set. See [`NondominatedRunSurface`][variopt.NondominatedRunSurface].
+set while preserving record-aligned `CandidateRefinement` provenance when the
+source report carried it. See
+[`NondominatedRunSurface`][variopt.NondominatedRunSurface].
 
 ## Objective
 
@@ -127,7 +129,9 @@ before evaluation. See [`RunReport`][variopt.RunReport].
 ## RunResult
 
 The scalar terminal result produced by `Study.optimize(...)`. Covers scalar
-`Observation` records only. See [`RunResult`][variopt.RunResult].
+`Observation` records only and preserves observation-aligned
+`CandidateRefinement` provenance when local refinement changed evaluated
+candidates. See [`RunResult`][variopt.RunResult].
 
 ## SearchSpace
 

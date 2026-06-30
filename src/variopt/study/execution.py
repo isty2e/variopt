@@ -452,6 +452,45 @@ def run(
     )
 
 
+def materialize_scalar_run_result(
+    run_report: RunReport[CandidateT, StudyEvaluationRecordT],
+) -> RunResult[CandidateT]:
+    """Project a generic run report into a scalar terminal result.
+
+    Parameters
+    ----------
+    run_report : RunReport[CandidateT, StudyEvaluationRecordT]
+        Generic terminal report to project.
+
+    Returns
+    -------
+    RunResult[CandidateT]
+        Scalar terminal result that preserves trace, accounting, and aligned
+        refinement provenance from ``run_report``.
+
+    Raises
+    ------
+    TypeError
+        If the report does not contain scalar :class:`Observation` records.
+    """
+    observations: list[Observation[CandidateT]] = []
+    for record in run_report.records:
+        if not isinstance(record, Observation):
+            msg = (
+                "Study.optimize currently requires scalar Observation records; "
+                "use Study.run for non-scalar evaluation protocols"
+            )
+            raise TypeError(msg)
+        observations.append(cast(Observation[CandidateT], record))
+
+    return RunResult[CandidateT].from_observations(
+        observations=tuple(observations),
+        evaluation_count=run_report.evaluation_count,
+        trace=run_report.trace,
+        refinements=run_report.refinements,
+    )
+
+
 def optimize(
     study: StudyExecutionOwner[
         BoundaryT,
@@ -503,21 +542,5 @@ def optimize(
         count_evaluation_cost=count_evaluation_cost,
         initial_state=initial_state,
     )
-    observations: list[Observation[CandidateT]] = []
-    for record in run_report.records:
-        if not isinstance(record, Observation):
-            msg = (
-                "Study.optimize currently requires scalar Observation records; "
-                "use Study.run for non-scalar evaluation protocols"
-            )
-            raise TypeError(msg)
-        observations.append(cast(Observation[CandidateT], record))
 
-    return (
-        RunResult[CandidateT].from_observations(
-            observations=tuple(observations),
-            evaluation_count=run_report.evaluation_count,
-            trace=run_report.trace,
-        ),
-        state,
-    )
+    return materialize_scalar_run_result(run_report), state

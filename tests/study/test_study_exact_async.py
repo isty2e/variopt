@@ -249,6 +249,47 @@ class StudyExactAsyncTests:
                 for observation in next_state.tell_history[0]
             ) == ("p-1", "p-2")
 
+    def test_optimize_exact_async_projects_evaluator_refinements(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=ShiftedObservationProtocol(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = OutOfOrderAsyncEvaluator(attach_refinement=True)
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, next_state = study.optimize(
+            max_evaluations=2,
+            batch_size=2,
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert tuple(observation.proposal.proposal_id for observation in result.observations) == (
+            "p-1",
+            "p-2",
+        )
+        assert tuple(observation.candidate for observation in result.observations) == (3, 1)
+        assert len(result.refinements) == 2
+        first_refinement = result.refinements[0]
+        second_refinement = result.refinements[1]
+        assert first_refinement is not None
+        assert second_refinement is not None
+        assert first_refinement.source_candidate == 4
+        assert first_refinement.refined_candidate == 3
+        assert second_refinement.source_candidate == 2
+        assert second_refinement.refined_candidate == 1
+        assert tuple(
+                observation.proposal.proposal_id
+                for observation in next_state.tell_history[0]
+            ) == ("p-1", "p-2")
+
     def test_open_exact_async_step_session_rejects_non_resumable_async_evaluator(
         self,
     ) -> None:

@@ -97,6 +97,7 @@ The checkpoint intentionally does not capture:
 - live evaluator or worker state
 - exact-async suspended sessions
 - in-flight proposal batches
+- `Study.run(...)` reports or `Study.optimize(...)` results
 - trace or telemetry reducer state
 - derived caches that can be recomputed from authoritative state
 
@@ -106,7 +107,15 @@ For CSA optimizers built over `StructuredSearchSpace`, the optimizer provides a
 built-in recursive candidate codec. For non-structured spaces, callers must
 pass explicit candidate serialization callbacks.
 
-## Non-Goals for the Initial Checkpointing Scope
+## Terminal Results
+
+`RunReport`, `RunResult`, and `NondominatedRunSurface` are terminal result
+objects, not optimizer checkpoints. They may carry candidate-refinement
+provenance, but `variopt` does not currently define `to_dict()` / `from_dict()`
+serialization for those terminal surfaces. Persisting reports, traces, or
+result summaries is caller-owned for now.
+
+## Non-Goals for v1
 
 !!! note "Out of scope for the initial checkpointing contract"
 
@@ -114,6 +123,7 @@ pass explicit candidate serialization callbacks.
 
     - mid-step checkpoint/resume
     - exact-async suspended-session checkpointing
+    - terminal report/result serialization
     - generic `Study`-level persistence across arbitrary run methods
 
     Those require restoring evaluator-owned lifecycle state in addition to
