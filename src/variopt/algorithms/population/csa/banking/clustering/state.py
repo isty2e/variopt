@@ -150,6 +150,28 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """Return whether clustering state has been initialized."""
         return self.cluster_distance is not None
 
+    def requires_initialization(
+        self,
+        *,
+        entries: Sequence[BankEntry[CandidateT]],
+    ) -> bool:
+        """Return whether clustering metadata must be built for entries.
+
+        Parameters
+        ----------
+        entries : Sequence[BankEntry[CandidateT]]
+            Current bank entries that clustering metadata should align with.
+
+        Returns
+        -------
+        bool
+            ``True`` when clustering is enabled and the current metadata is not
+            aligned with ``entries``.
+        """
+        return self.enabled and not (
+            self.is_initialized and len(self.cluster_labels) == len(entries)
+        )
+
     def reset(self) -> "CSAClusteringState[CandidateT]":
         """Return the initial state implied by this clustering policy."""
         return type(self)(policy=self.policy)
@@ -178,10 +200,7 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Initialized clustering state, or the original state when
             clustering is disabled or already aligned with ``entries``.
         """
-        if not self.enabled:
-            return self
-
-        if self.is_initialized and len(self.cluster_labels) == len(entries):
+        if not self.requires_initialization(entries=entries):
             return self
 
         cluster_distance = reference_average_distance / self.policy.cluster_distance_ratio

@@ -8,7 +8,7 @@ def initialize_cutoff_state(
     *,
     state: CSAProgressionState,
     schedule: CSACutoffSchedule,
-    average_distance: float,
+    average_distance: float | None,
     score_gap: float | None,
 ) -> CSAProgressionState:
     """Initialize cutoff runtime from an average pairwise distance.
@@ -19,8 +19,9 @@ def initialize_cutoff_state(
         Current progression state.
     schedule : CSACutoffSchedule
         Cutoff schedule used to derive the initial cutoff pair.
-    average_distance : float
-        Average pairwise bank distance used to seed the cutoff.
+    average_distance : float | None
+        Average pairwise bank distance used to seed the cutoff when the
+        schedule needs inferred cutoffs.
     score_gap : float | None
         Optional current score-gap observation.
 

@@ -122,6 +122,11 @@ class CSACutoffSchedule:
             cutoff_recover_limit=distance_cutoff,
         )
 
+    @property
+    def requires_average_distance_for_initialization(self) -> bool:
+        """Return whether initial cutoff resolution needs average distance."""
+        return self.initial_distance_cutoff is None
+
     def resolve_initial_cutoffs(
         self,
         *,

@@ -1,6 +1,6 @@
 """Tests for CSA clustering policy and runtime behavior."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 from typing_extensions import override
@@ -27,6 +27,7 @@ from variopt.algorithms.population.csa.banking.growth import (
 )
 from variopt.algorithms.population.csa.banking.update.logic import (
     apply_bank_update_batch,
+    initialize_cutoff_if_needed,
 )
 from variopt.algorithms.population.csa.banking.update.result import (
     BankUpdateResult,
@@ -59,6 +60,79 @@ class AbsoluteDistance(DiversityMetric[int]):
 
 class CSAClusteringRuntimeTests:
     """Regression tests for CSA clustering semantics."""
+
+    def test_explicit_cutoff_initialization_does_not_infer_average_distance(self) -> None:
+        bank = Bank(
+            capacity=2,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+            ),
+        )
+        state = CSAProgressionState(
+            cutoff_state=CSACutoffState(),
+            stage_state=CSAStageState(
+                base_capacity=bank.capacity,
+                max_capacity=bank.capacity,
+            ),
+        )
+
+        next_state = initialize_cutoff_if_needed(
+            bank=bank,
+            state=state,
+            infer_average_distance=reject_average_distance,
+            cutoff_schedule=CSACutoffSchedule(
+                initial_distance_cutoff=2.0,
+                minimum_distance_cutoff=1.0,
+            ),
+        )
+
+        assert next_state.distance_cutoff == 2.0
+        assert next_state.minimum_distance_cutoff == 1.0
+
+    def test_disabled_clustering_does_not_infer_average_distance(self) -> None:
+        bank = Bank(
+            capacity=2,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+            ),
+        )
+
+        result = run_empty_cluster_batch(
+            bank=bank,
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=False),
+            ),
+            infer_average_distance=reject_average_distance,
+        )
+
+        assert result.clustering_state == CSAClusteringState(
+            policy=CSAClusteringPolicy(enabled=False),
+        )
+
+    def test_aligned_clustering_does_not_infer_average_distance(self) -> None:
+        bank = Bank(
+            capacity=2,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+            ),
+        )
+        clustering_state: CSAClusteringState[int] = CSAClusteringState(
+            policy=CSAClusteringPolicy(enabled=True),
+            cluster_distance=2.0,
+            cluster_labels=(1, 2),
+        )
+
+        result = run_empty_cluster_batch(
+            bank=bank,
+            clustering_state=clustering_state,
+            infer_average_distance=reject_average_distance,
+        )
+
+        assert result.clustering_state.cluster_distance == 2.0
+        assert len(result.clustering_state.cluster_labels) == len(bank.entries)
 
     def test_appended_close_candidate_inherits_nearest_cluster(self) -> None:
         runtime: CSAClusteringState[int] = CSAClusteringState(
@@ -432,6 +506,52 @@ def run_cluster_batch(
         masked_seed_indices=frozenset(),
         random_state=np.random.RandomState(0),
     )
+
+
+def run_empty_cluster_batch(
+    *,
+    bank: Bank[int],
+    clustering_state: CSAClusteringState[int],
+    infer_average_distance: Callable[[Sequence[BankEntry[int]]], float],
+) -> BankUpdateResult[int]:
+    growth_policy = CSABankGrowthPolicy()
+    return apply_bank_update_batch(
+        bank=bank,
+        state=CSAProgressionState(
+            cutoff_state=CSACutoffState(
+                distance_cutoff=2.0,
+                minimum_distance_cutoff=1.0,
+                cutoff_recover_limit=2.0,
+            ),
+            stage_state=CSAStageState(
+                base_capacity=bank.capacity,
+                max_capacity=bank.capacity,
+            ),
+        ),
+        observations=(),
+        diversity_metric=AbsoluteDistance(),
+        infer_average_distance=infer_average_distance,
+        cutoff_schedule=CSACutoffSchedule(
+            initial_distance_cutoff=2.0,
+            minimum_distance_cutoff=1.0,
+        ),
+        update_policy=CSABankUpdatePolicy(),
+        acceptance_state=CSAAcceptanceState.from_policy(CSAAcceptancePolicy()),
+        score_model_state=CSAScoreModelState(score_model=CSAScoreModel()),
+        growth_state=CSABankGrowthState[int](
+            policy=growth_policy,
+            active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
+        ),
+        clustering_state=clustering_state,
+        base_bank_capacity=bank.capacity,
+        masked_seed_indices=frozenset(),
+        random_state=np.random.RandomState(0),
+    )
+
+
+def reject_average_distance(entries: Sequence[BankEntry[int]]) -> float:
+    _ = entries
+    raise AssertionError("average distance should not be inferred")
 
 
 def infer_average_distance(entries: Sequence[BankEntry[int]]) -> float:

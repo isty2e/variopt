@@ -94,11 +94,13 @@ def apply_bank_update_batch(
     shadow_state = state
     shadow_score_model_state = score_model_state
     shadow_growth_state = growth_state
-    shadow_clustering_state = clustering_state.ensure_initialized(
-        entries=shadow_bank.entries,
-        reference_average_distance=infer_average_distance(shadow_bank.entries),
-        diversity_metric=diversity_metric,
-    )
+    shadow_clustering_state = clustering_state
+    if shadow_clustering_state.requires_initialization(entries=shadow_bank.entries):
+        shadow_clustering_state = shadow_clustering_state.ensure_initialized(
+            entries=shadow_bank.entries,
+            reference_average_distance=infer_average_distance(shadow_bank.entries),
+            diversity_metric=diversity_metric,
+        )
 
     for observation in observations:
         bank_before_step = shadow_bank
@@ -480,6 +482,8 @@ def admit_full_bank_observation(
             diversity_metric=diversity_metric,
         )
     return bank, score_model_state, growth_state, clustering_state
+
+
 def initialize_cutoff_if_needed(
     *,
     bank: Bank[CandidateT],
@@ -511,10 +515,15 @@ def initialize_cutoff_if_needed(
     if state.cutoff_is_initialized or not bank.is_full:
         return state
 
+    average_distance = (
+        infer_average_distance(bank.entries)
+        if cutoff_schedule.requires_average_distance_for_initialization
+        else None
+    )
     return initialize_cutoff_state(
         state=state,
         schedule=cutoff_schedule,
-        average_distance=infer_average_distance(bank.entries),
+        average_distance=average_distance,
         score_gap=infer_score_gap(bank.entries),
     )
 
