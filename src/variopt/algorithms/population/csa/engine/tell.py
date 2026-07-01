@@ -174,6 +174,7 @@ def apply_tell(
         observations=validated_observations,
         diversity_metric=diversity_metric,
         infer_average_distance=infer_average_distance,
+        infer_score_gap=infer_score_gap,
         cutoff_schedule=cutoff_schedule,
         update_policy=update_policy,
         acceptance_state=engine_state.scoring_state.acceptance_state,
