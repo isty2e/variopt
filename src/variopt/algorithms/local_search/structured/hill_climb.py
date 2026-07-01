@@ -230,6 +230,7 @@ class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
                 message=message,
             ),
             refinement=refinement,
+            candidate_equal=runtime.query.problem.space.candidates_equal,
         )
 
     @override

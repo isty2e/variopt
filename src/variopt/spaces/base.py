@@ -6,6 +6,7 @@ from typing import Generic
 import numpy as np
 
 from ..typevars import CandidateT, InputT
+from .equality import scalar_candidate_equality
 
 
 class SearchSpace(ABC, Generic[InputT, CandidateT]):
@@ -13,14 +14,15 @@ class SearchSpace(ABC, Generic[InputT, CandidateT]):
 
     Notes
     -----
-    A search space owns three responsibilities:
+    A search space owns four responsibilities:
 
     - normalization from boundary input into canonical candidate form,
-    - validation of canonical candidates, and
-    - explicit-randomness sampling.
+    - validation of canonical candidates,
+    - explicit-randomness sampling, and
+    - equality semantics between canonical candidates.
 
     Concrete spaces may add richer traversal or geometry behavior, but these
-    three operations define the minimal public contract.
+    operations define the minimal public contract.
     """
 
     @abstractmethod
@@ -71,3 +73,35 @@ class SearchSpace(ABC, Generic[InputT, CandidateT]):
         CandidateT
             Canonical sampled candidate.
         """
+
+    def candidates_equal(
+        self,
+        left_candidate: CandidateT,
+        right_candidate: CandidateT,
+    ) -> bool:
+        """Return whether two canonical candidates denote the same space point.
+
+        Parameters
+        ----------
+        left_candidate : CandidateT
+            Left canonical candidate to compare.
+        right_candidate : CandidateT
+            Right canonical candidate to compare.
+
+        Returns
+        -------
+        bool
+            Whether both candidates are equal under this space's candidate
+            identity semantics.
+
+        Raises
+        ------
+        TypeError
+            If either candidate is not canonical for this space or if the
+            default equality result is not scalar.
+        ValueError
+            If either candidate is canonical in shape but outside this space.
+        """
+        self.validate(left_candidate)
+        self.validate(right_candidate)
+        return scalar_candidate_equality(left_candidate, right_candidate)

@@ -16,6 +16,7 @@ from variopt import (
     PermutationSpace,
     RealSpace,
     RecordSpace,
+    SearchSpace,
     TupleSpace,
 )
 from variopt.randomness import normalize_random_state
@@ -187,6 +188,60 @@ class PermutationSpaceConformanceTests(
     @override
     def make_invalid_boundary_candidate(self) -> list[int]:
         return [0, 1, 1, 3]
+
+
+def require_sum_tuple_candidate(candidate: SpaceCandidateValue) -> tuple[int, ...]:
+    """Return a canonical tuple-of-int candidate for sum-equality tests."""
+    if type(candidate) is not tuple:
+        msg = "sum tuple candidate must be canonical tuple"
+        raise TypeError(msg)
+
+    values: list[int] = []
+    for value in candidate:
+        if type(value) is not int:
+            msg = "sum tuple candidate values must be canonical integers"
+            raise TypeError(msg)
+        values.append(value)
+    return tuple(values)
+
+
+class SumTupleSpace(SearchSpace[SpaceBoundaryValue, SpaceCandidateValue]):
+    """Test space with equality semantics that differ from raw tuple equality."""
+
+    @override
+    def normalize(self, raw_candidate: SpaceBoundaryValue) -> SpaceCandidateValue:
+        if (
+            isinstance(raw_candidate, (bytes, bytearray, str))
+            or not isinstance(raw_candidate, Sequence)
+        ):
+            msg = "sum tuple boundary candidate must be a non-string sequence"
+            raise TypeError(msg)
+        values: list[int] = []
+        for value in raw_candidate:
+            if type(value) is not int:
+                msg = "sum tuple boundary values must be canonical integers"
+                raise TypeError(msg)
+            values.append(value)
+        return tuple(values)
+
+    @override
+    def validate(self, candidate: SpaceCandidateValue) -> None:
+        _ = require_sum_tuple_candidate(candidate)
+
+    @override
+    def sample(self, random_state: np.random.RandomState) -> SpaceCandidateValue:
+        _ = random_state
+        return (1,)
+
+    @override
+    def candidates_equal(
+        self,
+        left_candidate: SpaceCandidateValue,
+        right_candidate: SpaceCandidateValue,
+    ) -> bool:
+        left_tuple = require_sum_tuple_candidate(left_candidate)
+        right_tuple = require_sum_tuple_candidate(right_candidate)
+        return sum(left_tuple) == sum(right_tuple)
 
 
 class SearchSpaceTests:
@@ -390,6 +445,31 @@ class SearchSpaceTests:
         sample_two = space.sample(rng_two)
 
         assert sample_one == sample_two
+
+    def test_array_space_uses_element_candidate_equality(self) -> None:
+        space = ArraySpace(SumTupleSpace(), length=2)
+
+        assert space.candidates_equal(((1,), (2,)), ((1, 0), (0, 2)))
+        assert not space.candidates_equal(((1,), (2,)), ((2,), (2,)))
+
+    def test_tuple_space_recurses_into_child_candidate_equality(self) -> None:
+        array_space = ArraySpace(SumTupleSpace(), length=1)
+        space = TupleSpace(array_space, IntegerSpace(0, 5))
+
+        assert space.candidates_equal((((1,),), 3), (((1, 0),), 3))
+        assert not space.candidates_equal((((1,),), 3), (((1, 1),), 3))
+
+    def test_record_space_recurses_into_child_candidate_equality(self) -> None:
+        space = RecordSpace(
+            items=ArraySpace(SumTupleSpace(), length=1),
+            depth=IntegerSpace(0, 5),
+        )
+        left_candidate = space.normalize({"items": [(1,)], "depth": 3})
+        right_candidate = space.normalize({"items": [(1, 0)], "depth": 3})
+        different_candidate = space.normalize({"items": [(2,)], "depth": 3})
+
+        assert space.candidates_equal(left_candidate, right_candidate)
+        assert not space.candidates_equal(left_candidate, different_candidate)
 
     def test_built_in_structured_spaces_report_all_declared_paths_as_active(self) -> None:
         space = RecordSpace(

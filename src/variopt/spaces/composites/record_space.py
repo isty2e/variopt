@@ -9,6 +9,7 @@ from ..structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
 from ..types import SpaceBoundaryValue, SpaceCandidateValue
 from .adapters import (
     CompositeChildSpace,
+    child_candidates_equal,
     group_child_replacements,
     leaf_value_at_child_space,
     normalize_child_space,
@@ -136,6 +137,38 @@ class RecordSpace(
 
         for index, (_name, space) in enumerate(self._fields):
             validate_child_space(space, candidate.entries[index][1])
+
+    @override
+    def candidates_equal(
+        self,
+        left_candidate: RecordCandidate,
+        right_candidate: RecordCandidate,
+    ) -> bool:
+        """Return whether two records denote the same space point.
+
+        Parameters
+        ----------
+        left_candidate : RecordCandidate
+            Left canonical record candidate.
+        right_candidate : RecordCandidate
+            Right canonical record candidate.
+
+        Returns
+        -------
+        bool
+            Whether every aligned field matches under its child-space equality
+            contract.
+        """
+        self.validate(left_candidate)
+        self.validate(right_candidate)
+        return all(
+            child_candidates_equal(
+                space,
+                left_candidate.entries[index][1],
+                right_candidate.entries[index][1],
+            )
+            for index, (_name, space) in enumerate(self._fields)
+        )
 
     @override
     def sample(self, random_state: np.random.RandomState) -> RecordCandidate:

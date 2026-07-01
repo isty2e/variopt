@@ -23,6 +23,7 @@ from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..outcomes import EvaluationOutcome
 from ..problem import Problem
+from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
     StudyEvaluationRecordT,
@@ -98,6 +99,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
     batch_session: EvaluationBatchSession[
         EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
     ]
+    candidate_equal: CandidateEquality[CandidateT]
     completed_indices: set[int] = field(default_factory=set)
 
     def __post_init__(self) -> None:
@@ -125,6 +127,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
             validate_aligned_outcomes(
                 group_requests,
                 completion_group.outcomes,
+                candidate_equal=self.candidate_equal,
             )
 
             for offset, _outcome in enumerate(completion_group.outcomes):
@@ -221,6 +224,7 @@ def open_stale_async_batch_session(
         StaleAsyncActiveBatchSession(
             requests=requests,
             batch_session=async_evaluator.open_session(problem, requests),
+            candidate_equal=problem.space.candidates_equal,
         ),
         next_state,
     )
@@ -419,6 +423,7 @@ def run_stale_async(
             evaluation_count=max_evaluations - remaining,
             trace=trace,
             refinements=None if refinements is None else tuple(refinements),
+            candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
     )

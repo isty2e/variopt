@@ -6,52 +6,46 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ..spaces import LeafPath
+from ..spaces import CandidateEquality, LeafPath
+from ..spaces.equality import require_candidate_match
 from ..typevars import CandidateT
 
 
-def require_scalar_candidate_equality(
+def require_matching_refined_candidate(
     *,
-    record_candidate: object,
-    refined_candidate: object,
+    record_candidate: CandidateT,
+    refined_candidate: CandidateT,
     mismatch_message: str,
+    candidate_equal: CandidateEquality[CandidateT] | None = None,
 ) -> None:
-    """Validate that candidate equality is scalar and true.
+    """Validate that refinement provenance matches an evaluated candidate.
 
     Parameters
     ----------
-    record_candidate : object
+    record_candidate : CandidateT
         Candidate from the authoritative evaluation record.
-    refined_candidate : object
+    refined_candidate : CandidateT
         Candidate reported by candidate-refinement provenance.
     mismatch_message : str
-        Error message used when equality is scalar but false.
+        Error message used when candidates do not match.
+    candidate_equal : CandidateEquality[CandidateT] | None, optional
+        Explicit candidate equality predicate. When absent, strict scalar Python
+        equality is used.
 
     Raises
     ------
     TypeError
-        If equality does not produce a scalar truth value.
+        If equality does not produce a scalar truth value or if an explicit
+        equality predicate does not return ``bool``.
     ValueError
-        If the scalar equality result is false.
+        If the refined candidate does not match the evaluated record candidate.
     """
-    try:
-        equality_result = record_candidate == refined_candidate
-    except (TypeError, ValueError) as error:
-        msg = "candidate equality must produce a scalar truth value"
-        raise TypeError(msg) from error
-
-    if type(equality_result) is not bool and getattr(equality_result, "shape", None) != ():
-        msg = "candidate equality must produce a scalar truth value"
-        raise TypeError(msg)
-
-    try:
-        candidates_match = bool(equality_result)
-    except (TypeError, ValueError) as error:
-        msg = "candidate equality must produce a scalar truth value"
-        raise TypeError(msg) from error
-
-    if not candidates_match:
-        raise ValueError(mismatch_message)
+    require_candidate_match(
+        left_candidate=record_candidate,
+        right_candidate=refined_candidate,
+        mismatch_message=mismatch_message,
+        candidate_equal=candidate_equal,
+    )
 
 
 def _normalize_changed_leaf_paths(
@@ -120,6 +114,7 @@ class CandidateRefinement(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ValueError
             If ``changed_leaf_paths`` contains duplicate paths.
         """
+        object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "source_candidate", source_candidate)
         object.__setattr__(self, "refined_candidate", refined_candidate)
         object.__setattr__(

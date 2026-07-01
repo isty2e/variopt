@@ -10,7 +10,8 @@ from ..artifacts import (
     RequestAlignedEvaluationRecord,
 )
 from ..evaluators.async_evaluator.artifacts import CompletionGroup
-from ..outcomes import EvaluationOutcome
+from ..outcomes import EvaluationOutcome, validate_outcome_refinement_alignment
+from ..spaces import CandidateEquality
 from ..typevars import CandidateT
 
 StudyEvaluationRecordT = TypeVar(
@@ -135,6 +136,8 @@ def finalize_ordered_outcomes(
 def validate_aligned_outcomes(
     requests: tuple[EvaluationRequest[CandidateT], ...],
     outcomes: tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None = None,
 ) -> None:
     """Reject evaluator outcomes that do not align with input requests.
 
@@ -144,6 +147,9 @@ def validate_aligned_outcomes(
         Evaluation requests submitted to the evaluator.
     outcomes : tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
         Evaluation outcomes returned by the evaluator.
+    candidate_equal : CandidateEquality[CandidateT] | None, optional
+        Explicit candidate equality predicate used to validate refinement
+        alignment. When absent, strict scalar Python equality is used.
 
     Raises
     ------
@@ -165,6 +171,10 @@ def validate_aligned_outcomes(
         if outcome.record.request != request:
             msg = "evaluator outcomes must align with input request order"
             raise ValueError(msg)
+        validate_outcome_refinement_alignment(
+            outcome,
+            candidate_equal=candidate_equal,
+        )
 
 
 def trace_value_for_records(

@@ -2,6 +2,7 @@
 
 from .base import SearchSpace
 from .composites import ArraySpace, RecordCandidate, RecordSpace, TupleSpace
+from .equality import CandidateEquality
 from .geometry import (
     CompiledStructuredGeometryProvider,
     StructuredDistanceParts,
@@ -20,6 +21,7 @@ from .types import SpaceBoundaryValue, SpaceCandidateValue, SpaceScalarValue
 __all__ = [
     "ArraySpace",
     "CategoricalSpace",
+    "CandidateEquality",
     "CompiledStructuredGeometryProvider",
     "ContinuousStructuredSpaceCodec",
     "HomogeneousNumericSubspaceDescriptor",

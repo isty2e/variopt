@@ -1,6 +1,6 @@
 """Execution-side evaluation outcome artifacts."""
 
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field, fields
 from typing import Generic, cast
 
 from typing_extensions import TypeVar
@@ -10,9 +10,10 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .artifacts.records import Observation, RequestAlignedEvaluationRecord
 from .artifacts.refinement import (
     CandidateRefinement,
-    require_scalar_candidate_equality,
+    require_matching_refined_candidate,
 )
 from .kernel import KernelDiagnostics
+from .spaces import CandidateEquality
 from .typevars import CandidateT
 
 OutcomeRecordT = TypeVar(
@@ -22,6 +23,45 @@ OutcomeRecordT = TypeVar(
 )
 
 __all__ = ["CandidateRefinement", "EvaluationOutcome"]
+
+_UNVALIDATED_REFINEMENT_CANDIDATE = object()
+
+
+def validate_outcome_refinement_alignment(
+    outcome: "EvaluationOutcome[CandidateT, OutcomeRecordT]",
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None = None,
+) -> None:
+    """Validate that outcome refinement provenance matches its record.
+
+    Parameters
+    ----------
+    outcome : EvaluationOutcome[CandidateT, OutcomeRecordT]
+        Outcome whose record/refinement alignment should be checked.
+    candidate_equal : CandidateEquality[CandidateT] | None, optional
+        Explicit candidate equality predicate. When absent, strict scalar Python
+        equality is used.
+
+    Raises
+    ------
+    TypeError
+        If candidate equality is not scalar, or if an explicit predicate does
+        not return ``bool``.
+    ValueError
+        If the refined candidate does not match the outcome record candidate.
+    """
+    if outcome.refinement is None:
+        return
+
+    require_matching_refined_candidate(
+        record_candidate=cast(CandidateT, outcome.record.candidate),
+        refined_candidate=outcome.refinement.refined_candidate,
+        mismatch_message=(
+            "refinement refined_candidate must match the outcome "
+            "record candidate"
+        ),
+        candidate_equal=candidate_equal,
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -53,6 +93,27 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
     evaluation_count: int = 1
     kernel_diagnostics: KernelDiagnostics | None = None
     refinement: CandidateRefinement[CandidateT] | None = None
+    candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
+    _candidate_equal: CandidateEquality[CandidateT] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+    _candidate_equal_required: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+    )
+    _validated_record_candidate: object = field(
+        default=_UNVALIDATED_REFINEMENT_CANDIDATE,
+        repr=False,
+        compare=False,
+    )
+    _validated_refined_candidate: object = field(
+        default=_UNVALIDATED_REFINEMENT_CANDIDATE,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
@@ -62,6 +123,11 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         evaluation_count: int = 1,
         kernel_diagnostics: KernelDiagnostics | None = None,
         refinement: CandidateRefinement[CandidateT] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+        _candidate_equal: CandidateEquality[CandidateT] | None = None,
+        _candidate_equal_required: bool = False,
+        _validated_record_candidate: object = _UNVALIDATED_REFINEMENT_CANDIDATE,
+        _validated_refined_candidate: object = _UNVALIDATED_REFINEMENT_CANDIDATE,
     ) -> None:
         """Create one canonical evaluation outcome.
 
@@ -77,6 +143,9 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             Optional kernel-side diagnostics.
         refinement : CandidateRefinement[CandidateT] | None, optional
             Optional candidate-refinement provenance.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Explicit candidate equality predicate used to validate refinement
+            alignment. When absent, strict scalar Python equality is used.
 
         Raises
         ------
@@ -97,13 +166,41 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             msg = "evaluation record normalization failed"
             raise RuntimeError(msg)
 
+        effective_candidate_equal = candidate_equal
+        if effective_candidate_equal is None:
+            effective_candidate_equal = _candidate_equal
+        candidate_equal_required = (
+            _candidate_equal_required or effective_candidate_equal is not None
+        )
+
+        object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "record", normalized_record)
         object.__setattr__(self, "evaluation_count", evaluation_count)
         object.__setattr__(self, "kernel_diagnostics", kernel_diagnostics)
         object.__setattr__(self, "refinement", refinement)
-        self.__post_init__()
+        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
+        object.__setattr__(
+            self,
+            "_candidate_equal_required",
+            candidate_equal_required,
+        )
+        object.__setattr__(
+            self,
+            "_validated_record_candidate",
+            _validated_record_candidate,
+        )
+        object.__setattr__(
+            self,
+            "_validated_refined_candidate",
+            _validated_refined_candidate,
+        )
+        self._validate(candidate_equal=effective_candidate_equal)
 
-    def __post_init__(self) -> None:
+    def _validate(
+        self,
+        *,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
         """Validate outcome accounting metadata.
 
         Raises
@@ -115,15 +212,63 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
-        if self.refinement is not None:
-            require_scalar_candidate_equality(
-                record_candidate=self.record.candidate,
-                refined_candidate=self.refinement.refined_candidate,
-                mismatch_message=(
-                    "refinement refined_candidate must match the outcome "
-                    "record candidate"
-                ),
+        if self.refinement is None:
+            object.__setattr__(
+                self,
+                "_validated_record_candidate",
+                _UNVALIDATED_REFINEMENT_CANDIDATE,
             )
+            object.__setattr__(
+                self,
+                "_validated_refined_candidate",
+                _UNVALIDATED_REFINEMENT_CANDIDATE,
+            )
+            return
+
+        if self._refinement_alignment_is_prevalidated():
+            return
+
+        if candidate_equal is None and self._candidate_equal_required:
+            msg = (
+                "candidate_equal is required to revalidate refinement alignment "
+                "after changing an explicitly compared outcome"
+            )
+            raise TypeError(msg)
+
+        validate_outcome_refinement_alignment(
+            self,
+            candidate_equal=candidate_equal,
+        )
+        object.__setattr__(
+            self,
+            "_validated_record_candidate",
+            self.record.candidate,
+        )
+        object.__setattr__(
+            self,
+            "_validated_refined_candidate",
+            self.refinement.refined_candidate,
+        )
+
+    def _refinement_alignment_is_prevalidated(self) -> bool:
+        """Return whether the current refinement pair was already checked."""
+        return (
+            self.refinement is not None
+            and self._validated_record_candidate is not _UNVALIDATED_REFINEMENT_CANDIDATE
+            and self._validated_refined_candidate is not _UNVALIDATED_REFINEMENT_CANDIDATE
+            and self._validated_record_candidate is self.record.candidate
+            and self._validated_refined_candidate is self.refinement.refined_candidate
+        )
+
+    def __post_init__(
+        self,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+    ) -> None:
+        """Validate outcome accounting metadata after dataclass construction."""
+        effective_candidate_equal = candidate_equal
+        if effective_candidate_equal is None:
+            effective_candidate_equal = self._candidate_equal
+        self._validate(candidate_equal=effective_candidate_equal)
 
     @property
     def observation(self) -> Observation[CandidateT]:
@@ -148,3 +293,52 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             msg = "evaluation outcome does not carry a scalar Observation"
             raise TypeError(msg)
         return cast(Observation[CandidateT], self.record)
+
+
+def evaluation_outcome_getstate(
+    self: EvaluationOutcome[CandidateT, OutcomeRecordT],
+) -> list[object | None]:
+    state: list[object | None] = []
+    for dataclass_field in fields(self):
+        if dataclass_field.name == "_candidate_equal":
+            state.append(None)
+            continue
+        state.append(getattr(self, dataclass_field.name, None))
+    return state
+
+
+def evaluation_outcome_setstate(
+    self: EvaluationOutcome[CandidateT, OutcomeRecordT],
+    state: list[object | None],
+) -> None:
+    restored_names: set[str] = set()
+    dataclass_fields = fields(self)
+    for dataclass_field, value in zip(dataclass_fields, state):
+        restored_names.add(dataclass_field.name)
+        if dataclass_field.name == "_candidate_equal":
+            object.__setattr__(self, dataclass_field.name, None)
+            continue
+        object.__setattr__(self, dataclass_field.name, value)
+
+    for dataclass_field in dataclass_fields:
+        if dataclass_field.name in restored_names:
+            continue
+        if dataclass_field.name == "_candidate_equal":
+            object.__setattr__(self, dataclass_field.name, None)
+        elif dataclass_field.name == "_candidate_equal_required":
+            object.__setattr__(self, dataclass_field.name, False)
+        elif dataclass_field.name in {
+            "_validated_record_candidate",
+            "_validated_refined_candidate",
+        }:
+            object.__setattr__(
+                self,
+                dataclass_field.name,
+                _UNVALIDATED_REFINEMENT_CANDIDATE,
+            )
+
+setattr(EvaluationOutcome, "__getstate__", evaluation_outcome_getstate)
+setattr(EvaluationOutcome, "__setstate__", evaluation_outcome_setstate)
+
+del evaluation_outcome_getstate
+del evaluation_outcome_setstate

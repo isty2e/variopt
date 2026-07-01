@@ -21,6 +21,11 @@ from tests.study_support import (
     RefinementKernel,
     ScoringKernel,
     ShiftedObservationProtocol,
+    SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityObjective,
+    SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualityRefinementKernel,
+    SpaceOwnedEqualitySpace,
     SquareObjective,
 )
 from variopt import (
@@ -614,6 +619,30 @@ class StudyTests:
         assert refinement.source_candidate == 4
         assert refinement.refined_candidate == report.records[0].candidate
 
+    def test_run_uses_space_candidate_equality_for_report_refinements(self) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SequentialEvaluator[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+        ]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=SpaceOwnedEqualityRefinementKernel(),
+        )
+
+        report, _ = study.run(max_evaluations=1)
+
+        assert len(report.refinements) == 1
+        refinement = report.refinements[0]
+        assert refinement is not None
+        assert refinement.refined_candidate.stable_id == report.records[0].candidate.stable_id
+
     def test_study_kernel_makes_local_optimization_visible(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
@@ -673,6 +702,30 @@ class StudyTests:
         assert refinement.source_candidate == 4
         assert refinement.refined_candidate == 2
         assert len(final_state.tell_history) == 1
+
+    def test_optimize_uses_space_candidate_equality_for_result_refinements(self) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SequentialEvaluator[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+        ]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=SpaceOwnedEqualityRefinementKernel(),
+        )
+
+        result, _ = study.optimize(max_evaluations=1)
+
+        assert len(result.refinements) == 1
+        refinement = result.refinements[0]
+        assert refinement is not None
+        assert refinement.refined_candidate.stable_id == result.observations[0].candidate.stable_id
 
     def test_optimize_backfills_unrefined_history_when_late_refinement_appears(
         self,

@@ -131,6 +131,37 @@ class ArraySpace(
             self.element_space.validate(value)
 
     @override
+    def candidates_equal(
+        self,
+        left_candidate: tuple[ElementCandidateT, ...],
+        right_candidate: tuple[ElementCandidateT, ...],
+    ) -> bool:
+        """Return whether two arrays denote the same space point.
+
+        Parameters
+        ----------
+        left_candidate : tuple[ElementCandidateT, ...]
+            Left canonical array candidate.
+        right_candidate : tuple[ElementCandidateT, ...]
+            Right canonical array candidate.
+
+        Returns
+        -------
+        bool
+            Whether every aligned element matches under ``element_space``.
+        """
+        self.validate(left_candidate)
+        self.validate(right_candidate)
+        return all(
+            self.element_space.candidates_equal(left_value, right_value)
+            for left_value, right_value in zip(
+                left_candidate,
+                right_candidate,
+                strict=True,
+            )
+        )
+
+    @override
     def sample(self, random_state: np.random.RandomState) -> tuple[ElementCandidateT, ...]:
         """Sample a canonical array candidate.
 

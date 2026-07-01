@@ -7,6 +7,10 @@ from tests.study_support import (
     RecordingKernel,
     RollingStaleAsyncOptimizer,
     ShiftedObservationProtocol,
+    SpaceOwnedEqualityAsyncEvaluator,
+    SpaceOwnedEqualityObjective,
+    SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualitySpace,
     SquareObjective,
 )
 from variopt import IntegerSpace, Problem, Proposal, Study
@@ -107,6 +111,51 @@ class StudyStaleAsyncTests:
                 for observation_batch in final_state.tell_history
                 for observation in observation_batch
             ) == ("p-2", "p-1")
+
+    def test_run_stale_async_uses_space_candidate_equality_for_refinement(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SpaceOwnedEqualityAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, _ = study.run(
+            max_evaluations=1,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert len(report.refinements) == 1
+        refinement = report.refinements[0]
+        assert refinement is not None
+        assert refinement.refined_candidate.stable_id == report.records[0].candidate.stable_id
+
+    def test_optimize_stale_async_uses_space_candidate_equality_for_refinement(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SpaceOwnedEqualityAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(
+            max_evaluations=1,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert len(result.refinements) == 1
+        refinement = result.refinements[0]
+        assert refinement is not None
+        assert (
+            refinement.refined_candidate.stable_id
+            == result.observations[0].candidate.stable_id
+        )
 
     def test_optimize_stale_async_projects_completion_order_refinements(self) -> None:
         problem = Problem(

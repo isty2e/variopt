@@ -341,6 +341,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             evaluation_count=evaluation_count,
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),
             refinement=refinement,
+            candidate_equal=query.problem.space.candidates_equal,
         )
 
     @override

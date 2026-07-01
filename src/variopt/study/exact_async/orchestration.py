@@ -146,6 +146,7 @@ def open_exact_async_step_session(
         requests=requests,
         post_ask_state=post_ask_state,
         batch_session=batch_session,
+        candidate_equal=study.problem.space.candidates_equal,
     )
 
 
@@ -200,5 +201,6 @@ def resume_exact_async_step_session(
         requests=handle.requests,
         post_ask_state=handle.post_ask_state,
         batch_session=batch_session,
+        candidate_equal=study.problem.space.candidates_equal,
         ordered_outcomes=list(handle.ordered_outcomes),
     )

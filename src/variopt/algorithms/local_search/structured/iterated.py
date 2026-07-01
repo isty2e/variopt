@@ -244,6 +244,7 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 message=terminal_message,
             ),
             refinement=refinement,
+            candidate_equal=runtime.query.problem.space.candidates_equal,
         )
 
     @override

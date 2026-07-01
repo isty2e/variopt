@@ -36,7 +36,12 @@ from variopt.objective import Objective
 from variopt.outcomes import EvaluationOutcome
 from variopt.problem import Problem
 from variopt.sampling import CandidateSampler
-from variopt.spaces import SearchSpace, SpaceBoundaryValue, SpaceCandidateValue
+from variopt.spaces import (
+    CandidateEquality,
+    SearchSpace,
+    SpaceBoundaryValue,
+    SpaceCandidateValue,
+)
 from variopt.study import Study
 
 
@@ -45,6 +50,7 @@ class RootFacadeExportTests:
 
     def test_root_facade_reexports_common_direct_use_and_contract_nouns(self) -> None:
         assert variopt.CandidateRefinement is CandidateRefinement
+        assert variopt.CandidateEquality is CandidateEquality
         assert variopt.EvaluationOutcome is EvaluationOutcome
         assert variopt.EvaluationRequest is EvaluationRequest
         assert variopt.Evaluator is Evaluator

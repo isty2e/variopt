@@ -17,6 +17,7 @@ from ...evaluators.async_evaluator.sessions import (
     ResumableBatchSession,
 )
 from ...outcomes import EvaluationOutcome
+from ...spaces import CandidateEquality
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import (
     StudyEvaluationRecordT,
@@ -63,6 +64,7 @@ class StudyExactAsyncStepSession(
     batch_session: EvaluationBatchSession[
         EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
     ]
+    candidate_equal: CandidateEquality[CandidateT]
     ordered_outcomes: list[
         EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None
     ] = field(default_factory=list)
@@ -242,7 +244,11 @@ class StudyExactAsyncStepSession(
             _ = self.poll()
 
         outcomes = finalize_ordered_outcomes(self.ordered_outcomes)
-        validate_aligned_outcomes(self.requests, outcomes)
+        validate_aligned_outcomes(
+            self.requests,
+            outcomes,
+            candidate_equal=self.candidate_equal,
+        )
         records = tuple(outcome.record for outcome in outcomes)
         next_state = self.study.run_method.tell_outcomes(
             self.post_ask_state,

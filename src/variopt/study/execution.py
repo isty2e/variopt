@@ -29,6 +29,7 @@ from ..kernel import Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..outcomes import EvaluationOutcome
 from ..problem import Problem
+from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
     StudyEvaluationRecordT,
@@ -269,7 +270,11 @@ def evaluate_step(
             )
     outcomes = study.kernel.run(top_level_query, batch_executor)
     requests = requests_for_query(top_level_query)
-    validate_aligned_outcomes(requests, outcomes)
+    validate_aligned_outcomes(
+        requests,
+        outcomes,
+        candidate_equal=study.problem.space.candidates_equal,
+    )
     next_state = study.run_method.tell_outcomes(next_state, outcomes)
     return StudyStepResult(outcomes=outcomes, state=next_state)
 
@@ -446,6 +451,7 @@ def run(
             evaluation_count=max_evaluations - remaining,
             trace=trace,
             refinements=None if refinements is None else tuple(refinements),
+            candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
     )
@@ -453,6 +459,8 @@ def run(
 
 def materialize_scalar_run_result(
     run_report: RunReport[CandidateT, StudyEvaluationRecordT],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None = None,
 ) -> RunResult[CandidateT]:
     """Project a generic run report into a scalar terminal result.
 
@@ -460,6 +468,9 @@ def materialize_scalar_run_result(
     ----------
     run_report : RunReport[CandidateT, StudyEvaluationRecordT]
         Generic terminal report to project.
+    candidate_equal : CandidateEquality[CandidateT] | None, optional
+        Explicit candidate equality predicate used to validate refinement
+        alignment. When absent, strict scalar Python equality is used.
 
     Returns
     -------
@@ -487,6 +498,7 @@ def materialize_scalar_run_result(
         evaluation_count=run_report.evaluation_count,
         trace=run_report.trace,
         refinements=run_report.refinements,
+        candidate_equal=candidate_equal,
     )
 
 
@@ -542,4 +554,10 @@ def optimize(
         initial_state=initial_state,
     )
 
-    return materialize_scalar_run_result(run_report), state
+    return (
+        materialize_scalar_run_result(
+            run_report,
+            candidate_equal=study.problem.space.candidates_equal,
+        ),
+        state,
+    )

@@ -309,7 +309,13 @@ class Study(FrozenGenericSlotsCompat,
                 count_evaluation_cost=count_evaluation_cost,
                 initial_state=initial_state,
             )
-            return materialize_scalar_run_result(run_report), state
+            return (
+                materialize_scalar_run_result(
+                    run_report,
+                    candidate_equal=self.problem.space.candidates_equal,
+                ),
+                state,
+            )
 
         return optimize_study(
             self,

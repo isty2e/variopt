@@ -9,6 +9,7 @@ from ..structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
 from ..types import SpaceBoundaryValue, SpaceCandidateValue
 from .adapters import (
     CompositeChildSpace,
+    child_candidates_equal,
     group_child_replacements,
     leaf_value_at_child_space,
     normalize_child_space,
@@ -114,6 +115,39 @@ class TupleSpace(
 
         for value, space in zip(candidate, self._spaces, strict=True):
             validate_child_space(space, value)
+
+    @override
+    def candidates_equal(
+        self,
+        left_candidate: tuple[SpaceCandidateValue, ...],
+        right_candidate: tuple[SpaceCandidateValue, ...],
+    ) -> bool:
+        """Return whether two tuples denote the same space point.
+
+        Parameters
+        ----------
+        left_candidate : tuple[SpaceCandidateValue, ...]
+            Left canonical tuple candidate.
+        right_candidate : tuple[SpaceCandidateValue, ...]
+            Right canonical tuple candidate.
+
+        Returns
+        -------
+        bool
+            Whether every aligned child matches under its child-space equality
+            contract.
+        """
+        self.validate(left_candidate)
+        self.validate(right_candidate)
+        return all(
+            child_candidates_equal(space, left_value, right_value)
+            for space, left_value, right_value in zip(
+                self._spaces,
+                left_candidate,
+                right_candidate,
+                strict=True,
+            )
+        )
 
     @override
     def sample(self, random_state: np.random.RandomState) -> tuple[SpaceCandidateValue, ...]:
