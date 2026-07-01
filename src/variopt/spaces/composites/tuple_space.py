@@ -239,8 +239,11 @@ class TupleSpace(
             return candidate
 
         for segment in grouped_replacements:
-            if type(segment) is not int or segment < 0 or segment >= len(self._spaces):
+            if type(segment) is not int:
                 msg = f"replacement path references an invalid tuple index: {segment!r}"
+                raise TypeError(msg)
+            if segment < 0 or segment >= len(self._spaces):
+                msg = f"replacement path references an out-of-bounds tuple index: {segment!r}"
                 raise TypeError(msg)
 
         replaced_children = list(candidate)
