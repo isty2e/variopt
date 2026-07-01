@@ -38,6 +38,10 @@ def apply_bank_update_batch(
         [Sequence[BankEntry[CandidateT]]],
         float,
     ],
+    infer_score_gap: Callable[
+        [Sequence[BankEntry[CandidateT]]],
+        float | None,
+    ],
     cutoff_schedule: CSACutoffSchedule,
     update_policy: CSABankUpdatePolicy,
     acceptance_state: CSAAcceptanceState,
@@ -63,6 +67,8 @@ def apply_bank_update_batch(
         Diversity metric used for distances and crowding.
     infer_average_distance : Callable[[Sequence[BankEntry[CandidateT]]], float]
         Callback used to summarize average bank distance.
+    infer_score_gap : Callable[[Sequence[BankEntry[CandidateT]]], float | None]
+        Callback used to summarize the bank score gap.
     cutoff_schedule : CSACutoffSchedule
         Schedule used to initialize the cutoff when needed.
     update_policy : CSABankUpdatePolicy
@@ -110,6 +116,7 @@ def apply_bank_update_batch(
             bank=shadow_bank,
             state=shadow_state,
             infer_average_distance=infer_average_distance,
+            infer_score_gap=infer_score_gap,
             cutoff_schedule=cutoff_schedule,
         )
         active_distance_cutoff = 0.0
@@ -149,6 +156,7 @@ def apply_bank_update_batch(
             bank=shadow_bank,
             state=shadow_state,
             infer_average_distance=infer_average_distance,
+            infer_score_gap=infer_score_gap,
             cutoff_schedule=cutoff_schedule,
         )
         batch_changed_indices = changed_indices(
@@ -494,6 +502,10 @@ def initialize_cutoff_if_needed(
         [Sequence[BankEntry[CandidateT]]],
         float,
     ],
+    infer_score_gap: Callable[
+        [Sequence[BankEntry[CandidateT]]],
+        float | None,
+    ],
     cutoff_schedule: CSACutoffSchedule,
 ) -> CSAProgressionState:
     """Initialize cutoff state once the bank first reaches capacity.
@@ -506,6 +518,8 @@ def initialize_cutoff_if_needed(
         Current progression state.
     infer_average_distance : Callable[[Sequence[BankEntry[CandidateT]]], float]
         Callback used to summarize average bank distance.
+    infer_score_gap : Callable[[Sequence[BankEntry[CandidateT]]], float | None]
+        Callback used to summarize the bank score gap.
     cutoff_schedule : CSACutoffSchedule
         Schedule used to initialize the cutoff.
 

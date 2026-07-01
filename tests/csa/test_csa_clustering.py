@@ -81,6 +81,7 @@ class CSAClusteringRuntimeTests:
             bank=bank,
             state=state,
             infer_average_distance=reject_average_distance,
+            infer_score_gap=infer_constant_score_gap,
             cutoff_schedule=CSACutoffSchedule(
                 initial_distance_cutoff=2.0,
                 minimum_distance_cutoff=1.0,
@@ -89,6 +90,7 @@ class CSAClusteringRuntimeTests:
 
         assert next_state.distance_cutoff == 2.0
         assert next_state.minimum_distance_cutoff == 1.0
+        assert next_state.previous_score_gap == 10.0
 
     def test_explicit_initial_cutoff_mirrors_missing_minimum_without_inference(self) -> None:
         bank = Bank(
@@ -110,6 +112,7 @@ class CSAClusteringRuntimeTests:
             bank=bank,
             state=state,
             infer_average_distance=reject_average_distance,
+            infer_score_gap=infer_constant_score_gap,
             cutoff_schedule=CSACutoffSchedule(
                 initial_distance_cutoff=2.0,
                 minimum_distance_cutoff=None,
@@ -118,6 +121,7 @@ class CSAClusteringRuntimeTests:
 
         assert next_state.distance_cutoff == 2.0
         assert next_state.minimum_distance_cutoff == 2.0
+        assert next_state.previous_score_gap == 10.0
 
     def test_disabled_clustering_does_not_infer_average_distance(self) -> None:
         bank = Bank(
@@ -233,12 +237,64 @@ class CSAClusteringRuntimeTests:
             bank=bank,
             state=state,
             infer_average_distance=count_average_distance,
+            infer_score_gap=infer_constant_score_gap,
             cutoff_schedule=CSACutoffSchedule(),
         )
 
         assert call_count == 1
         assert next_state.distance_cutoff == 5.0
         assert next_state.minimum_distance_cutoff == 2.0
+        assert next_state.previous_score_gap == 10.0
+
+    def test_bank_update_initial_cutoff_uses_supplied_score_gap_callback(self) -> None:
+        call_count = 0
+
+        def count_score_gap(entries: Sequence[BankEntry[int]]) -> float:
+            nonlocal call_count
+            call_count += 1
+            assert tuple(entry.candidate for entry in entries) == (0, 10)
+            return 99.0
+
+        growth_policy = CSABankGrowthPolicy()
+        result = apply_bank_update_batch(
+            bank=Bank(
+                capacity=2,
+                entries=(BankEntry(candidate=0, value=0.0),),
+            ),
+            state=CSAProgressionState(
+                cutoff_state=CSACutoffState(),
+                stage_state=CSAStageState(base_capacity=2, max_capacity=2),
+            ),
+            observations=(
+                Observation(
+                    proposal=Proposal(candidate=10, proposal_id="p-1"),
+                    candidate=10,
+                    value=10.0,
+                    score=10.0,
+                ),
+            ),
+            diversity_metric=AbsoluteDistance(),
+            infer_average_distance=reject_average_distance,
+            infer_score_gap=count_score_gap,
+            cutoff_schedule=CSACutoffSchedule(
+                initial_distance_cutoff=2.0,
+                minimum_distance_cutoff=1.0,
+            ),
+            update_policy=CSABankUpdatePolicy(),
+            acceptance_state=CSAAcceptanceState.from_policy(CSAAcceptancePolicy()),
+            score_model_state=CSAScoreModelState(score_model=CSAScoreModel()),
+            growth_state=CSABankGrowthState[int](
+                policy=growth_policy,
+                active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
+            ),
+            clustering_state=CSAClusteringState(policy=CSAClusteringPolicy(enabled=False)),
+            base_bank_capacity=2,
+            masked_seed_indices=frozenset(),
+            random_state=np.random.RandomState(0),
+        )
+
+        assert call_count == 1
+        assert result.state.previous_score_gap == 99.0
 
     def test_appended_close_candidate_inherits_nearest_cluster(self) -> None:
         runtime: CSAClusteringState[int] = CSAClusteringState(
@@ -596,6 +652,7 @@ def run_cluster_batch(
         observations=(observation,),
         diversity_metric=AbsoluteDistance(),
         infer_average_distance=lambda entries: infer_average_distance(entries),
+        infer_score_gap=infer_constant_score_gap,
         cutoff_schedule=CSACutoffSchedule(
             initial_distance_cutoff=distance_cutoff,
             minimum_distance_cutoff=distance_cutoff,
@@ -637,6 +694,7 @@ def run_empty_cluster_batch(
         observations=(),
         diversity_metric=AbsoluteDistance(),
         infer_average_distance=infer_average_distance,
+        infer_score_gap=infer_constant_score_gap,
         cutoff_schedule=CSACutoffSchedule(
             initial_distance_cutoff=2.0,
             minimum_distance_cutoff=1.0,
@@ -672,3 +730,10 @@ def infer_average_distance(entries: Sequence[BankEntry[int]]) -> float:
             pair_count += 1
 
     return total_distance / float(pair_count)
+
+
+def infer_constant_score_gap(entries: Sequence[BankEntry[int]]) -> float | None:
+    if not entries:
+        return None
+
+    return 10.0
