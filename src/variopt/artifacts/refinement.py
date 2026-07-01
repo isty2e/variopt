@@ -114,6 +114,7 @@ class CandidateRefinement(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ValueError
             If ``changed_leaf_paths`` contains duplicate paths.
         """
+        object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "source_candidate", source_candidate)
         object.__setattr__(self, "refined_candidate", refined_candidate)
         object.__setattr__(

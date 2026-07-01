@@ -1,5 +1,9 @@
 """Tests for runtime artifact values and terminal surfaces."""
 
+import pickle
+from dataclasses import replace
+from typing import cast
+
 import pytest
 from typing_extensions import override
 
@@ -328,6 +332,95 @@ class RuntimeArtifactsTests:
         )
 
         assert outcome.refinement is None
+
+    def test_evaluation_outcome_replace_preserves_candidate_equality(self) -> None:
+        record_candidate = SpaceOwnedEqualityCandidate(1)
+        refined_candidate = SpaceOwnedEqualityCandidate(1)
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=record_candidate,
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+        outcome = EvaluationOutcome(
+            observation=observation,
+            refinement=refinement,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        updated_outcome = replace(outcome, evaluation_count=2)
+
+        assert updated_outcome.evaluation_count == 2
+        assert updated_outcome.refinement == refinement
+
+    def test_evaluation_outcome_replace_revalidates_changed_refinement(
+        self,
+    ) -> None:
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+        outcome = EvaluationOutcome(
+            observation=observation,
+            refinement=refinement,
+            candidate_equal=space_owned_candidates_equal,
+        )
+        mismatched_refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(3),
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError, match="record candidate"):
+            _ = replace(outcome, refinement=mismatched_refinement)
+
+    def test_evaluation_outcome_pickle_omits_candidate_equality_revalidation(
+        self,
+    ) -> None:
+        def local_candidate_equal(
+            left_candidate: SpaceOwnedEqualityCandidate,
+            right_candidate: SpaceOwnedEqualityCandidate,
+        ) -> bool:
+            return left_candidate.stable_id == right_candidate.stable_id
+
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+        outcome = EvaluationOutcome(
+            observation=observation,
+            refinement=refinement,
+            candidate_equal=local_candidate_equal,
+        )
+
+        restored_outcome = cast(
+            EvaluationOutcome[SpaceOwnedEqualityCandidate],
+            pickle.loads(pickle.dumps(outcome)),
+        )
+        updated_outcome = replace(restored_outcome, evaluation_count=2)
+
+        assert restored_outcome.refinement is not None
+        assert restored_outcome.refinement.refined_candidate.stable_id == 1
+        assert updated_outcome.evaluation_count == 2
 
     def test_observation_rejects_negative_elapsed_seconds(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")

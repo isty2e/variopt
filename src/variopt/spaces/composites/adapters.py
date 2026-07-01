@@ -60,6 +60,14 @@ class CompositeSequenceSpace(Protocol):
         """
         ...
 
+    def candidates_equal(
+        self,
+        left_candidate: tuple[SpaceCandidateValue, ...],
+        right_candidate: tuple[SpaceCandidateValue, ...],
+    ) -> bool:
+        """Return whether two canonical sequence candidates denote one point."""
+        ...
+
     def sample(
         self,
         random_state: np.random.RandomState,
@@ -200,6 +208,14 @@ class CompositeRecordSpace(Protocol):
         ValueError
             If any field value lies outside the declared child space.
         """
+        ...
+
+    def candidates_equal(
+        self,
+        left_candidate: RecordCandidate,
+        right_candidate: RecordCandidate,
+    ) -> bool:
+        """Return whether two canonical record candidates denote one point."""
         ...
 
     def sample(self, random_state: np.random.RandomState) -> RecordCandidate:
@@ -848,6 +864,74 @@ def validate_child_space(
             require_sequence_candidate(candidate),
         )
         return
+
+    msg = "unsupported composite child space"
+    raise TypeError(msg)
+
+
+def child_candidates_equal(
+    space: CompositeChildSpace,
+    left_candidate: SpaceCandidateValue,
+    right_candidate: SpaceCandidateValue,
+) -> bool:
+    """Return candidate equality through a heterogeneous child-space seam.
+
+    Parameters
+    ----------
+    space : CompositeChildSpace
+        Child space responsible for candidate identity semantics.
+    left_candidate : SpaceCandidateValue
+        Left canonical child candidate.
+    right_candidate : SpaceCandidateValue
+        Right canonical child candidate.
+
+    Returns
+    -------
+    bool
+        Whether the child candidates denote the same child-space point.
+
+    Raises
+    ------
+    TypeError
+        If either candidate does not match the child-space canonical shape.
+    ValueError
+        If either candidate violates the child-space domain.
+    """
+    if isinstance(space, RealSpace):
+        return space.candidates_equal(
+            require_real_candidate(left_candidate),
+            require_real_candidate(right_candidate),
+        )
+
+    if isinstance(space, IntegerSpace):
+        return space.candidates_equal(
+            require_integer_candidate(left_candidate),
+            require_integer_candidate(right_candidate),
+        )
+
+    if is_categorical_child_space(space):
+        return space.candidates_equal(
+            require_scalar_candidate(left_candidate),
+            require_scalar_candidate(right_candidate),
+        )
+
+    if isinstance(space, PermutationSpace):
+        return space.candidates_equal(
+            require_permutation_candidate(left_candidate),
+            require_permutation_candidate(right_candidate),
+        )
+
+    if is_record_composite_space(space):
+        return require_record_composite_space(space).candidates_equal(
+            require_record_candidate(left_candidate),
+            require_record_candidate(right_candidate),
+        )
+
+    if is_sequence_composite_space(space):
+        return require_sequence_composite_space(space).candidates_equal(
+            require_sequence_candidate(left_candidate),
+            require_sequence_candidate(right_candidate),
+        )
 
     msg = "unsupported composite child space"
     raise TypeError(msg)
