@@ -3,6 +3,7 @@
 from collections.abc import Callable, Sequence
 
 import numpy as np
+import pytest
 from typing_extensions import override
 
 from variopt import Observation, Proposal
@@ -31,6 +32,7 @@ from variopt.algorithms.population.csa.banking.queries import (
     crowded_indices,
     crowding_aware_scores,
 )
+from variopt.algorithms.population.csa.banking.update import logic as bank_update_logic
 from variopt.algorithms.population.csa.banking.update.logic import (
     apply_bank_update_batch,
     initialize_cutoff_if_needed,
@@ -52,6 +54,8 @@ from variopt.algorithms.population.csa.scoring.acceptance_state import (
 )
 from variopt.algorithms.population.csa.scoring.model_state import (
     CSAScoreModelState,
+    ScoredBank,
+    ScoredTrial,
 )
 from variopt.diversity import DiversityMetric
 
@@ -781,6 +785,74 @@ class CSAClusteringRuntimeTests:
 
         assert len(batch_result.bank.entries) == 3
         assert diversity_metric.call_count == 3
+
+    def test_full_bank_update_rejects_bank_replacement_without_growth(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def replace_without_growth(
+            *,
+            state: CSABankGrowthState[int],
+            bank: Bank[int],
+            observation: Observation[int],
+            scored_bank: ScoredBank[int],
+            trial: ScoredTrial[int],
+            nearest_distance: float,
+            active_distance_cutoff: float,
+            adaptive_potential_active: bool,
+        ) -> tuple[Bank[int], CSABankGrowthState[int], bool]:
+            _ = (
+                observation,
+                scored_bank,
+                trial,
+                nearest_distance,
+                active_distance_cutoff,
+                adaptive_potential_active,
+            )
+            return (
+                Bank(
+                    capacity=bank.capacity,
+                    entries=bank.entries[:-1]
+                    + (BankEntry(candidate=101, value=100.0),),
+                ),
+                state,
+                False,
+            )
+
+        monkeypatch.setattr(
+            bank_update_logic,
+            "try_append_growth_entry",
+            replace_without_growth,
+        )
+
+        with pytest.raises(RuntimeError, match="must not replace the bank"):
+            _ = run_cluster_batch(
+                bank=Bank(
+                    capacity=3,
+                    entries=(
+                        BankEntry(candidate=0, value=50.0),
+                        BankEntry(candidate=1, value=40.0),
+                        BankEntry(candidate=100, value=100.0),
+                    ),
+                ),
+                observation=Observation(
+                    proposal=Proposal(candidate=20, proposal_id="p-1"),
+                    candidate=20,
+                    value=60.0,
+                    score=60.0,
+                ),
+                clustering_state=CSAClusteringState(
+                    policy=CSAClusteringPolicy(),
+                ),
+                distance_cutoff=2.0,
+                score_model=CSAScoreModel(
+                    biased_potential=CSABiasedPotential(
+                        maximum_bias=1.0,
+                        sigma=1.0,
+                        sigma_reference="constant",
+                    ),
+                ),
+            )
 
 
 def run_cluster_batch(

@@ -373,6 +373,7 @@ def admit_full_bank_observation(
                     diversity_metric=diversity_metric,
                 )
 
+    pre_growth_bank = bank
     bank, growth_state, did_grow = try_append_growth_entry(
         state=growth_state,
         bank=bank,
@@ -395,6 +396,15 @@ def admit_full_bank_observation(
                 appended=True,
             ),
         )
+
+    # The scored-bank view, trial-bank distances, and distance workspace above
+    # are all aligned to this pre-growth bank snapshot.
+    if bank != pre_growth_bank:
+        msg = (
+            "try_append_growth_entry must not replace the bank unless "
+            "did_grow is true"
+        )
+        raise RuntimeError(msg)
 
     if clustering_state.should_attempt_cluster_update(
         nearest_distance=nearest_distance,
