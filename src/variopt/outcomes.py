@@ -7,7 +7,11 @@ from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .artifacts import CandidateRefinement, Observation, RequestAlignedEvaluationRecord
+from .artifacts.records import Observation, RequestAlignedEvaluationRecord
+from .artifacts.refinement import (
+    CandidateRefinement,
+    require_scalar_candidate_equality,
+)
 from .kernel import KernelDiagnostics
 from .typevars import CandidateT
 
@@ -19,21 +23,6 @@ OutcomeRecordT = TypeVar(
 
 __all__ = ["CandidateRefinement", "EvaluationOutcome"]
 
-
-def _require_matching_candidate(
-    *,
-    record_candidate: object,
-    refined_candidate: object,
-) -> None:
-    try:
-        candidates_match = bool(record_candidate == refined_candidate)
-    except ValueError as error:
-        msg = "candidate equality must produce a scalar truth value"
-        raise TypeError(msg) from error
-
-    if not candidates_match:
-        msg = "refinement refined_candidate must match the outcome record candidate"
-        raise ValueError(msg)
 
 @dataclass(frozen=True, slots=True, init=False)
 class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRecordT]):
@@ -127,9 +116,13 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             raise ValueError(msg)
 
         if self.refinement is not None:
-            _require_matching_candidate(
+            require_scalar_candidate_equality(
                 record_candidate=self.record.candidate,
                 refined_candidate=self.refinement.refined_candidate,
+                mismatch_message=(
+                    "refinement refined_candidate must match the outcome "
+                    "record candidate"
+                ),
             )
 
     @property

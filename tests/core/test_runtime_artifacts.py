@@ -32,6 +32,16 @@ class AmbiguousEqualityCandidate:
         raise ValueError("ambiguous candidate equality")
 
 
+def make_truthy_vector_equality_candidate() -> object:
+    """Return a candidate whose equality result is truthy but not scalar."""
+
+    def equality(_self: object, _other: object) -> list[bool]:
+        return [True]
+
+    candidate_type = type("TruthyVectorEqualityCandidate", (), {"__eq__": equality})
+    return candidate_type()
+
+
 class RuntimeArtifactConformanceTests(contract_cases.ArtifactConformanceCase[int]):
     """Runtime-artifact conformance for Proposal, Observation, RunResult, and Trace."""
 
@@ -123,6 +133,14 @@ class RuntimeArtifactsTests:
                 changed_leaf_paths=((0,), (0,)),
             )
 
+    def test_candidate_refinement_rejects_bool_path_segments(self) -> None:
+        with pytest.raises(TypeError, match="int or str"):
+            _ = CandidateRefinement(
+                source_candidate=(1, 2),
+                refined_candidate=(3, 2),
+                changed_leaf_paths=((True,),),
+            )
+
     def test_evaluation_outcome_defaults_to_no_refinement_payload(self) -> None:
         observation = Observation(
             proposal=Proposal(candidate=4, proposal_id="p-1"),
@@ -193,6 +211,30 @@ class RuntimeArtifactsTests:
         )
 
         with pytest.raises(ValueError):
+            _ = EvaluationOutcome(observation=observation, refinement=refinement)
+
+    def test_evaluation_outcome_rejects_truthy_non_scalar_candidate_equality(
+        self,
+    ) -> None:
+        record_candidate = make_truthy_vector_equality_candidate()
+        refined_candidate = make_truthy_vector_equality_candidate()
+        proposal: Proposal[object] = Proposal(
+            candidate=record_candidate,
+            proposal_id="p-1",
+        )
+        observation: Observation[object] = Observation(
+            proposal=proposal,
+            candidate=record_candidate,
+            value=1.0,
+            score=1.0,
+        )
+        refinement: CandidateRefinement[object] = CandidateRefinement(
+            source_candidate=record_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(TypeError, match="scalar truth value"):
             _ = EvaluationOutcome(observation=observation, refinement=refinement)
 
     def test_observation_rejects_negative_elapsed_seconds(self) -> None:
@@ -524,6 +566,63 @@ class RuntimeArtifactsTests:
 
         with pytest.raises(TypeError):
             _ = RunReport[AmbiguousEqualityCandidate, EvaluationRecord[AmbiguousEqualityCandidate]].from_records(
+                records=(record,),
+                refinements=(refinement,),
+            )
+
+    def test_run_report_rejects_truthy_non_scalar_refinement_candidate_equality(
+        self,
+    ) -> None:
+        record_candidate = make_truthy_vector_equality_candidate()
+        refined_candidate = make_truthy_vector_equality_candidate()
+        proposal: Proposal[object] = Proposal(
+            candidate=record_candidate,
+            proposal_id="p-1",
+        )
+        request: EvaluationRequest[object] = EvaluationRequest(
+            proposal=proposal,
+        )
+        record: EvaluationRecord[object] = EvaluationRecord(
+            request=request,
+            candidate=record_candidate,
+        )
+        refinement: CandidateRefinement[object] = CandidateRefinement(
+            source_candidate=record_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(TypeError, match="scalar truth value"):
+            _ = RunReport[
+                object,
+                EvaluationRecord[object],
+            ].from_records(
+                records=(record,),
+                refinements=(refinement,),
+            )
+
+    def test_nondominated_run_surface_rejects_truthy_non_scalar_refinement_equality(
+        self,
+    ) -> None:
+        record_candidate = make_truthy_vector_equality_candidate()
+        refined_candidate = make_truthy_vector_equality_candidate()
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=record_candidate, proposal_id="p-1"),
+            candidate=record_candidate,
+            objective_values=(1.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        refinement: CandidateRefinement[object] = CandidateRefinement(
+            source_candidate=record_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(TypeError, match="scalar truth value"):
+            _ = NondominatedRunSurface[object].from_records(
                 records=(record,),
                 refinements=(refinement,),
             )

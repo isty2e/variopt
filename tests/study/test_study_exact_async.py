@@ -1,9 +1,11 @@
 """Tests for exact-async Study execution."""
 
 import pytest
+from typing_extensions import override
 
 from tests.study_support import (
     ExactAsyncCapableBatchQueueOptimizer,
+    OutcomeAwareBatchQueueOptimizer,
     OutOfOrderAsyncEvaluator,
     RecordingKernel,
     RefinementKernel,
@@ -15,8 +17,27 @@ from tests.study_support import (
 from variopt import EvaluationRequest, IntegerSpace, Problem, Proposal, Study
 from variopt.artifacts import ProposalEvaluationSpec
 from variopt.evaluators import EvaluationBatchSessionState, SequentialEvaluator
-from variopt.execution import EXACT_ASYNC_EXECUTION_MODEL
+from variopt.execution import (
+    EXACT_ASYNC_EXECUTION_MODEL,
+    SEQUENTIAL_EXECUTION_MODEL,
+    SYNC_BATCH_EXECUTION_MODEL,
+    ExecutionModel,
+)
 from variopt.study.common import build_evaluation_requests
+
+
+class OutcomeAwareExactAsyncBatchQueueOptimizer(OutcomeAwareBatchQueueOptimizer):
+    """Outcome-aware batch optimizer that advertises exact-async compatibility."""
+
+    @override
+    def supported_execution_models(self) -> frozenset[ExecutionModel]:
+        return frozenset(
+            {
+                SEQUENTIAL_EXECUTION_MODEL,
+                SYNC_BATCH_EXECUTION_MODEL,
+                EXACT_ASYNC_EXECUTION_MODEL,
+            },
+        )
 
 
 class StudyExactAsyncTests:
@@ -423,3 +444,37 @@ class StudyExactAsyncTests:
                 observation.proposal.proposal_id
                 for observation in next_state.tell_history[0]
             ) == ("p-1", "p-2")
+
+    def test_suspend_and_resume_exact_async_step_session_preserves_outcome_feedback_order(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=ShiftedObservationProtocol(),
+        )
+        optimizer = OutcomeAwareExactAsyncBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = ResumableOutOfOrderAsyncEvaluator(attach_refinement=True)
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        session = study.open_exact_async_step_session(
+            optimizer.create_initial_state(),
+            batch_size=2,
+        )
+        _ = tuple(session.poll())
+        resume_handle = session.suspend()
+
+        resumed_session = study.resume_exact_async_step_session(resume_handle)
+        observations, _ = resumed_session.finish()
+
+        assert tuple(observation.proposal.proposal_id for observation in observations) == (
+            "p-1",
+            "p-2",
+        )
+        assert optimizer.seen_changed_leaf_paths == (((),), ((),))

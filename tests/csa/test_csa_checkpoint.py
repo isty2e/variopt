@@ -265,6 +265,26 @@ class CSAEngineCheckpointTests:
 
         assert restored.to_dict(candidate_to_dict=_int_candidate_to_dict) == snapshot
 
+    def test_checkpoint_serializes_adaptation_state_not_refinement_payload(
+        self,
+    ) -> None:
+        state = build_populated_engine_state()
+
+        snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+
+        proposal_state = snapshot["proposal_state"]
+        assert isinstance(proposal_state, dict)
+        assert proposal_state["local_displacement_leaf_stats"] == [
+            {
+                "path": ["y"],
+                "observation_count": 2,
+                "discounted_score_credit": 0.5,
+                "last_update_index": 7,
+                "recent_failure_streak": 0,
+            },
+        ]
+        assert "refinement" not in repr(snapshot).lower()
+
     def test_rejects_checkpoint_when_pending_proposals_exist(self) -> None:
         state = build_populated_engine_state().issue_proposal(
             Proposal(candidate=7, proposal_id="csa-12"),

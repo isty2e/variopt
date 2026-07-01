@@ -10,7 +10,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..typevars import CandidateT
 from .records import ObjectiveVectorRecord, Observation, RequestAlignedEvaluationRecord
-from .refinement import CandidateRefinement
+from .refinement import CandidateRefinement, require_scalar_candidate_equality
 
 RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
 
@@ -36,20 +36,14 @@ def _normalize_refinements(
         if refinement is None:
             continue
 
-        try:
-            candidates_match = bool(
-                record.candidate == refinement.refined_candidate
-            )
-        except ValueError as error:
-            msg = "candidate equality must produce a scalar truth value"
-            raise TypeError(msg) from error
-
-        if not candidates_match:
-            msg = (
+        require_scalar_candidate_equality(
+            record_candidate=record.candidate,
+            refined_candidate=refinement.refined_candidate,
+            mismatch_message=(
                 "refinement refined_candidate must match the aligned "
                 f"{record_label} candidate"
-            )
-            raise ValueError(msg)
+            ),
+        )
 
     return refinement_tuple
 

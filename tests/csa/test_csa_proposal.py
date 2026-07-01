@@ -1,6 +1,7 @@
 """Tests for CSA proposal-adaptation ontology and reducer state."""
 
 from collections.abc import Sequence
+from typing import overload
 
 import numpy as np
 import pytest
@@ -41,6 +42,31 @@ from variopt.algorithms.population.csa.generation.proposal.state import (
 from variopt.kernel import ProposalLocalSearchContext
 from variopt.operators import VariationOperator
 from variopt.spaces import LeafPath
+
+
+class ExplodingExplicitPathSequence(Sequence[tuple[LeafPath, ...] | None]):
+    """Sequence that fails if proposal update code tries to materialize it."""
+
+    @overload
+    def __getitem__(self, index: int) -> tuple[LeafPath, ...] | None: ...
+
+    @overload
+    def __getitem__(
+        self,
+        index: slice,
+    ) -> Sequence[tuple[LeafPath, ...] | None]: ...
+
+    @override
+    def __getitem__(
+        self,
+        index: int | slice,
+    ) -> tuple[LeafPath, ...] | None | Sequence[tuple[LeafPath, ...] | None]:
+        _ = index
+        raise AssertionError("explicit paths should not be materialized")
+
+    @override
+    def __len__(self) -> int:
+        raise AssertionError("explicit paths should not be measured")
 
 
 class CSAProposalStateTests:
@@ -313,6 +339,48 @@ class CSAProposalStateTests:
 
         assert next_state.local_displacement_leaf_stats == ()
 
+    def test_update_proposal_state_empty_explicit_paths_do_not_fall_back_after_change(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=(("x",),),
+            ),
+        )
+        source_candidate: tuple[str, ...] = ("before",)
+        refined_candidate: tuple[str, ...] = ("after",)
+        proposal: Proposal[tuple[str, ...]] = Proposal(
+            candidate=source_candidate,
+            proposal_id="p-1",
+        )
+        observation: Observation[tuple[str, ...]] = Observation(
+            proposal=proposal,
+            candidate=refined_candidate,
+            value=3.0,
+            score=3.0,
+        )
+
+        def raise_if_called(
+            _before: tuple[str, ...],
+            _after: tuple[str, ...],
+        ) -> tuple[LeafPath, ...]:
+            raise AssertionError("inference should not run")
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=((),),
+            infer_local_displacement_leaf_paths=raise_if_called,
+        )
+
+        assert next_state.local_displacement_leaf_stats == ()
+        assert next_state.pending_attributions == ()
+
     def test_update_proposal_state_rejects_misaligned_explicit_refinement_paths(
         self,
     ) -> None:
@@ -346,6 +414,40 @@ class CSAProposalStateTests:
             state,
             (observation,),
             explicit_local_displacement_leaf_paths=(None, None),
+            infer_local_displacement_leaf_paths=self._raise_if_called,
+        )
+
+        assert next_state == state
+
+    def test_update_proposal_state_does_not_materialize_disabled_explicit_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=ExplodingExplicitPathSequence(),
+            infer_local_displacement_leaf_paths=self._raise_if_called,
+        )
+
+        assert next_state == state
+
+    def test_update_proposal_state_does_not_materialize_empty_batch_explicit_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+
+        next_state = update_proposal_state(
+            state,
+            (),
+            explicit_local_displacement_leaf_paths=ExplodingExplicitPathSequence(),
             infer_local_displacement_leaf_paths=self._raise_if_called,
         )
 

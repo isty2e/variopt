@@ -10,6 +10,50 @@ from ..spaces import LeafPath
 from ..typevars import CandidateT
 
 
+def require_scalar_candidate_equality(
+    *,
+    record_candidate: object,
+    refined_candidate: object,
+    mismatch_message: str,
+) -> None:
+    """Validate that candidate equality is scalar and true.
+
+    Parameters
+    ----------
+    record_candidate : object
+        Candidate from the authoritative evaluation record.
+    refined_candidate : object
+        Candidate reported by candidate-refinement provenance.
+    mismatch_message : str
+        Error message used when equality is scalar but false.
+
+    Raises
+    ------
+    TypeError
+        If equality does not produce a scalar truth value.
+    ValueError
+        If the scalar equality result is false.
+    """
+    try:
+        equality_result = record_candidate == refined_candidate
+    except (TypeError, ValueError) as error:
+        msg = "candidate equality must produce a scalar truth value"
+        raise TypeError(msg) from error
+
+    if type(equality_result) is not bool and getattr(equality_result, "shape", None) != ():
+        msg = "candidate equality must produce a scalar truth value"
+        raise TypeError(msg)
+
+    try:
+        candidates_match = bool(equality_result)
+    except (TypeError, ValueError) as error:
+        msg = "candidate equality must produce a scalar truth value"
+        raise TypeError(msg) from error
+
+    if not candidates_match:
+        raise ValueError(mismatch_message)
+
+
 def _normalize_changed_leaf_paths(
     changed_leaf_paths: Sequence[LeafPath],
 ) -> tuple[LeafPath, ...]:
