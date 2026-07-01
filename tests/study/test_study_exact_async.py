@@ -12,6 +12,10 @@ from tests.study_support import (
     ResumableOutOfOrderAsyncEvaluator,
     SessionRecordingAsyncEvaluator,
     ShiftedObservationProtocol,
+    SpaceOwnedEqualityAsyncEvaluator,
+    SpaceOwnedEqualityObjective,
+    SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualitySpace,
     SquareObjective,
 )
 from variopt import EvaluationRequest, IntegerSpace, Problem, Proposal, Study
@@ -114,6 +118,25 @@ class StudyExactAsyncTests:
         )
 
         assert evaluator.opened_batch_sizes == (2,)
+
+    def test_step_exact_async_uses_space_candidate_equality_for_refinement(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SpaceOwnedEqualityAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        observations, _ = study.step(
+            optimizer.create_initial_state(),
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert len(observations) == 1
+        assert observations[0].candidate.stable_id == 1
 
     def test_direct_step_exact_async_reuses_request_batch_for_validation(
         self,

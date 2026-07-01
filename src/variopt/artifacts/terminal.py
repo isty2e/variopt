@@ -1,16 +1,17 @@
 """Terminal-surface artifact definitions."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from dataclasses import InitVar, dataclass, field
+from typing import Generic, TypeVar, cast
 
 from typing_extensions import Self
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
+from ..spaces import CandidateEquality
 from ..typevars import CandidateT
 from .records import ObjectiveVectorRecord, Observation, RequestAlignedEvaluationRecord
-from .refinement import CandidateRefinement, require_scalar_candidate_equality
+from .refinement import CandidateRefinement, require_matching_refined_candidate
 
 RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
 
@@ -20,6 +21,7 @@ def _normalize_refinements(
     records: Sequence[RequestAlignedEvaluationRecord],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
     record_label: str,
+    candidate_equal: CandidateEquality[CandidateT] | None,
 ) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
     refinement_tuple = tuple(refinements)
     if refinement_tuple == ():
@@ -36,13 +38,14 @@ def _normalize_refinements(
         if refinement is None:
             continue
 
-        require_scalar_candidate_equality(
-            record_candidate=record.candidate,
+        require_matching_refined_candidate(
+            record_candidate=cast(CandidateT, record.candidate),
             refined_candidate=refinement.refined_candidate,
             mismatch_message=(
                 "refinement refined_candidate must match the aligned "
                 f"{record_label} candidate"
             ),
+            candidate_equal=candidate_equal,
         )
 
     return refinement_tuple
@@ -140,8 +143,12 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
+    candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
         """Validate report accounting invariants.
 
         Raises
@@ -169,6 +176,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
                 records=self.records,
                 refinements=self.refinements,
                 record_label="records",
+                candidate_equal=candidate_equal,
             ),
         )
 
@@ -179,6 +187,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Build a terminal report from an arbitrary record sequence.
 
@@ -194,6 +203,9 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             Optional record-aligned refinement provenance. ``None`` keeps the
             compact no-metadata sentinel. Aligned all-``None`` metadata is
             canonicalized to the same sentinel.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Explicit candidate equality predicate used to validate refinement
+            alignment. When absent, strict scalar Python equality is used.
 
         Returns
         -------
@@ -212,6 +224,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
+            candidate_equal=candidate_equal,
         )
 
 
@@ -239,8 +252,12 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
+    candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
         """Validate scalar run-summary invariants.
 
         Raises
@@ -282,6 +299,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 records=self.observations,
                 refinements=self.refinements,
                 record_label="observations",
+                candidate_equal=candidate_equal,
             ),
         )
 
@@ -292,6 +310,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Build a scalar run summary from an observation history.
 
@@ -306,6 +325,9 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
             Optional observation-aligned refinement provenance. ``None`` keeps
             the compact no-metadata sentinel.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Explicit candidate equality predicate used to validate refinement
+            alignment. When absent, strict scalar Python equality is used.
 
         Returns
         -------
@@ -326,6 +348,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 evaluation_count=normalized_evaluation_count,
                 trace=normalized_trace,
                 refinements=refinement_tuple,
+                candidate_equal=candidate_equal,
             )
 
         best_observation = min(
@@ -339,6 +362,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
+            candidate_equal=candidate_equal,
         )
 
 
@@ -435,8 +459,12 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
+    candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
         """Validate multi-objective surface invariants.
 
         Raises
@@ -477,6 +505,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 records=self.records,
                 refinements=self.refinements,
                 record_label="records",
+                candidate_equal=candidate_equal,
             ),
         )
 
@@ -487,6 +516,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Build a nondominated surface from vector-valued records.
 
@@ -501,6 +531,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
             Optional record-aligned refinement provenance. ``None`` keeps the
             compact no-metadata sentinel.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Explicit candidate equality predicate used to validate refinement
+            alignment. When absent, strict scalar Python equality is used.
 
         Returns
         -------
@@ -521,12 +554,14 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
+            candidate_equal=candidate_equal,
         )
 
     @classmethod
     def from_report(
         cls,
         report: RunReport[CandidateT, ObjectiveVectorRecord[CandidateT]],
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Materialize a nondominated surface from a run report.
 
@@ -534,6 +569,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ----------
         report : RunReport[CandidateT, ObjectiveVectorRecord[CandidateT]]
             Run report carrying vector-valued evaluation records.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Explicit candidate equality predicate used to validate refinement
+            alignment. When absent, strict scalar Python equality is used.
 
         Returns
         -------
@@ -545,4 +583,5 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=report.evaluation_count,
             trace=report.trace,
             refinements=report.refinements,
+            candidate_equal=candidate_equal,
         )

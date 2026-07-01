@@ -46,6 +46,7 @@ from .outcomes import EvaluationOutcome
 from .problem import InteractionProblem, Problem
 from .spaces import (
     ArraySpace,
+    CandidateEquality,
     CategoricalSpace,
     IntegerSpace,
     PermutationSpace,
@@ -58,6 +59,7 @@ from .study import Study
 
 __all__ = [
     "ArraySpace",
+    "CandidateEquality",
     "CandidateRefinement",
     "CategoricalSpace",
     "DiversityMetric",

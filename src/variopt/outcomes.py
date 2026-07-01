@@ -10,9 +10,10 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .artifacts.records import Observation, RequestAlignedEvaluationRecord
 from .artifacts.refinement import (
     CandidateRefinement,
-    require_scalar_candidate_equality,
+    require_matching_refined_candidate,
 )
 from .kernel import KernelDiagnostics
+from .spaces import CandidateEquality
 from .typevars import CandidateT
 
 OutcomeRecordT = TypeVar(
@@ -22,6 +23,43 @@ OutcomeRecordT = TypeVar(
 )
 
 __all__ = ["CandidateRefinement", "EvaluationOutcome"]
+
+
+def validate_outcome_refinement_alignment(
+    outcome: "EvaluationOutcome[CandidateT, OutcomeRecordT]",
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None = None,
+) -> None:
+    """Validate that outcome refinement provenance matches its record.
+
+    Parameters
+    ----------
+    outcome : EvaluationOutcome[CandidateT, OutcomeRecordT]
+        Outcome whose record/refinement alignment should be checked.
+    candidate_equal : CandidateEquality[CandidateT] | None, optional
+        Explicit candidate equality predicate. When absent, strict scalar Python
+        equality is used.
+
+    Raises
+    ------
+    TypeError
+        If candidate equality is not scalar, or if an explicit predicate does
+        not return ``bool``.
+    ValueError
+        If the refined candidate does not match the outcome record candidate.
+    """
+    if outcome.refinement is None:
+        return
+
+    require_matching_refined_candidate(
+        record_candidate=cast(CandidateT, outcome.record.candidate),
+        refined_candidate=outcome.refinement.refined_candidate,
+        mismatch_message=(
+            "refinement refined_candidate must match the outcome "
+            "record candidate"
+        ),
+        candidate_equal=candidate_equal,
+    )
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -62,6 +100,7 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         evaluation_count: int = 1,
         kernel_diagnostics: KernelDiagnostics | None = None,
         refinement: CandidateRefinement[CandidateT] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> None:
         """Create one canonical evaluation outcome.
 
@@ -77,6 +116,9 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             Optional kernel-side diagnostics.
         refinement : CandidateRefinement[CandidateT] | None, optional
             Optional candidate-refinement provenance.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Explicit candidate equality predicate used to validate refinement
+            alignment. When absent, strict scalar Python equality is used.
 
         Raises
         ------
@@ -101,9 +143,13 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         object.__setattr__(self, "evaluation_count", evaluation_count)
         object.__setattr__(self, "kernel_diagnostics", kernel_diagnostics)
         object.__setattr__(self, "refinement", refinement)
-        self.__post_init__()
+        self._validate(candidate_equal=candidate_equal)
 
-    def __post_init__(self) -> None:
+    def _validate(
+        self,
+        *,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
         """Validate outcome accounting metadata.
 
         Raises
@@ -115,15 +161,14 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
-        if self.refinement is not None:
-            require_scalar_candidate_equality(
-                record_candidate=self.record.candidate,
-                refined_candidate=self.refinement.refined_candidate,
-                mismatch_message=(
-                    "refinement refined_candidate must match the outcome "
-                    "record candidate"
-                ),
-            )
+        validate_outcome_refinement_alignment(
+            self,
+            candidate_equal=candidate_equal,
+        )
+
+    def __post_init__(self) -> None:
+        """Validate outcome accounting metadata after dataclass construction."""
+        self._validate(candidate_equal=None)
 
     @property
     def observation(self) -> Observation[CandidateT]:

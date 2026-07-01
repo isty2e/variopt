@@ -88,6 +88,21 @@ class SearchSpaceConformanceCase(Generic[RawCandidateT, CandidateT]):
 
         self.assert_candidate_equal(candidate_one, candidate_two)
 
+    def test_conformance_candidates_equal_accepts_expected_candidate(self) -> None:
+        space = self.make_space()
+        candidate = space.normalize(self.make_boundary_candidate())
+
+        assert space.candidates_equal(candidate, self.make_expected_candidate())
+
+    def test_conformance_candidates_equal_rejects_invalid_candidate(self) -> None:
+        space = self.make_space()
+
+        with pytest.raises(self.boundary_exception_types()):
+            _ = space.candidates_equal(
+                cast(CandidateT, self.make_invalid_boundary_candidate()),
+                self.make_expected_candidate(),
+            )
+
     def test_conformance_invalid_boundary_candidate_fails(self) -> None:
         space = self.make_space()
 

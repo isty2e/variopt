@@ -32,6 +32,36 @@ class AmbiguousEqualityCandidate:
         raise ValueError("ambiguous candidate equality")
 
 
+class SpaceOwnedEqualityCandidate:
+    """Candidate whose usable identity belongs to a search-space comparator."""
+
+    def __init__(self, stable_id: int) -> None:
+        self.stable_id: int = stable_id
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ = other
+        raise ValueError("raw candidate equality is not the space contract")
+
+
+def space_owned_candidates_equal(
+    left_candidate: SpaceOwnedEqualityCandidate,
+    right_candidate: SpaceOwnedEqualityCandidate,
+) -> bool:
+    """Return equality under the test space's stable-id semantics."""
+    return left_candidate.stable_id == right_candidate.stable_id
+
+
+def fail_if_candidate_equal_is_called(
+    left_candidate: SpaceOwnedEqualityCandidate,
+    right_candidate: SpaceOwnedEqualityCandidate,
+) -> bool:
+    """Raise if a no-refinement path unnecessarily compares candidates."""
+    _ = left_candidate
+    _ = right_candidate
+    raise AssertionError("candidate equality should not be called")
+
+
 def make_truthy_vector_equality_candidate() -> object:
     """Return a candidate whose equality result is truthy but not scalar."""
 
@@ -236,6 +266,68 @@ class RuntimeArtifactsTests:
 
         with pytest.raises(TypeError, match="scalar truth value"):
             _ = EvaluationOutcome(observation=observation, refinement=refinement)
+
+    def test_evaluation_outcome_accepts_explicit_candidate_equality(self) -> None:
+        record_candidate = SpaceOwnedEqualityCandidate(1)
+        refined_candidate = SpaceOwnedEqualityCandidate(1)
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=record_candidate,
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+
+        outcome = EvaluationOutcome(
+            observation=observation,
+            refinement=refinement,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert outcome.refinement == refinement
+
+    def test_evaluation_outcome_rejects_explicit_candidate_equality_mismatch(
+        self,
+    ) -> None:
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(3),
+            changed_leaf_paths=((),),
+        )
+
+        with pytest.raises(ValueError, match="record candidate"):
+            _ = EvaluationOutcome(
+                observation=observation,
+                refinement=refinement,
+                candidate_equal=space_owned_candidates_equal,
+            )
+
+    def test_evaluation_outcome_skips_candidate_equality_without_refinement(
+        self,
+    ) -> None:
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+
+        outcome = EvaluationOutcome(
+            observation=observation,
+            candidate_equal=fail_if_candidate_equal_is_called,
+        )
+
+        assert outcome.refinement is None
 
     def test_observation_rejects_negative_elapsed_seconds(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
@@ -507,6 +599,31 @@ class RuntimeArtifactsTests:
 
         assert report.refinements == ()
 
+    def test_run_report_skips_candidate_equality_for_all_none_refinements(
+        self,
+    ) -> None:
+        proposal = Proposal(
+            candidate=SpaceOwnedEqualityCandidate(1),
+            proposal_id="p-1",
+        )
+        record = Observation(
+            proposal=proposal,
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+
+        report = RunReport[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ].from_records(
+            records=(record,),
+            refinements=(None,),
+            candidate_equal=fail_if_candidate_equal_is_called,
+        )
+
+        assert report.refinements == ()
+
     def test_run_report_constructor_canonicalizes_all_none_refinements(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
         record = LabelRecord(
@@ -600,6 +717,55 @@ class RuntimeArtifactsTests:
                 records=(record,),
                 refinements=(refinement,),
             )
+
+    def test_terminal_surfaces_accept_explicit_candidate_equality(self) -> None:
+        record_candidate = SpaceOwnedEqualityCandidate(1)
+        refined_candidate = SpaceOwnedEqualityCandidate(1)
+        proposal = Proposal(
+            candidate=SpaceOwnedEqualityCandidate(2),
+            proposal_id="p-1",
+        )
+        observation = Observation(
+            proposal=proposal,
+            candidate=record_candidate,
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=proposal.candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+
+        result = RunResult[SpaceOwnedEqualityCandidate].from_observations(
+            observations=(observation,),
+            refinements=(refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        report = RunReport[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ].from_records(
+            records=(observation,),
+            refinements=(refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        surface = NondominatedRunSurface[SpaceOwnedEqualityCandidate].from_records(
+            records=(
+                ObjectiveVectorRecord.from_objective_values(
+                    proposal=proposal,
+                    candidate=record_candidate,
+                    objective_values=(1.0,),
+                    directions=(OptimizationDirection.MINIMIZE,),
+                ),
+            ),
+            refinements=(refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert result.refinements == (refinement,)
+        assert report.refinements == (refinement,)
+        assert surface.refinements == (refinement,)
 
     def test_nondominated_run_surface_rejects_truthy_non_scalar_refinement_equality(
         self,

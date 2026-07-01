@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TypeVar, final
 
+import numpy as np
 from typing_extensions import override
 
 from variopt import (
@@ -21,6 +22,7 @@ from variopt import (
     Problem,
     Proposal,
     RunMethod,
+    SearchSpace,
 )
 from variopt.evaluators import (
     AsyncEvaluator,
@@ -49,6 +51,306 @@ from variopt.kernel import (
 from variopt.spaces import LeafPath
 
 OutcomeCandidateT = TypeVar("OutcomeCandidateT")
+
+
+class SpaceOwnedEqualityCandidate:
+    """Candidate whose raw equality is deliberately not usable."""
+
+    def __init__(self, stable_id: int) -> None:
+        self.stable_id: int = stable_id
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ = other
+        raise ValueError("raw candidate equality is not the space contract")
+
+
+class SpaceOwnedEqualitySpace(
+    SearchSpace[int | SpaceOwnedEqualityCandidate, SpaceOwnedEqualityCandidate],
+):
+    """Test search space that owns stable-id candidate equality."""
+
+    @override
+    def normalize(
+        self,
+        raw_candidate: int | SpaceOwnedEqualityCandidate,
+    ) -> SpaceOwnedEqualityCandidate:
+        if isinstance(raw_candidate, SpaceOwnedEqualityCandidate):
+            self.validate(raw_candidate)
+            return raw_candidate
+        candidate = SpaceOwnedEqualityCandidate(raw_candidate)
+        self.validate(candidate)
+        return candidate
+
+    @override
+    def validate(self, candidate: SpaceOwnedEqualityCandidate) -> None:
+        if candidate.stable_id < 0:
+            msg = "candidate stable_id must be non-negative"
+            raise ValueError(msg)
+
+    @override
+    def sample(
+        self,
+        random_state: np.random.RandomState,
+    ) -> SpaceOwnedEqualityCandidate:
+        _ = random_state
+        return SpaceOwnedEqualityCandidate(0)
+
+    @override
+    def candidates_equal(
+        self,
+        left_candidate: SpaceOwnedEqualityCandidate,
+        right_candidate: SpaceOwnedEqualityCandidate,
+    ) -> bool:
+        self.validate(left_candidate)
+        self.validate(right_candidate)
+        return left_candidate.stable_id == right_candidate.stable_id
+
+
+class SpaceOwnedEqualityObjective(Objective[SpaceOwnedEqualityCandidate]):
+    """Objective over the stable id carried by ambiguous-equality candidates."""
+
+    @override
+    def evaluate(self, candidate: SpaceOwnedEqualityCandidate) -> float:
+        return float(candidate.stable_id)
+
+
+@dataclass(frozen=True, slots=True)
+class SpaceOwnedEqualityOptimizerState:
+    """State for one-shot ambiguous-equality candidate tests."""
+
+    has_proposal: bool = True
+
+
+class SpaceOwnedEqualityOptimizer(
+    RunMethod[
+        SpaceOwnedEqualityOptimizerState,
+        Proposal[SpaceOwnedEqualityCandidate],
+        Observation[SpaceOwnedEqualityCandidate],
+    ],
+):
+    """One-shot optimizer for space-owned equality propagation tests."""
+
+    @override
+    def create_initial_state(self) -> SpaceOwnedEqualityOptimizerState:
+        return SpaceOwnedEqualityOptimizerState()
+
+    @override
+    def is_exhausted(self, state: SpaceOwnedEqualityOptimizerState) -> bool:
+        return not state.has_proposal
+
+    @override
+    def ask(
+        self,
+        state: SpaceOwnedEqualityOptimizerState,
+        batch_size: int = 1,
+    ) -> tuple[
+        tuple[Proposal[SpaceOwnedEqualityCandidate], ...],
+        SpaceOwnedEqualityOptimizerState,
+    ]:
+        _ = batch_size
+        if not state.has_proposal:
+            return (), state
+        return (
+            (Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),),
+            SpaceOwnedEqualityOptimizerState(has_proposal=False),
+        )
+
+    @override
+    def tell(
+        self,
+        state: SpaceOwnedEqualityOptimizerState,
+        observations: Sequence[Observation[SpaceOwnedEqualityCandidate]],
+    ) -> SpaceOwnedEqualityOptimizerState:
+        _ = observations
+        return state
+
+    @override
+    def supported_execution_models(self) -> frozenset[ExecutionModel]:
+        return frozenset(
+            {
+                SEQUENTIAL_EXECUTION_MODEL,
+                SYNC_BATCH_EXECUTION_MODEL,
+                EXACT_ASYNC_EXECUTION_MODEL,
+                STALE_ASYNC_EXECUTION_MODEL,
+            },
+        )
+
+
+class SpaceOwnedEqualityRefinementKernel(
+    Kernel[
+        ProposalBatchQuery[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ],
+        tuple[EvaluationOutcome[SpaceOwnedEqualityCandidate], ...],
+    ],
+):
+    """Kernel that emits distinct but space-equal refined candidate instances."""
+
+    @override
+    def run(
+        self,
+        query: ProposalBatchQuery[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ],
+        runner: Callable[
+            [
+                ProposalBatchQuery[
+                    int | SpaceOwnedEqualityCandidate,
+                    SpaceOwnedEqualityCandidate,
+                    Observation[SpaceOwnedEqualityCandidate],
+                ],
+            ],
+            tuple[EvaluationOutcome[SpaceOwnedEqualityCandidate], ...],
+        ],
+    ) -> tuple[EvaluationOutcome[SpaceOwnedEqualityCandidate], ...]:
+        _ = runner
+        proposal = query.proposals[0]
+        record_candidate = SpaceOwnedEqualityCandidate(1)
+        refinement_candidate = SpaceOwnedEqualityCandidate(1)
+        return (
+            EvaluationOutcome(
+                observation=Observation.from_objective_value(
+                    proposal=proposal,
+                    candidate=record_candidate,
+                    value=1.0,
+                    direction=query.problem.direction,
+                ),
+                refinement=CandidateRefinement(
+                    source_candidate=proposal.candidate,
+                    refined_candidate=refinement_candidate,
+                    changed_leaf_paths=((),),
+                ),
+                candidate_equal=query.problem.space.candidates_equal,
+            ),
+        )
+
+
+class SpaceOwnedEqualityAsyncEvaluator(
+    AsyncEvaluator[
+        Problem[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ],
+        EvaluationRequest[SpaceOwnedEqualityCandidate],
+        EvaluationOutcome[SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]],
+    ],
+):
+    """Async evaluator that returns space-equal distinct refinement candidates."""
+
+    _next_batch_id: int
+    _pending_groups: dict[
+        str,
+        tuple[
+            CompletionGroup[
+                EvaluationOutcome[
+                    SpaceOwnedEqualityCandidate,
+                    Observation[SpaceOwnedEqualityCandidate],
+                ]
+            ],
+            ...,
+        ],
+    ]
+
+    def __init__(self) -> None:
+        self._next_batch_id = 0
+        self._pending_groups = {}
+
+    @override
+    def submit_batch(
+        self,
+        problem: Problem[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ],
+        requests: Sequence[EvaluationRequest[SpaceOwnedEqualityCandidate]],
+    ) -> EvaluationBatchHandle:
+        handle = EvaluationBatchHandle(
+            batch_id=f"space-owned-equality-{self._next_batch_id}",
+            request_count=len(requests),
+        )
+        self._next_batch_id += 1
+        self._pending_groups[handle.batch_id] = tuple(
+            CompletionGroup(
+                start_index=index,
+                outcomes=(
+                    _make_space_owned_equality_outcome(
+                        problem=problem,
+                        request=request,
+                    ),
+                ),
+            )
+            for index, request in reversed(tuple(enumerate(requests)))
+        )
+        return handle
+
+    @override
+    def poll(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[
+        CompletionGroup[
+            EvaluationOutcome[
+                SpaceOwnedEqualityCandidate,
+                Observation[SpaceOwnedEqualityCandidate],
+            ]
+        ]
+    ]:
+        pending_groups = self._pending_groups.get(handle.batch_id)
+        if pending_groups is None:
+            msg = f"unknown async batch handle: {handle.batch_id}"
+            raise ValueError(msg)
+        if len(pending_groups) == 0:
+            raise BatchExecutionFailed(
+                handle=handle,
+                kind="infrastructure",
+                cause=RuntimeError("async batch exhausted unexpectedly"),
+            )
+
+        completion_group = pending_groups[0]
+        remaining_groups = pending_groups[1:]
+        if len(remaining_groups) == 0:
+            _ = self._pending_groups.pop(handle.batch_id, None)
+        else:
+            self._pending_groups[handle.batch_id] = remaining_groups
+        return (completion_group,)
+
+    @override
+    def cancel(self, handle: EvaluationBatchHandle) -> None:
+        _ = self._pending_groups.pop(handle.batch_id, None)
+
+
+def _make_space_owned_equality_outcome(
+    *,
+    problem: Problem[
+        int | SpaceOwnedEqualityCandidate,
+        SpaceOwnedEqualityCandidate,
+        Observation[SpaceOwnedEqualityCandidate],
+    ],
+    request: EvaluationRequest[SpaceOwnedEqualityCandidate],
+) -> EvaluationOutcome[SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]]:
+    record_candidate = SpaceOwnedEqualityCandidate(1)
+    refinement_candidate = SpaceOwnedEqualityCandidate(1)
+    return EvaluationOutcome(
+        observation=Observation.from_objective_value(
+            request=request,
+            candidate=record_candidate,
+            value=1.0,
+            direction=problem.direction,
+        ),
+        refinement=CandidateRefinement(
+            source_candidate=request.candidate,
+            refined_candidate=refinement_candidate,
+            changed_leaf_paths=((),),
+        ),
+        candidate_equal=problem.space.candidates_equal,
+    )
 
 
 class SquareObjective(Objective[int]):

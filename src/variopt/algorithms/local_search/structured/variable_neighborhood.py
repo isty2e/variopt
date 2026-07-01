@@ -239,6 +239,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                         ),
                     ),
                     refinement=refinement,
+                    candidate_equal=runtime.query.problem.space.candidates_equal,
                 )
 
             current_stage_index += 1
@@ -266,6 +267,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                 message="max_steps reached before variable-neighborhood termination",
             ),
             refinement=refinement,
+            candidate_equal=runtime.query.problem.space.candidates_equal,
         )
 
     @override
