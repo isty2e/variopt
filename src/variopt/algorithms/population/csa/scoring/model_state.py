@@ -15,6 +15,7 @@ from .....diversity import DiversityMetric
 from .....json_types import JSONDict, JSONValue
 from .....typevars import CandidateT
 from ..banking.bank import BankEntry
+from ..banking.queries import BankDistanceWorkspace
 from .adaptive_potential import (
     AdaptiveBinIndex,
     AdaptivePotentialState,
@@ -180,6 +181,7 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         distance_cutoff: float,
         minimum_distance_cutoff: float | None,
         masked_entry_indices: frozenset[int],
+        distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
     ) -> tuple[ScoredBank[CandidateT], Self]:
         """Return shaped bank scores and the updated score-model state.
 
@@ -195,6 +197,9 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Optional lower bound on the runtime cutoff scale.
         masked_entry_indices : frozenset[int]
             Entry indices excluded from biased-potential accumulation.
+        distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+            Optional operation-local bank distance workspace aligned to
+            ``entries``.
 
         Returns
         -------
@@ -234,12 +239,15 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
                     if left_entry.value < right_entry.value:
                         continue
 
-                    distance = require_valid_distance(
-                        diversity_metric.distance(
-                            left_entry.candidate,
-                            right_entry.candidate,
+                    if distance_workspace is None:
+                        distance = require_valid_distance(
+                            diversity_metric.distance(
+                                left_entry.candidate,
+                                right_entry.candidate,
+                            )
                         )
-                    )
+                    else:
+                        distance = distance_workspace.distance(left_index, right_index)
                     bias_sum += exp(-(distance**2) / biased_sigma2)
 
                 shaped_scores[left_index] += resolved_bias_max * bias_sum

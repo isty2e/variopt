@@ -34,6 +34,9 @@ class RecordSpace(
     """
 
     _fields: tuple[tuple[str, CompositeChildSpace], ...]
+    _field_names: tuple[str, ...]
+    _field_indices: dict[str, int]
+    _child_spaces_by_name: dict[str, CompositeChildSpace]
 
     def __init__(self, **fields: CompositeChildSpace) -> None:
         """Create a record search space from named child spaces.
@@ -53,6 +56,12 @@ class RecordSpace(
             raise ValueError(msg)
 
         self._fields = tuple(fields.items())
+        self._field_names = tuple(fields)
+        self._field_indices = {
+            name: index
+            for index, name in enumerate(self._field_names)
+        }
+        self._child_spaces_by_name = dict(self._fields)
 
     @property
     def fields(self) -> tuple[tuple[str, CompositeChildSpace], ...]:
@@ -88,10 +97,12 @@ class RecordSpace(
             return raw_candidate
         raw_mapping = raw_candidate
 
-        expected_names = tuple(name for name, _ in self._fields)
         actual_names = tuple(raw_mapping.keys())
 
-        if set(actual_names) != set(expected_names) or len(actual_names) != len(expected_names):
+        if (
+            set(actual_names) != set(self._field_names)
+            or len(actual_names) != len(self._field_names)
+        ):
             msg = "record candidate keys must exactly match the declared fields"
             raise ValueError(msg)
 
@@ -117,15 +128,14 @@ class RecordSpace(
             msg = "record candidate must be canonical RecordCandidate"
             raise TypeError(msg)
 
-        expected_names = tuple(name for name, _ in self._fields)
         actual_names = tuple(candidate.keys())
 
-        if actual_names != expected_names:
+        if actual_names != self._field_names:
             msg = "record candidate keys must exactly match the declared fields"
             raise ValueError(msg)
 
-        for name, space in self._fields:
-            validate_child_space(space, candidate[name])
+        for index, (_name, space) in enumerate(self._fields):
+            validate_child_space(space, candidate.entries[index][1])
 
     @override
     def sample(self, random_state: np.random.RandomState) -> RecordCandidate:
@@ -185,7 +195,7 @@ class RecordSpace(
             msg = f"path {path!r} is invalid for record child traversal"
             raise TypeError(msg)
 
-        child_space = dict(self._fields).get(segment)
+        child_space = self._child_spaces_by_name.get(segment)
         if child_space is None:
             msg = f"path {path!r} references an unknown record field"
             raise TypeError(msg)
@@ -221,13 +231,14 @@ class RecordSpace(
             msg = f"path {path!r} is invalid for record candidate traversal"
             raise TypeError(msg)
 
-        child_space = dict(self._fields).get(segment)
-        if child_space is None:
+        field_index = self._field_indices.get(segment)
+        if field_index is None:
             msg = f"path {path!r} references an unknown record field"
             raise TypeError(msg)
+        child_space = self._fields[field_index][1]
         return leaf_value_at_child_space(
             child_space,
-            candidate[segment],
+            candidate.entries[field_index][1],
             path[1:],
         )
 
@@ -256,18 +267,23 @@ class RecordSpace(
         if len(grouped_replacements) == 0:
             return candidate
 
+        for segment in grouped_replacements:
+            if not isinstance(segment, str) or segment not in self._child_spaces_by_name:
+                msg = f"replacement path references an unknown record field: {segment!r}"
+                raise TypeError(msg)
+
         replaced_entries: list[tuple[str, SpaceCandidateValue]] = []
-        for name, child_space in self._fields:
+        for index, (name, child_space) in enumerate(self._fields):
             child_replacements = grouped_replacements.get(name)
             if child_replacements is None:
-                replaced_entries.append((name, candidate[name]))
+                replaced_entries.append((name, candidate.entries[index][1]))
                 continue
             replaced_entries.append(
                 (
                     name,
                     replace_leaf_values_in_child_space(
                         child_space,
-                        candidate[name],
+                        candidate.entries[index][1],
                         child_replacements,
                     ),
                 )

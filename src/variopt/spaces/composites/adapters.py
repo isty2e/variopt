@@ -731,11 +731,17 @@ def group_child_replacements(
     dict[int | str, dict[LeafPath, SpaceCandidateValue]]
         Nested mapping keyed by the first path segment, with the remainder of
         each path stored relative to that child.
+
+    Raises
+    ------
+    TypeError
+        If a replacement path does not identify a child segment.
     """
     grouped: dict[int | str, dict[LeafPath, SpaceCandidateValue]] = {}
     for path, replacement in replacements.items():
         if len(path) == 0:
-            continue
+            msg = "composite replacement paths must include at least one segment"
+            raise TypeError(msg)
         head = path[0]
         tail = path[1:]
         if head not in grouped:

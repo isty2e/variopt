@@ -3,6 +3,7 @@
 from collections.abc import Callable, Sequence
 
 import numpy as np
+import pytest
 from typing_extensions import override
 
 from variopt import Observation, Proposal
@@ -13,6 +14,7 @@ from variopt.algorithms.population.csa import (
     CSAAdaptivePotentialAxis,
     CSABankGrowthPolicy,
     CSABankUpdatePolicy,
+    CSABiasedPotential,
     CSAClusteringPolicy,
     CSACutoffSchedule,
     CSANicheQualityPolicy,
@@ -25,6 +27,12 @@ from variopt.algorithms.population.csa.banking.clustering import (
 from variopt.algorithms.population.csa.banking.growth import (
     CSABankGrowthState,
 )
+from variopt.algorithms.population.csa.banking.queries import (
+    BankDistanceWorkspace,
+    crowded_indices,
+    crowding_aware_scores,
+)
+from variopt.algorithms.population.csa.banking.update import logic as bank_update_logic
 from variopt.algorithms.population.csa.banking.update.logic import (
     apply_bank_update_batch,
     initialize_cutoff_if_needed,
@@ -46,6 +54,8 @@ from variopt.algorithms.population.csa.scoring.acceptance_state import (
 )
 from variopt.algorithms.population.csa.scoring.model_state import (
     CSAScoreModelState,
+    ScoredBank,
+    ScoredTrial,
 )
 from variopt.diversity import DiversityMetric
 
@@ -56,6 +66,29 @@ class AbsoluteDistance(DiversityMetric[int]):
     @override
     def distance(self, left: int, right: int) -> float:
         return float(abs(left - right))
+
+
+class CountingAbsoluteDistance(AbsoluteDistance):
+    """Absolute-value distance that records every concrete distance call."""
+
+    call_count: int
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.call_count += 1
+        return super().distance(left, right)
+
+
+class RejectingDistance(DiversityMetric[int]):
+    """Distance metric that fails if workspace caching is bypassed."""
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        _ = (left, right)
+        raise AssertionError("distance should be served by the workspace")
 
 
 class CSAClusteringRuntimeTests:
@@ -615,6 +648,212 @@ class CSAClusteringRuntimeTests:
         )
         assert len(best_mean_result.bank.entries) == 4
 
+    def test_bank_distance_workspace_is_shared_across_scoring_and_crowding(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+
+        batch_result = run_cluster_batch(
+            bank=Bank(
+                capacity=3,
+                entries=(
+                    BankEntry(candidate=0, value=50.0),
+                    BankEntry(candidate=1, value=40.0),
+                    BankEntry(candidate=100, value=100.0),
+                ),
+            ),
+            observation=Observation(
+                proposal=Proposal(candidate=20, proposal_id="p-1"),
+                candidate=20,
+                value=60.0,
+                score=60.0,
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(),
+            ),
+            distance_cutoff=2.0,
+            score_model=CSAScoreModel(
+                biased_potential=CSABiasedPotential(
+                    maximum_bias=1.0,
+                    sigma=1.0,
+                    sigma_reference="constant",
+                ),
+            ),
+            update_policy=CSABankUpdatePolicy(
+                far_update_mode="crowding_aware",
+                crowding_penalty_ratio=1.0,
+                niche_quality_policy=CSANicheQualityPolicy(
+                    mode="best_mean",
+                    ratio=1.0,
+                ),
+            ),
+            diversity_metric=diversity_metric,
+        )
+
+        assert len(batch_result.bank.entries) == 3
+        expected_trial_bank_distances = 3
+        expected_bank_pair_distances = 3
+        assert (
+            diversity_metric.call_count
+            == expected_trial_bank_distances + expected_bank_pair_distances
+        )
+
+    def test_crowding_aware_scores_reuse_supplied_distance_workspace(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=10.0),
+            BankEntry(candidate=1, value=20.0),
+            BankEntry(candidate=2, value=30.0),
+        )
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=RejectingDistance(),
+        )
+        distance_workspace.distances.update(
+            {
+                (0, 1): 1.0,
+                (0, 2): 4.0,
+                (1, 2): 1.0,
+            }
+        )
+
+        scores = crowding_aware_scores(
+            base_scores=(10.0, 20.0, 30.0),
+            entries=entries,
+            diversity_metric=RejectingDistance(),
+            distance_cutoff=2.0,
+            penalty_ratio=1.0,
+            niche_quality_policy=CSANicheQualityPolicy(
+                mode="best_mean",
+                ratio=1.0,
+            ),
+            distance_workspace=distance_workspace,
+        )
+
+        assert len(scores) == 3
+        assert scores != (10.0, 20.0, 30.0)
+
+    def test_crowded_indices_reuse_supplied_distance_workspace(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=10.0),
+            BankEntry(candidate=1, value=20.0),
+            BankEntry(candidate=2, value=30.0),
+        )
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=RejectingDistance(),
+        )
+        distance_workspace.distances.update(
+            {
+                (0, 1): 1.0,
+                (0, 2): 4.0,
+                (1, 2): 1.0,
+            }
+        )
+
+        indices = crowded_indices(
+            entries=entries,
+            diversity_metric=RejectingDistance(),
+            distance_cutoff=2.0,
+            distance_workspace=distance_workspace,
+        )
+
+        assert indices == frozenset({0, 1, 2})
+
+    def test_worst_far_update_does_not_prepare_bank_distance_workspace(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+
+        batch_result = run_cluster_batch(
+            bank=Bank(
+                capacity=3,
+                entries=(
+                    BankEntry(candidate=0, value=50.0),
+                    BankEntry(candidate=1, value=40.0),
+                    BankEntry(candidate=100, value=100.0),
+                ),
+            ),
+            observation=Observation(
+                proposal=Proposal(candidate=20, proposal_id="p-1"),
+                candidate=20,
+                value=60.0,
+                score=60.0,
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(),
+            ),
+            distance_cutoff=2.0,
+            update_policy=CSABankUpdatePolicy(far_update_mode="worst"),
+            diversity_metric=diversity_metric,
+        )
+
+        assert len(batch_result.bank.entries) == 3
+        assert diversity_metric.call_count == 3
+
+    def test_full_bank_update_rejects_bank_replacement_without_growth(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def replace_without_growth(
+            *,
+            state: CSABankGrowthState[int],
+            bank: Bank[int],
+            observation: Observation[int],
+            scored_bank: ScoredBank[int],
+            trial: ScoredTrial[int],
+            nearest_distance: float,
+            active_distance_cutoff: float,
+            adaptive_potential_active: bool,
+        ) -> tuple[Bank[int], CSABankGrowthState[int], bool]:
+            _ = (
+                observation,
+                scored_bank,
+                trial,
+                nearest_distance,
+                active_distance_cutoff,
+                adaptive_potential_active,
+            )
+            return (
+                Bank(
+                    capacity=bank.capacity,
+                    entries=bank.entries,
+                ),
+                state,
+                False,
+            )
+
+        monkeypatch.setattr(
+            bank_update_logic,
+            "try_append_growth_entry",
+            replace_without_growth,
+        )
+
+        with pytest.raises(RuntimeError, match="must not replace the bank"):
+            _ = run_cluster_batch(
+                bank=Bank(
+                    capacity=3,
+                    entries=(
+                        BankEntry(candidate=0, value=50.0),
+                        BankEntry(candidate=1, value=40.0),
+                        BankEntry(candidate=100, value=100.0),
+                    ),
+                ),
+                observation=Observation(
+                    proposal=Proposal(candidate=20, proposal_id="p-1"),
+                    candidate=20,
+                    value=60.0,
+                    score=60.0,
+                ),
+                clustering_state=CSAClusteringState(
+                    policy=CSAClusteringPolicy(),
+                ),
+                distance_cutoff=2.0,
+                score_model=CSAScoreModel(
+                    biased_potential=CSABiasedPotential(
+                        maximum_bias=1.0,
+                        sigma=1.0,
+                        sigma_reference="constant",
+                    ),
+                ),
+            )
+
+
 def run_cluster_batch(
     *,
     bank: Bank[int],
@@ -623,6 +862,7 @@ def run_cluster_batch(
     distance_cutoff: float,
     score_model: CSAScoreModel[int] | None = None,
     update_policy: CSABankUpdatePolicy | None = None,
+    diversity_metric: DiversityMetric[int] | None = None,
 ) -> BankUpdateResult[int]:
     resolved_score_model: CSAScoreModel[int]
     if score_model is None:
@@ -650,7 +890,11 @@ def run_cluster_batch(
             ),
         ),
         observations=(observation,),
-        diversity_metric=AbsoluteDistance(),
+        diversity_metric=(
+            AbsoluteDistance()
+            if diversity_metric is None
+            else diversity_metric
+        ),
         infer_average_distance=lambda entries: infer_average_distance(entries),
         infer_score_gap=infer_constant_score_gap,
         cutoff_schedule=CSACutoffSchedule(

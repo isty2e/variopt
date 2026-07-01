@@ -266,6 +266,10 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
         query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
         proposal_index: int,
         proposal: Proposal[ContinuousCandidateT],
+        codec_provider: Callable[
+            [],
+            ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT],
+        ],
         runner: Callable[
             [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
             tuple[EvaluationOutcome[ContinuousCandidateT], ...],
@@ -286,10 +290,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 runner=runner,
             )
 
-        codec = ContinuousStructuredSpaceCodec[
-            BoundaryT,
-            ContinuousCandidateT,
-        ].from_space(query.problem.space)
+        codec = codec_provider()
         initial_coordinates = codec.coordinates_from_candidate(proposal.candidate)
         evaluation_count = 0
 
@@ -365,11 +366,29 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
         tuple[EvaluationOutcome[ContinuousCandidateT], ...]
             Locally improved outcomes aligned to ``query.proposals``.
         """
+        prepared_codec: ContinuousStructuredSpaceCodec[
+            BoundaryT,
+            ContinuousCandidateT,
+        ] | None = None
+
+        def codec_provider() -> ContinuousStructuredSpaceCodec[
+            BoundaryT,
+            ContinuousCandidateT,
+        ]:
+            nonlocal prepared_codec
+            if prepared_codec is None:
+                prepared_codec = ContinuousStructuredSpaceCodec[
+                    BoundaryT,
+                    ContinuousCandidateT,
+                ].from_space(query.problem.space)
+            return prepared_codec
+
         return tuple(
             self._optimize_proposal(
                 query=query,
                 proposal_index=proposal_index,
                 proposal=proposal,
+                codec_provider=codec_provider,
                 runner=runner,
             )
             for proposal_index, proposal in enumerate(query.proposals)

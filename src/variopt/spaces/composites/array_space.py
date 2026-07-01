@@ -189,7 +189,7 @@ class ArraySpace(
             raise TypeError(msg)
 
         segment = path[0]
-        if not isinstance(segment, int):
+        if type(segment) is not int:
             msg = f"path {path!r} is invalid for array child traversal"
             raise TypeError(msg)
 
@@ -228,7 +228,7 @@ class ArraySpace(
             raise TypeError(msg)
 
         segment = path[0]
-        if not isinstance(segment, int):
+        if type(segment) is not int:
             msg = f"path {path!r} is invalid for array candidate traversal"
             raise TypeError(msg)
 
@@ -266,6 +266,11 @@ class ArraySpace(
         grouped_replacements = group_child_replacements(replacements)
         if len(grouped_replacements) == 0:
             return candidate
+
+        for segment in grouped_replacements:
+            if type(segment) is not int or segment < 0 or segment >= self.length:
+                msg = f"replacement path references an invalid array index: {segment!r}"
+                raise TypeError(msg)
 
         replaced_children = list(candidate)
         for index, child_candidate in enumerate(candidate):

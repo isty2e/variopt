@@ -232,6 +232,7 @@ def crowded_indices(
     entries: Sequence[CandidateEntry[CandidateT]],
     diversity_metric: DiversityMetric[CandidateT],
     distance_cutoff: float,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> frozenset[int]:
     """Return entry indices that already have a near neighbor inside the bank.
 
@@ -243,21 +244,27 @@ def crowded_indices(
         Diversity metric used to compute pairwise distances.
     distance_cutoff : float
         Distance threshold below which two entries are considered neighbors.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local pairwise distance workspace aligned to
+        ``entries``.
 
     Returns
     -------
     frozenset[int]
         Entry indices that have at least one near neighbor.
     """
+    counts = (
+        crowding_counts(
+            entries=entries,
+            diversity_metric=diversity_metric,
+            distance_cutoff=distance_cutoff,
+        )
+        if distance_workspace is None
+        else distance_workspace.crowding_counts(distance_cutoff=distance_cutoff)
+    )
     return frozenset(
         index
-        for index, count in enumerate(
-            crowding_counts(
-                entries=entries,
-                diversity_metric=diversity_metric,
-                distance_cutoff=distance_cutoff,
-            )
-        )
+        for index, count in enumerate(counts)
         if count > 0
     )
 
@@ -314,6 +321,7 @@ def crowding_aware_scores(
     distance_cutoff: float,
     penalty_ratio: float,
     niche_quality_policy: CSANicheQualityPolicy,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> tuple[float, ...]:
     """Bias removal scores toward crowded entries with comparable quality.
 
@@ -331,6 +339,9 @@ def crowding_aware_scores(
         Relative strength of the crowding penalty.
     niche_quality_policy : CSANicheQualityPolicy
         Additional niche-quality policy used to bias removal scores.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local pairwise distance workspace aligned to
+        ``entries``.
 
     Returns
     -------
@@ -354,18 +365,25 @@ def crowding_aware_scores(
     if len(entries) == 0:
         return tuple(base_scores)
 
-    if niche_quality_policy.mode == "disabled" or niche_quality_policy.ratio == 0.0:
-        distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
+    niche_quality_enabled = (
+        niche_quality_policy.mode != "disabled"
+        and niche_quality_policy.ratio != 0.0
+    )
+    if penalty_ratio == 0.0 and not niche_quality_enabled:
+        return tuple(base_scores)
+
+    if distance_workspace is None and niche_quality_enabled:
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+    if distance_workspace is None:
         counts = crowding_counts(
             entries=entries,
             diversity_metric=diversity_metric,
             distance_cutoff=distance_cutoff,
         )
     else:
-        distance_workspace = BankDistanceWorkspace(
-            entries=entries,
-            diversity_metric=diversity_metric,
-        )
         counts = distance_workspace.crowding_counts(distance_cutoff=distance_cutoff)
     maximum_count = max(counts, default=0)
     if maximum_count == 0:
