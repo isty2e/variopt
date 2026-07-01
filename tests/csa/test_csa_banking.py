@@ -41,6 +41,7 @@ from variopt.algorithms.population.csa.banking.queries import (
     best_mean_niche_scores,
     crowding_aware_scores,
 )
+from variopt.algorithms.population.csa.scoring.model_state import CSAScoreModelState
 
 
 class CountingDistance(DiversityMetric[int]):
@@ -118,6 +119,86 @@ class BankUpdatePolicyTests:
         assert second_distance == 3.0
         assert metric.call_count == 1
 
+    def test_distance_workspace_self_distance_skips_metric(self) -> None:
+        entries = (BankEntry(candidate=1, value=1.0),)
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        distance = workspace.distance(0, 0)
+
+        assert distance == 0.0
+        assert metric.call_count == 0
+
+    def test_score_bank_distance_workspace_preserves_biased_scores(self) -> None:
+        entries: tuple[BankEntry[int], ...] = (
+            BankEntry(candidate=0, value=1.0),
+            BankEntry(candidate=2, value=2.0),
+            BankEntry(candidate=5, value=3.0),
+        )
+        score_model: CSAScoreModel[int] = CSAScoreModel(
+            biased_potential=CSABiasedPotential(
+                maximum_bias=2.0,
+                sigma=1.0,
+                sigma_reference="constant",
+            ),
+        )
+        reference_runtime: CSAScoreModelState[int] = CSAScoreModelState(
+            score_model=score_model,
+        )
+        workspace_runtime: CSAScoreModelState[int] = CSAScoreModelState(
+            score_model=score_model,
+        )
+        workspace_metric = CountingDistance()
+        distance_workspace: BankDistanceWorkspace[int] = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=workspace_metric,
+        )
+
+        reference_scores, _ = reference_runtime.score_bank(
+            entries=entries,
+            diversity_metric=CountingDistance(),
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=None,
+            masked_entry_indices=frozenset(),
+        )
+        workspace_scores, _ = workspace_runtime.score_bank(
+            entries=entries,
+            diversity_metric=workspace_metric,
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=None,
+            masked_entry_indices=frozenset(),
+            distance_workspace=distance_workspace,
+        )
+
+        assert workspace_scores == reference_scores
+        assert workspace_metric.call_count == 3
+
+    def test_score_bank_ignores_workspace_without_biased_potential(self) -> None:
+        entries: tuple[BankEntry[int], ...] = (
+            BankEntry(candidate=0, value=1.0),
+            BankEntry(candidate=2, value=2.0),
+        )
+        metric = CountingDistance()
+        distance_workspace: BankDistanceWorkspace[int] = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=metric,
+        )
+        score_model: CSAScoreModel[int] = CSAScoreModel()
+        runtime: CSAScoreModelState[int] = CSAScoreModelState(score_model=score_model)
+
+        scored_bank, _ = runtime.score_bank(
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=None,
+            masked_entry_indices=frozenset(),
+            distance_workspace=distance_workspace,
+        )
+
+        assert scored_bank.real_scores == (1.0, 2.0)
+        assert scored_bank.shaped_scores == (1.0, 2.0)
+        assert metric.call_count == 0
+
     def test_single_entry_distance_workspace_crowding_skips_metric(self) -> None:
         entries = (BankEntry(candidate=1, value=1.0),)
         metric = CountingDistance()
@@ -144,6 +225,103 @@ class BankUpdatePolicyTests:
         )
 
         assert scores == ()
+        assert metric.call_count == 0
+
+    def test_crowding_aware_zero_effect_policy_skips_distance_metric(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+        )
+        metric = CountingDistance()
+
+        scores = crowding_aware_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+            penalty_ratio=0.0,
+            niche_quality_policy=CSANicheQualityPolicy(),
+        )
+
+        assert scores == (5.0, 3.0)
+        assert metric.call_count == 0
+
+    def test_crowding_aware_zero_effect_policy_ignores_supplied_workspace(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+        )
+        metric = CountingDistance()
+        distance_workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        scores = crowding_aware_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+            penalty_ratio=0.0,
+            niche_quality_policy=CSANicheQualityPolicy(),
+            distance_workspace=distance_workspace,
+        )
+
+        assert scores == (5.0, 3.0)
+        assert metric.call_count == 0
+
+    def test_crowding_aware_zero_penalty_keeps_enabled_niche_quality(self) -> None:
+        entries = (
+            BankEntry(candidate=0, value=5.0),
+            BankEntry(candidate=1, value=3.0),
+            BankEntry(candidate=10, value=1.0),
+        )
+        metric = CountingDistance()
+
+        scores = crowding_aware_scores(
+            base_scores=tuple(entry.value for entry in entries),
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=3.0,
+            penalty_ratio=0.0,
+            niche_quality_policy=CSANicheQualityPolicy(
+                mode="mean",
+                ratio=1.0,
+            ),
+        )
+
+        assert scores != (5.0, 3.0, 1.0)
+        assert metric.call_count == 3
+
+    def test_crowding_aware_rejects_negative_penalty_before_empty_fast_path(self) -> None:
+        with pytest.raises(ValueError, match="penalty_ratio must be non-negative"):
+            _ = crowding_aware_scores(
+                base_scores=(),
+                entries=(),
+                diversity_metric=CountingDistance(),
+                distance_cutoff=3.0,
+                penalty_ratio=-0.1,
+                niche_quality_policy=CSANicheQualityPolicy(),
+            )
+
+    def test_crowding_aware_rejects_length_mismatch_before_zero_fast_path(self) -> None:
+        entries = (BankEntry(candidate=0, value=5.0),)
+
+        with pytest.raises(ValueError, match="base_scores and entries must have the same length"):
+            _ = crowding_aware_scores(
+                base_scores=(),
+                entries=entries,
+                diversity_metric=CountingDistance(),
+                distance_cutoff=3.0,
+                penalty_ratio=0.0,
+                niche_quality_policy=CSANicheQualityPolicy(),
+            )
+
+    def test_distance_workspace_rejects_negative_cutoff_before_metric_call(self) -> None:
+        entries = (BankEntry(candidate=1, value=1.0),)
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        with pytest.raises(ValueError, match="distance_cutoff must be non-negative"):
+            _ = workspace.crowding_counts(distance_cutoff=-1.0)
+
         assert metric.call_count == 0
 
     def test_best_mean_niche_scores_reuses_pairwise_distances(self) -> None:

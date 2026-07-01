@@ -291,6 +291,32 @@ class SearchSpaceTests:
             _ = space.replace_leaf_values(candidate, {(0,): 1})
         space.validate(candidate)
 
+    def test_permutation_space_rejects_bool_leaf_path_index(self) -> None:
+        space = PermutationSpace(size=4)
+        candidate = space.normalize([0, 1, 2, 3])
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path((True,))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, (True,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(True,): 2})
+
+    def test_permutation_space_rejects_empty_leaf_path(self) -> None:
+        space = PermutationSpace(size=4)
+        candidate = space.normalize([0, 1, 2, 3])
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path(())
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, ())
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(): 2})
+
     def test_record_space_returns_record_candidate(self) -> None:
         space = RecordSpace(
             depth=IntegerSpace(1, 4),
@@ -313,6 +339,16 @@ class SearchSpaceTests:
         candidate = space.normalize({"scale": 1, "depth": 2})
 
         assert candidate.entries == (("depth", 2), ("scale", 1.0))
+
+    def test_record_space_rejects_reordered_canonical_candidate(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            scale=RealSpace(0.0, 2.0),
+        )
+        candidate = RecordCandidate(entries=(("scale", 1.0), ("depth", 2)))
+
+        with pytest.raises(ValueError):
+            space.validate(candidate)
 
     def test_record_space_is_idempotent_for_canonical_candidate(self) -> None:
         space = RecordSpace(level=IntegerSpace(0, 3))
@@ -383,6 +419,39 @@ class SearchSpaceTests:
 
         assert replaced == (3, 0.5)
 
+    def test_tuple_space_replace_leaf_values_rejects_unknown_index(self) -> None:
+        space = TupleSpace(IntegerSpace(0, 5), RealSpace(-1.0, 1.0))
+        candidate = space.normalize([3, 0])
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path((2,))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, (2,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(2,): 4})
+
+    def test_tuple_space_rejects_bool_leaf_path_index(self) -> None:
+        space = TupleSpace(IntegerSpace(0, 5), RealSpace(-1.0, 1.0))
+        candidate = space.normalize([3, 0])
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path((True,))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, (True,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(True,): 4})
+
+    def test_tuple_space_replace_leaf_values_rejects_empty_path(self) -> None:
+        space = TupleSpace(IntegerSpace(0, 5), RealSpace(-1.0, 1.0))
+        candidate = space.normalize([3, 0])
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(): 4})
+
     def test_record_space_replace_leaf_values_updates_only_touched_field(self) -> None:
         space = RecordSpace(
             depth=IntegerSpace(1, 4),
@@ -393,6 +462,55 @@ class SearchSpaceTests:
         replaced = space.replace_leaf_values(candidate, {("depth",): 3})
 
         assert replaced.entries == (("depth", 3), ("scale", 1.0))
+
+    def test_record_space_replace_leaf_values_rejects_unknown_field_path(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            scale=RealSpace(0.0, 2.0),
+        )
+        candidate = space.normalize({"depth": 2, "scale": 1})
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {("missing",): 3})
+
+    def test_record_space_rejects_non_string_leaf_path_segment(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            scale=RealSpace(0.0, 2.0),
+        )
+        candidate = space.normalize({"depth": 2, "scale": 1})
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path((0,))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, (0,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(0,): 3})
+
+    def test_record_space_replace_leaf_values_rejects_empty_path(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            scale=RealSpace(0.0, 2.0),
+        )
+        candidate = space.normalize({"depth": 2, "scale": 1})
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(): 3})
+
+    def test_record_space_nested_replace_leaf_values_rejects_unknown_child_path(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            schedule=TupleSpace(IntegerSpace(0, 3), RealSpace(0.0, 2.0)),
+        )
+        candidate = space.normalize({"depth": 2, "schedule": [1, 1.0]})
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {("schedule", 2): 1.5})
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {("schedule",): 1.5})
 
     def test_record_space_uses_field_indices_for_internal_candidate_access(
         self,
@@ -432,6 +550,46 @@ class SearchSpaceTests:
 
         assert replaced == (1, 7, 3)
 
+    def test_array_space_replace_leaf_values_rejects_unknown_index(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=3)
+        candidate = space.normalize([1, 2, 3])
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(3,): 7})
+
+    def test_array_space_rejects_negative_leaf_path_index(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=3)
+        candidate = space.normalize([1, 2, 3])
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path((-1,))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, (-1,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(-1,): 7})
+
+    def test_array_space_rejects_bool_leaf_path_index(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=3)
+        candidate = space.normalize([1, 2, 3])
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_space_at_path((True,))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path(candidate, (True,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(True,): 7})
+
+    def test_array_space_replace_leaf_values_rejects_empty_path(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=3)
+        candidate = space.normalize([1, 2, 3])
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values(candidate, {(): 7})
+
     def test_array_space_replace_leaf_values_supports_pair_update(self) -> None:
         space = ArraySpace(IntegerSpace(0, 9), length=4)
         candidate = space.normalize([1, 2, 3, 4])
@@ -439,6 +597,18 @@ class SearchSpaceTests:
         replaced = space.replace_leaf_values(candidate, {(0,): 8, (3,): 5})
 
         assert replaced == (8, 2, 3, 5)
+
+    def test_composite_replace_leaf_values_empty_mapping_returns_same_candidate(self) -> None:
+        tuple_space = TupleSpace(IntegerSpace(0, 5), RealSpace(-1.0, 1.0))
+        record_space = RecordSpace(depth=IntegerSpace(1, 4), scale=RealSpace(0.0, 2.0))
+        array_space = ArraySpace(IntegerSpace(0, 9), length=3)
+        tuple_candidate = tuple_space.normalize([3, 0])
+        record_candidate = record_space.normalize({"depth": 2, "scale": 1})
+        array_candidate = array_space.normalize([1, 2, 3])
+
+        assert tuple_space.replace_leaf_values(tuple_candidate, {}) is tuple_candidate
+        assert record_space.replace_leaf_values(record_candidate, {}) is record_candidate
+        assert array_space.replace_leaf_values(array_candidate, {}) is array_candidate
 
     def test_record_space_sampling_is_valid(self) -> None:
         space = RecordSpace(

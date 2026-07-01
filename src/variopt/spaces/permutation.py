@@ -169,7 +169,7 @@ class PermutationSpace(
         StructuredLeafSpace
             Integer leaf space for the indexed permutation position.
         """
-        if len(path) != 1 or not isinstance(path[0], int):
+        if len(path) != 1 or type(path[0]) is not int:
             msg = f"path {path!r} is invalid for permutation traversal"
             raise TypeError(msg)
         if path[0] < 0 or path[0] >= self.size:
@@ -198,7 +198,7 @@ class PermutationSpace(
             Integer value stored at ``path``.
         """
         self.validate(candidate)
-        if len(path) != 1 or not isinstance(path[0], int):
+        if len(path) != 1 or type(path[0]) is not int:
             msg = f"path {path!r} is invalid for permutation candidate traversal"
             raise TypeError(msg)
         if path[0] < 0 or path[0] >= self.size:
@@ -229,7 +229,7 @@ class PermutationSpace(
         self.validate(candidate)
         values = list(candidate)
         for path, replacement in replacements.items():
-            if len(path) != 1 or not isinstance(path[0], int):
+            if len(path) != 1 or type(path[0]) is not int:
                 msg = f"path {path!r} is invalid for permutation replacement"
                 raise TypeError(msg)
             if path[0] < 0 or path[0] >= self.size:

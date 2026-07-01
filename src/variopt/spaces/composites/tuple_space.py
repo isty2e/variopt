@@ -165,10 +165,13 @@ class TupleSpace(
             raise TypeError(msg)
 
         segment = path[0]
-        if not isinstance(segment, int):
+        if type(segment) is not int:
             msg = f"path {path!r} is invalid for tuple child traversal"
             raise TypeError(msg)
 
+        if segment < 0 or segment >= len(self._spaces):
+            msg = f"path {path!r} references an out-of-bounds tuple index"
+            raise TypeError(msg)
         return self._spaces[segment].leaf_space_at_path(path[1:])
 
     @override
@@ -197,10 +200,13 @@ class TupleSpace(
             raise TypeError(msg)
 
         segment = path[0]
-        if not isinstance(segment, int):
+        if type(segment) is not int:
             msg = f"path {path!r} is invalid for tuple candidate traversal"
             raise TypeError(msg)
 
+        if segment < 0 or segment >= len(self._spaces):
+            msg = f"path {path!r} references an out-of-bounds tuple index"
+            raise TypeError(msg)
         return leaf_value_at_child_space(
             self._spaces[segment],
             candidate[segment],
@@ -231,6 +237,11 @@ class TupleSpace(
         grouped_replacements = group_child_replacements(replacements)
         if len(grouped_replacements) == 0:
             return candidate
+
+        for segment in grouped_replacements:
+            if type(segment) is not int or segment < 0 or segment >= len(self._spaces):
+                msg = f"replacement path references an invalid tuple index: {segment!r}"
+                raise TypeError(msg)
 
         replaced_children = list(candidate)
         for index, child_space in enumerate(self._spaces):

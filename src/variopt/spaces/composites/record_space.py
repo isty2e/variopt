@@ -267,6 +267,11 @@ class RecordSpace(
         if len(grouped_replacements) == 0:
             return candidate
 
+        for segment in grouped_replacements:
+            if not isinstance(segment, str) or segment not in self._child_spaces_by_name:
+                msg = f"replacement path references an unknown record field: {segment!r}"
+                raise TypeError(msg)
+
         replaced_entries: list[tuple[str, SpaceCandidateValue]] = []
         for index, (name, child_space) in enumerate(self._fields):
             child_replacements = grouped_replacements.get(name)

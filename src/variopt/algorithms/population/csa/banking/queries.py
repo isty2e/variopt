@@ -369,6 +369,9 @@ def crowding_aware_scores(
         niche_quality_policy.mode != "disabled"
         and niche_quality_policy.ratio != 0.0
     )
+    if penalty_ratio == 0.0 and not niche_quality_enabled:
+        return tuple(base_scores)
+
     if distance_workspace is None and niche_quality_enabled:
         distance_workspace = BankDistanceWorkspace(
             entries=entries,
