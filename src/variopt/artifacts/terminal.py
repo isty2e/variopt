@@ -1,7 +1,7 @@
 """Terminal-surface artifact definitions."""
 
 from collections.abc import Sequence
-from dataclasses import InitVar, dataclass, field
+from dataclasses import InitVar, dataclass, field, fields
 from typing import Generic, TypeVar, cast
 
 from typing_extensions import Self
@@ -16,23 +16,86 @@ from .refinement import CandidateRefinement, require_matching_refined_candidate
 RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
 
 
+def _refinement_validation_pairs(
+    *,
+    records: Sequence[RequestAlignedEvaluationRecord],
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...],
+) -> tuple[tuple[CandidateT, CandidateT], ...]:
+    validation_pairs: list[tuple[CandidateT, CandidateT]] = []
+    for record, refinement in zip(records, refinements, strict=True):
+        if refinement is None:
+            continue
+
+        validation_pairs.append(
+            (
+                cast(CandidateT, record.candidate),
+                refinement.refined_candidate,
+            ),
+        )
+
+    return tuple(validation_pairs)
+
+
+def _refinement_pairs_are_prevalidated(
+    *,
+    current_pairs: tuple[tuple[CandidateT, CandidateT], ...],
+    validated_pairs: tuple[tuple[CandidateT, CandidateT], ...],
+) -> bool:
+    if len(current_pairs) != len(validated_pairs):
+        return False
+
+    return all(
+        current_record_candidate is validated_record_candidate
+        and current_refined_candidate is validated_refined_candidate
+        for (
+            current_record_candidate,
+            current_refined_candidate,
+        ), (
+            validated_record_candidate,
+            validated_refined_candidate,
+        ) in zip(current_pairs, validated_pairs, strict=True)
+    )
+
+
 def _normalize_refinements(
     *,
     records: Sequence[RequestAlignedEvaluationRecord],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
     record_label: str,
     candidate_equal: CandidateEquality[CandidateT] | None,
-) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+    candidate_equal_required: bool = False,
+    validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = (),
+) -> tuple[
+    tuple[CandidateRefinement[CandidateT] | None, ...],
+    tuple[tuple[CandidateT, CandidateT], ...],
+]:
     refinement_tuple = tuple(refinements)
     if refinement_tuple == ():
-        return ()
+        return (), ()
 
     if len(refinement_tuple) != len(records):
         msg = f"refinements must be empty or align with {record_label}"
         raise ValueError(msg)
 
     if all(refinement is None for refinement in refinement_tuple):
-        return ()
+        return (), ()
+
+    current_refinement_pairs = _refinement_validation_pairs(
+        records=records,
+        refinements=refinement_tuple,
+    )
+    if _refinement_pairs_are_prevalidated(
+        current_pairs=current_refinement_pairs,
+        validated_pairs=validated_refinement_pairs,
+    ):
+        return refinement_tuple, current_refinement_pairs
+
+    if candidate_equal is None and candidate_equal_required:
+        msg = (
+            "candidate_equal is required to revalidate refinement alignment after "
+            "changing an explicitly compared terminal surface"
+        )
+        raise TypeError(msg)
 
     for record, refinement in zip(records, refinement_tuple, strict=True):
         if refinement is None:
@@ -48,7 +111,50 @@ def _normalize_refinements(
             candidate_equal=candidate_equal,
         )
 
-    return refinement_tuple
+    return refinement_tuple, current_refinement_pairs
+
+
+def _normalize_terminal_refinements(
+    *,
+    records: Sequence[RequestAlignedEvaluationRecord],
+    refinements: Sequence[CandidateRefinement[CandidateT] | None],
+    record_label: str,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+    carried_candidate_equal: CandidateEquality[CandidateT] | None,
+    candidate_equal_required: bool,
+    validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...],
+) -> tuple[
+    CandidateEquality[CandidateT] | None,
+    bool,
+    tuple[CandidateRefinement[CandidateT] | None, ...],
+    tuple[tuple[CandidateT, CandidateT], ...],
+]:
+    effective_candidate_equal = candidate_equal
+    if effective_candidate_equal is None:
+        effective_candidate_equal = carried_candidate_equal
+
+    next_candidate_equal_required = (
+        candidate_equal_required or effective_candidate_equal is not None
+    )
+    effective_validated_pairs = validated_refinement_pairs
+    if candidate_equal is not None:
+        effective_validated_pairs = ()
+
+    normalized_refinements, next_validated_pairs = _normalize_refinements(
+        records=records,
+        refinements=refinements,
+        record_label=record_label,
+        candidate_equal=effective_candidate_equal,
+        candidate_equal_required=next_candidate_equal_required,
+        validated_refinement_pairs=effective_validated_pairs,
+    )
+
+    return (
+        effective_candidate_equal,
+        next_candidate_equal_required,
+        normalized_refinements,
+        next_validated_pairs,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +250,24 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
+    _candidate_equal: CandidateEquality[CandidateT] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
+    _candidate_equal_required: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
+    _validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
 
     def __post_init__(
         self,
@@ -169,15 +293,27 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             msg = "evaluation_count must be at least the number of records"
             raise ValueError(msg)
 
+        (
+            effective_candidate_equal,
+            candidate_equal_required,
+            normalized_refinements,
+            validated_refinement_pairs,
+        ) = _normalize_terminal_refinements(
+            records=self.records,
+            refinements=self.refinements,
+            record_label="records",
+            candidate_equal=candidate_equal,
+            carried_candidate_equal=self._candidate_equal,
+            candidate_equal_required=self._candidate_equal_required,
+            validated_refinement_pairs=self._validated_refinement_pairs,
+        )
+        object.__setattr__(self, "refinements", normalized_refinements)
+        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
+        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
         object.__setattr__(
             self,
-            "refinements",
-            _normalize_refinements(
-                records=self.records,
-                refinements=self.refinements,
-                record_label="records",
-                candidate_equal=candidate_equal,
-            ),
+            "_validated_refinement_pairs",
+            validated_refinement_pairs,
         )
 
     @classmethod
@@ -253,6 +389,24 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
+    _candidate_equal: CandidateEquality[CandidateT] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
+    _candidate_equal_required: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
+    _validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
 
     def __post_init__(
         self,
@@ -292,15 +446,27 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "best_observation must have the minimal observation score"
             raise ValueError(msg)
 
+        (
+            effective_candidate_equal,
+            candidate_equal_required,
+            normalized_refinements,
+            validated_refinement_pairs,
+        ) = _normalize_terminal_refinements(
+            records=self.observations,
+            refinements=self.refinements,
+            record_label="observations",
+            candidate_equal=candidate_equal,
+            carried_candidate_equal=self._candidate_equal,
+            candidate_equal_required=self._candidate_equal_required,
+            validated_refinement_pairs=self._validated_refinement_pairs,
+        )
+        object.__setattr__(self, "refinements", normalized_refinements)
+        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
+        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
         object.__setattr__(
             self,
-            "refinements",
-            _normalize_refinements(
-                records=self.observations,
-                refinements=self.refinements,
-                record_label="observations",
-                candidate_equal=candidate_equal,
-            ),
+            "_validated_refinement_pairs",
+            validated_refinement_pairs,
         )
 
     @classmethod
@@ -460,6 +626,24 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
+    _candidate_equal: CandidateEquality[CandidateT] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
+    _candidate_equal_required: bool = field(
+        default=False,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
+    _validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
 
     def __post_init__(
         self,
@@ -498,15 +682,27 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             )
             raise ValueError(msg)
 
+        (
+            effective_candidate_equal,
+            candidate_equal_required,
+            normalized_refinements,
+            validated_refinement_pairs,
+        ) = _normalize_terminal_refinements(
+            records=self.records,
+            refinements=self.refinements,
+            record_label="records",
+            candidate_equal=candidate_equal,
+            carried_candidate_equal=self._candidate_equal,
+            candidate_equal_required=self._candidate_equal_required,
+            validated_refinement_pairs=self._validated_refinement_pairs,
+        )
+        object.__setattr__(self, "refinements", normalized_refinements)
+        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
+        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
         object.__setattr__(
             self,
-            "refinements",
-            _normalize_refinements(
-                records=self.records,
-                refinements=self.refinements,
-                record_label="records",
-                candidate_equal=candidate_equal,
-            ),
+            "_validated_refinement_pairs",
+            validated_refinement_pairs,
         )
 
     @classmethod
@@ -585,3 +781,50 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             refinements=report.refinements,
             candidate_equal=candidate_equal,
         )
+
+
+def terminal_surface_getstate(self: FrozenGenericSlotsCompat) -> list[object | None]:
+    state: list[object | None] = []
+    for dataclass_field in fields(self):
+        if dataclass_field.name == "_candidate_equal":
+            state.append(None)
+            continue
+        state.append(getattr(self, dataclass_field.name, None))
+    return state
+
+
+def terminal_surface_setstate(
+    self: FrozenGenericSlotsCompat,
+    state: list[object | None],
+) -> None:
+    restored_names: set[str] = set()
+    dataclass_fields = fields(self)
+    for dataclass_field, value in zip(dataclass_fields, state):
+        restored_names.add(dataclass_field.name)
+        if dataclass_field.name == "_candidate_equal":
+            object.__setattr__(self, dataclass_field.name, None)
+            continue
+        object.__setattr__(self, dataclass_field.name, value)
+
+    for dataclass_field in dataclass_fields:
+        if dataclass_field.name in restored_names:
+            continue
+        if dataclass_field.name == "_candidate_equal":
+            object.__setattr__(self, dataclass_field.name, None)
+        elif dataclass_field.name == "_candidate_equal_required":
+            object.__setattr__(self, dataclass_field.name, False)
+        elif dataclass_field.name == "_validated_refinement_pairs":
+            object.__setattr__(self, dataclass_field.name, ())
+        else:
+            object.__setattr__(self, dataclass_field.name, None)
+
+
+setattr(RunReport, "__getstate__", terminal_surface_getstate)
+setattr(RunReport, "__setstate__", terminal_surface_setstate)
+setattr(RunResult, "__getstate__", terminal_surface_getstate)
+setattr(RunResult, "__setstate__", terminal_surface_setstate)
+setattr(NondominatedRunSurface, "__getstate__", terminal_surface_getstate)
+setattr(NondominatedRunSurface, "__setstate__", terminal_surface_setstate)
+
+del terminal_surface_getstate
+del terminal_surface_setstate

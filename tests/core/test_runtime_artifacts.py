@@ -900,6 +900,160 @@ class RuntimeArtifactsTests:
         assert report.refinements == (refinement,)
         assert surface.refinements == (refinement,)
 
+    def test_terminal_surface_replace_preserves_candidate_equality(self) -> None:
+        def reject_candidate_equal(
+            left_candidate: SpaceOwnedEqualityCandidate,
+            right_candidate: SpaceOwnedEqualityCandidate,
+        ) -> bool:
+            _ = left_candidate
+            _ = right_candidate
+            return False
+
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=observation.proposal,
+            candidate=observation.candidate,
+            objective_values=(1.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+        result = RunResult[SpaceOwnedEqualityCandidate].from_observations(
+            observations=(observation,),
+            refinements=(refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        report = RunReport[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ].from_records(
+            records=(observation,),
+            refinements=(refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        surface = NondominatedRunSurface[SpaceOwnedEqualityCandidate].from_records(
+            records=(vector_record,),
+            refinements=(refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        replacement_refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=(("replacement",),),
+        )
+        mismatched_refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(3),
+            changed_leaf_paths=(("mismatch",),),
+        )
+
+        updated_result = replace(result, refinements=(replacement_refinement,))
+        updated_report = replace(report, refinements=(replacement_refinement,))
+        updated_surface = replace(surface, refinements=(replacement_refinement,))
+
+        assert updated_result.refinements == (replacement_refinement,)
+        assert updated_report.refinements == (replacement_refinement,)
+        assert updated_surface.refinements == (replacement_refinement,)
+        with pytest.raises(ValueError, match="observations candidate"):
+            _ = replace(result, refinements=(mismatched_refinement,))
+        with pytest.raises(ValueError, match="records candidate"):
+            _ = replace(report, refinements=(mismatched_refinement,))
+        with pytest.raises(ValueError, match="records candidate"):
+            _ = replace(surface, refinements=(mismatched_refinement,))
+        with pytest.raises(ValueError, match="records candidate"):
+            _ = replace(report, candidate_equal=reject_candidate_equal)
+
+    def test_unpickled_run_report_requires_candidate_equal_for_new_refinement(
+        self,
+    ) -> None:
+        def local_candidate_equal(
+            left_candidate: SpaceOwnedEqualityCandidate,
+            right_candidate: SpaceOwnedEqualityCandidate,
+        ) -> bool:
+            return left_candidate.stable_id == right_candidate.stable_id
+
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=observation.proposal,
+            candidate=observation.candidate,
+            objective_values=(1.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+        result = RunResult[SpaceOwnedEqualityCandidate].from_observations(
+            observations=(observation,),
+            refinements=(refinement,),
+            candidate_equal=local_candidate_equal,
+        )
+        report = RunReport[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ].from_records(
+            records=(observation,),
+            refinements=(refinement,),
+            candidate_equal=local_candidate_equal,
+        )
+        surface = NondominatedRunSurface[SpaceOwnedEqualityCandidate].from_records(
+            records=(vector_record,),
+            refinements=(refinement,),
+            candidate_equal=local_candidate_equal,
+        )
+        restored_result = cast(
+            RunResult[SpaceOwnedEqualityCandidate],
+            pickle.loads(pickle.dumps(result)),
+        )
+        restored_report = cast(
+            RunReport[
+                SpaceOwnedEqualityCandidate,
+                Observation[SpaceOwnedEqualityCandidate],
+            ],
+            pickle.loads(pickle.dumps(report)),
+        )
+        restored_surface = cast(
+            NondominatedRunSurface[SpaceOwnedEqualityCandidate],
+            pickle.loads(pickle.dumps(surface)),
+        )
+        replacement_refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=(("replacement",),),
+        )
+
+        updated_result = replace(restored_result, evaluation_count=2)
+        updated_report = replace(restored_report, evaluation_count=2)
+        updated_surface = replace(restored_surface, evaluation_count=2)
+
+        assert updated_result.evaluation_count == 2
+        assert updated_report.evaluation_count == 2
+        assert updated_surface.evaluation_count == 2
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = replace(restored_report, refinements=(replacement_refinement,))
+
+        revalidated_report = replace(
+            restored_report,
+            refinements=(replacement_refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert revalidated_report.refinements == (replacement_refinement,)
+
     def test_nondominated_run_surface_rejects_truthy_non_scalar_refinement_equality(
         self,
     ) -> None:
