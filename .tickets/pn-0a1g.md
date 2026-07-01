@@ -11,4 +11,3 @@ assignee: isty2e
 # Use identity guard for CSA bank snapshot
 
 Review follow-up: compare the CSA pre-growth bank snapshot by identity, not value equality, and cover equal-but-distinct bank replacement.
-

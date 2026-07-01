@@ -11,4 +11,3 @@ assignee: isty2e
 # Normalize tuple replacement path error wording
 
 Minor review follow-up: keep niche-quality workspace fallback, normalize tuple-space replacement error wording with traversal wording.
-
