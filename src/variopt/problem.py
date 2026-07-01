@@ -282,6 +282,32 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
             raise TypeError(msg)
         return self._objective_compat
 
+    @property
+    def direct_objective(self) -> Objective[CandidateT] | None:
+        """Return the direct scalar objective configured on this problem, if any.
+
+        Returns
+        -------
+        Objective[CandidateT] | None
+            The scalar objective supplied directly at construction time. Returns
+            ``None`` for non-scalar protocols and for scalar observation
+            protocols adapted through request-aware compatibility views.
+
+        Notes
+        -----
+        This property is intentionally narrower than :attr:`objective`.
+        Request-aware observation protocols may depend on request metadata, so
+        execution code must not bypass their canonical request contract.
+        """
+        objective = self._objective_compat
+        if objective is None:
+            return None
+
+        if type(objective) is _ProtocolObjectiveCompatibilityView:
+            return None
+
+        return objective
+
 
 @dataclass(frozen=True, slots=True)
 class InteractionProblem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, InteractionProblemRecordT]):

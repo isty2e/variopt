@@ -1,7 +1,7 @@
 """Generic study step and run orchestration."""
 
 from dataclasses import dataclass
-from typing import Generic, Protocol, cast
+from typing import Generic, Protocol, TypeGuard, cast
 
 from typing_extensions import TypeVar
 
@@ -18,14 +18,16 @@ from ..artifacts import (
     TraceEvent,
 )
 from ..evaluators.base import Evaluator
+from ..evaluators.sequential import SequentialEvaluator
 from ..execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
+    SEQUENTIAL_EXECUTION_MODEL,
     STALE_ASYNC_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,
     ExecutionAssimilationMode,
     ExecutionModel,
 )
-from ..kernel import Kernel, ProposalBatchQuery
+from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..outcomes import EvaluationOutcome
 from ..problem import Problem
@@ -109,6 +111,191 @@ class StudyExecutionOwner(
     ]:
         """Return the configured kernel."""
         ...
+
+
+class DirectScalarSequentialStudyOwner(
+    Protocol[BoundaryT, CandidateT, RunMethodStateT],
+):
+    """Protocol for the narrow direct-scalar sequential optimize fast path."""
+
+    @property
+    def problem(self) -> Problem[BoundaryT, CandidateT, Observation[CandidateT]]:
+        """Return the configured scalar problem."""
+        ...
+
+    @property
+    def run_method(
+        self,
+    ) -> RunMethod[RunMethodStateT, Proposal[CandidateT], Observation[CandidateT]]:
+        """Return the configured run method."""
+        ...
+
+    @property
+    def evaluator(
+        self,
+    ) -> SequentialEvaluator[BoundaryT, CandidateT, Observation[CandidateT]]:
+        """Return the configured sequential evaluator."""
+        ...
+
+    @property
+    def kernel(
+        self,
+    ) -> DirectKernel[
+        ProposalBatchQuery[BoundaryT, CandidateT, Observation[CandidateT]],
+        tuple[EvaluationOutcome[CandidateT, Observation[CandidateT]], ...],
+    ]:
+        """Return the configured direct kernel."""
+        ...
+
+
+def _supports_direct_scalar_sequential_path(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    *,
+    execution_model: ExecutionModel,
+) -> TypeGuard[DirectScalarSequentialStudyOwner[BoundaryT, CandidateT, RunMethodStateT]]:
+    if execution_model not in {
+        SEQUENTIAL_EXECUTION_MODEL,
+        SYNC_BATCH_EXECUTION_MODEL,
+    }:
+        return False
+
+    if type(study.evaluator) is not SequentialEvaluator:
+        return False
+
+    if type(study.kernel) is not DirectKernel:
+        return False
+
+    return study.problem.direct_objective is not None
+
+
+def _optimize_direct_scalar_sequential(
+    study: DirectScalarSequentialStudyOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+    ],
+    max_evaluations: int,
+    batch_size: int,
+    *,
+    execution_model: ExecutionModel,
+    count_evaluation_cost: bool,
+    initial_state: RunMethodStateT | None,
+) -> tuple[RunResult[CandidateT], RunMethodStateT]:
+    if max_evaluations < 0:
+        msg = "max_evaluations must be non-negative"
+        raise ValueError(msg)
+
+    validate_execution_request(
+        study,
+        batch_size=batch_size,
+        execution_model=execution_model,
+    )
+
+    objective = study.problem.direct_objective
+    if objective is None:
+        msg = "direct scalar objective fast path requires a direct Objective"
+        raise RuntimeError(msg)
+
+    observations: list[Observation[CandidateT]] = []
+    trace_events: list[TraceEvent] = []
+    remaining = max_evaluations
+    state = (
+        study.run_method.create_initial_state()
+        if initial_state is None
+        else initial_state
+    )
+
+    while remaining > 0 and not study.run_method.is_exhausted(state):
+        current_batch_size = min(batch_size, remaining)
+        proposals, next_state = study.run_method.ask(
+            state,
+            batch_size=current_batch_size,
+        )
+        if len(proposals) == 0:
+            msg = "run_method returned no proposals"
+            raise RuntimeError(msg)
+
+        if len(proposals) > current_batch_size:
+            msg = "run_method returned more proposals than requested"
+            raise ValueError(msg)
+
+        proposal_kernel_hints = study.run_method.proposal_kernel_hints(
+            next_state,
+            proposals,
+        )
+        if proposal_kernel_hints is not None and (
+            len(proposal_kernel_hints) != len(proposals)
+        ):
+            msg = "proposal_kernel_hints must align one-to-one with proposals"
+            raise ValueError(msg)
+
+        proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
+            next_state,
+            proposals,
+        )
+        if proposal_evaluation_specs is not None and (
+            len(proposal_evaluation_specs) != len(proposals)
+        ):
+            msg = "proposal_evaluation_specs must align one-to-one with proposals"
+            raise ValueError(msg)
+
+        batch_observations: list[Observation[CandidateT]] = []
+        batch_outcomes: list[EvaluationOutcome[CandidateT, Observation[CandidateT]]] = []
+        for index, proposal in enumerate(proposals):
+            candidate = proposal.candidate
+            study.problem.space.validate(candidate)
+            proposal_evaluation_spec = (
+                None
+                if proposal_evaluation_specs is None
+                else proposal_evaluation_specs[index]
+            )
+            request = EvaluationRequest(
+                proposal=proposal,
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+            observation = Observation.from_objective_value(
+                request=request,
+                candidate=candidate,
+                value=objective.evaluate(candidate),
+                direction=study.problem.direction,
+            )
+            batch_observations.append(observation)
+            batch_outcomes.append(
+                EvaluationOutcome(
+                    record=observation,
+                    evaluation_count=1,
+                ),
+            )
+
+        batch_observation_tuple = tuple(batch_observations)
+        state = study.run_method.tell_outcomes(next_state, tuple(batch_outcomes))
+        observations.extend(batch_observation_tuple)
+        if count_evaluation_cost:
+            remaining -= len(batch_outcomes)
+        else:
+            remaining -= len(batch_observation_tuple)
+
+        trace_events.append(
+            TraceEvent(
+                kind="study.step",
+                message=f"evaluated {len(batch_observation_tuple)} proposal(s)",
+                value=trace_value_for_records(batch_observation_tuple),
+            ),
+        )
+
+    return (
+        RunResult[CandidateT].from_observations(
+            observations=tuple(observations),
+            evaluation_count=max_evaluations - remaining,
+            trace=Trace(events=tuple(trace_events)),
+        ),
+        state,
+    )
 
 
 def evaluate_batch_sync(
@@ -545,6 +732,19 @@ def optimize(
     TypeError
         If the study does not emit scalar :class:`Observation` records.
     """
+    if _supports_direct_scalar_sequential_path(
+        study,
+        execution_model=execution_model,
+    ):
+        return _optimize_direct_scalar_sequential(
+            study,
+            max_evaluations=max_evaluations,
+            batch_size=batch_size,
+            execution_model=execution_model,
+            count_evaluation_cost=count_evaluation_cost,
+            initial_state=initial_state,
+        )
+
     run_report, state = run(
         study,
         max_evaluations=max_evaluations,
