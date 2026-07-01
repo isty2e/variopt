@@ -399,7 +399,7 @@ def admit_full_bank_observation(
 
     # The scored-bank view, trial-bank distances, and distance workspace above
     # are all aligned to this pre-growth bank snapshot.
-    if bank != pre_growth_bank:
+    if bank is not pre_growth_bank:
         msg = (
             "try_append_growth_entry must not replace the bank unless "
             "did_grow is true"

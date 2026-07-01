@@ -812,8 +812,7 @@ class CSAClusteringRuntimeTests:
             return (
                 Bank(
                     capacity=bank.capacity,
-                    entries=bank.entries[:-1]
-                    + (BankEntry(candidate=101, value=100.0),),
+                    entries=bank.entries,
                 ),
                 state,
                 False,
