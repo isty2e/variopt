@@ -224,6 +224,8 @@ def _optimize_direct_scalar_sequential(
             msg = "run_method returned more proposals than requested"
             raise ValueError(msg)
 
+        # DirectKernel ignores hint payloads, but the generic path still
+        # validates alignment when it builds ProposalBatchQuery.
         proposal_kernel_hints = study.run_method.proposal_kernel_hints(
             next_state,
             proposals,
@@ -273,10 +275,14 @@ def _optimize_direct_scalar_sequential(
             )
 
         batch_observation_tuple = tuple(batch_observations)
-        state = study.run_method.tell_outcomes(next_state, tuple(batch_outcomes))
+        batch_outcome_tuple = tuple(batch_outcomes)
+        state = study.run_method.tell_outcomes(next_state, batch_outcome_tuple)
         observations.extend(batch_observation_tuple)
+        batch_evaluation_count = sum(
+            outcome.evaluation_count for outcome in batch_outcome_tuple
+        )
         if count_evaluation_cost:
-            remaining -= len(batch_outcomes)
+            remaining -= batch_evaluation_count
         else:
             remaining -= len(batch_observation_tuple)
 
@@ -293,6 +299,7 @@ def _optimize_direct_scalar_sequential(
             observations=tuple(observations),
             evaluation_count=max_evaluations - remaining,
             trace=Trace(events=tuple(trace_events)),
+            candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
     )

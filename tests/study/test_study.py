@@ -1,6 +1,7 @@
 """Tests for sync and general Study facade behavior."""
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -30,6 +31,7 @@ from tests.study_support import (
     SquareObjective,
 )
 from variopt import (
+    CandidateRefinement,
     EvaluationOutcome,
     EvaluationRequest,
     IntegerSpace,
@@ -597,6 +599,30 @@ class StudyTests:
 
         assert tuple(observation.candidate for observation in result.observations) == (4, 2)
         assert optimizer.seen_changed_leaf_paths == (None, None)
+
+    def test_optimize_fast_path_carries_result_candidate_equality(self) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SequentialEvaluator[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+        ]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(max_evaluations=1)
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(99),
+            refined_candidate=SpaceOwnedEqualityCandidate(2),
+            changed_leaf_paths=((),),
+        )
+
+        updated_result = replace(result, refinements=(refinement,))
+
+        assert result.refinements == ()
+        assert updated_result.refinements == (refinement,)
 
     def test_optimize_keeps_request_aware_scalar_protocol_on_generic_path(self) -> None:
         problem = Problem(
