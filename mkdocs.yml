@@ -93,6 +93,7 @@ nav:
       - Optimization Model: concepts/optimization-model.md
       - Spaces and Candidates: concepts/spaces-and-candidates.md
       - Study and Execution Models: concepts/study-and-execution-models.md
+      - Candidate Refinement: concepts/candidate-refinement.md
       - CSA: concepts/csa.md
       - Population Algorithms: concepts/population-algorithms.md
       - Local Search: concepts/local-search.md

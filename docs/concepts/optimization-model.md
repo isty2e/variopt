@@ -48,6 +48,12 @@ changes in others:
   sampling, diversity, and result extraction. The optimizer never sees a
   flat vector unless the space is one.
 
+Candidate refinement is another boundary case. It is execution-side provenance
+between proposal and evaluation record, carried by `EvaluationOutcome` and
+terminal reports rather than by the evaluation protocol itself. See
+[Candidate Refinement](candidate-refinement.md) for the proposed, refined,
+evaluated, and accepted candidate vocabulary.
+
 The split matters most when a problem combines several of these concerns at
 once: a structured space, a parallel evaluator, and a local-search kernel.
 Each component stays in its lane, and the `Study` wires them together.

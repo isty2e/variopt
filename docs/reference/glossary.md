@@ -55,11 +55,34 @@ The component that owns execution mechanics — how a batch of
 `SequentialEvaluator`, `JoblibEvaluator`, and `MpiEvaluator`. See
 [`Evaluator`][variopt.Evaluator].
 
+## ExecutionResources
+
+Request-local resource ownership passed to kernels, including the current
+parallel owner, nested-parallelism policy, worker count, and backend label. See
+[`ExecutionResources`][variopt.ExecutionResources].
+
 ## Kernel
 
 An optional bounded-episode component that turns one proposal batch into one
 locally improved report. Kernels own local search, not global search. See
 [`Kernel`][variopt.Kernel].
+
+## KernelDiagnostics
+
+Execution-facing diagnostics for one kernel episode, including backend, method,
+status, and optional message. See
+[`KernelDiagnostics`][variopt.KernelDiagnostics].
+
+## KernelStatus
+
+The terminal status reported by one kernel episode: converged, stopped, or
+failed. See [`KernelStatus`][variopt.KernelStatus].
+
+## NestedParallelismPolicy
+
+The request-local policy that tells kernels whether nested parallel work is
+allowed below the current execution owner. See
+[`NestedParallelismPolicy`][variopt.NestedParallelismPolicy].
 
 ## NondominatedRunSurface
 
@@ -111,10 +134,28 @@ Immutable request-local metadata attached when a `Proposal` is lowered into an
 or resume provenance, not for multi-request interaction semantics. See
 [`ProposalEvaluationSpec`][variopt.artifacts.ProposalEvaluationSpec].
 
+## ProposalBatchQuery
+
+The kernel query object containing the problem, proposal batch, execution
+resources, optional evaluation specs, and optional kernel hints for one bounded
+episode. See [`ProposalBatchQuery`][variopt.ProposalBatchQuery].
+
+## ProposalKernelHint
+
+The marker base for immutable per-proposal hints passed from a run method to a
+kernel. See [`ProposalKernelHint`][variopt.ProposalKernelHint].
+
+## ProposalLocalSearchContext
+
+The built-in kernel hint for per-proposal local-search enablement, local budget,
+and prioritized structured leaf paths. See
+[`ProposalLocalSearchContext`][variopt.ProposalLocalSearchContext].
+
 ## RunMethod
 
 The search-state owner. Proposes candidates via `ask`, consumes records via
-`tell`, and owns the persistent search-state object. Population optimizers
+`tell`, may opt into full outcome metadata through `tell_outcomes`, and owns
+the persistent search-state object. Population optimizers
 (`CSAOptimizer`, `DifferentialEvolutionOptimizer`,
 `GeneticAlgorithmOptimizer`) are `RunMethod` implementations. See
 [`RunMethod`][variopt.RunMethod].

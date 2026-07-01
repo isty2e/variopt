@@ -41,10 +41,10 @@ class CandidateRefinement(FrozenGenericSlotsCompat, Generic[CandidateT]):
     refined_candidate : CandidateT
         Candidate that was actually evaluated after refinement.
     changed_leaf_paths : Sequence[LeafPath], default=()
-        Structured leaf paths whose canonical values changed during
-        refinement. An empty sequence means no structured path attribution is
-        available; absence of refinement should be represented by
-        ``EvaluationOutcome.refinement is None``.
+        Authoritative structured leaf paths whose canonical values changed
+        during refinement. An empty sequence means the producer reports no
+        changed structured leaf paths; absence of refinement should be
+        represented by ``EvaluationOutcome.refinement is None``.
     """
 
     source_candidate: CandidateT
@@ -67,7 +67,7 @@ class CandidateRefinement(FrozenGenericSlotsCompat, Generic[CandidateT]):
         refined_candidate : CandidateT
             Candidate after execution-side refinement.
         changed_leaf_paths : Sequence[LeafPath], default=()
-            Structured leaf paths changed by refinement.
+            Authoritative structured leaf paths changed by refinement.
 
         Raises
         ------

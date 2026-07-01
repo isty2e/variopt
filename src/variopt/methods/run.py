@@ -109,7 +109,7 @@ class RunMethod(
         ----------
         state : RunMethodStateT
             Current immutable run-method state.
-        outcomes : Sequence[EvaluationOutcome[OutcomeCandidateT, EvaluationRecordT]]
+        outcomes : Sequence[EvaluationOutcome[OutcomeCandidateT, RunMethodRecordT]]
             Evaluation outcomes aligned to the proposals issued by ``ask``.
 
         Returns
