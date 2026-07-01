@@ -1,9 +1,9 @@
 """Execution-side evaluation outcome artifacts."""
 
-from dataclasses import dataclass, field, fields
+from dataclasses import InitVar, dataclass, field, fields
 from typing import Generic, cast
 
-from typing_extensions import TypeVar, override
+from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
@@ -93,8 +93,14 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
     evaluation_count: int = 1
     kernel_diagnostics: KernelDiagnostics | None = None
     refinement: CandidateRefinement[CandidateT] | None = None
+    candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
     _candidate_equal: CandidateEquality[CandidateT] | None = field(
         default=None,
+        repr=False,
+        compare=False,
+    )
+    _candidate_equal_required: bool = field(
+        default=False,
         repr=False,
         compare=False,
     )
@@ -119,6 +125,7 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         refinement: CandidateRefinement[CandidateT] | None = None,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
         _candidate_equal: CandidateEquality[CandidateT] | None = None,
+        _candidate_equal_required: bool = False,
         _validated_record_candidate: object = _UNVALIDATED_REFINEMENT_CANDIDATE,
         _validated_refined_candidate: object = _UNVALIDATED_REFINEMENT_CANDIDATE,
     ) -> None:
@@ -162,6 +169,9 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         effective_candidate_equal = candidate_equal
         if effective_candidate_equal is None:
             effective_candidate_equal = _candidate_equal
+        candidate_equal_required = (
+            _candidate_equal_required or effective_candidate_equal is not None
+        )
 
         object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "record", normalized_record)
@@ -169,6 +179,11 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         object.__setattr__(self, "kernel_diagnostics", kernel_diagnostics)
         object.__setattr__(self, "refinement", refinement)
         object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
+        object.__setattr__(
+            self,
+            "_candidate_equal_required",
+            candidate_equal_required,
+        )
         object.__setattr__(
             self,
             "_validated_record_candidate",
@@ -213,6 +228,13 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         if self._refinement_alignment_is_prevalidated():
             return
 
+        if candidate_equal is None and self._candidate_equal_required:
+            msg = (
+                "candidate_equal is required to revalidate refinement alignment "
+                "after changing an explicitly compared outcome"
+            )
+            raise TypeError(msg)
+
         validate_outcome_refinement_alignment(
             self,
             candidate_equal=candidate_equal,
@@ -238,61 +260,15 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             and self._validated_refined_candidate is self.refinement.refined_candidate
         )
 
-    def __post_init__(self) -> None:
+    def __post_init__(
+        self,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+    ) -> None:
         """Validate outcome accounting metadata after dataclass construction."""
-        self._validate(candidate_equal=self._candidate_equal)
-
-    @override
-    def __getstate__(self) -> list[object | None]:
-        """Serialize outcome state without requiring comparator picklability.
-
-        Returns
-        -------
-        list[object | None]
-            Dataclass field values in field order. The in-memory comparator is
-            replaced with ``None`` because it is a process-local validation
-            helper, not durable outcome data.
-        """
-        state: list[object | None] = []
-        for dataclass_field in fields(self):
-            if dataclass_field.name == "_candidate_equal":
-                state.append(None)
-                continue
-            state.append(getattr(self, dataclass_field.name, None))
-        return state
-
-    @override
-    def __setstate__(self, state: list[object | None]) -> None:
-        """Restore outcome state emitted by :meth:`__getstate__`.
-
-        Parameters
-        ----------
-        state : list[object | None]
-            Pickled dataclass field values in field order.
-        """
-        restored_names: set[str] = set()
-        dataclass_fields = fields(self)
-        for dataclass_field, value in zip(dataclass_fields, state):
-            restored_names.add(dataclass_field.name)
-            if dataclass_field.name == "_candidate_equal":
-                object.__setattr__(self, dataclass_field.name, None)
-                continue
-            object.__setattr__(self, dataclass_field.name, value)
-
-        for dataclass_field in dataclass_fields:
-            if dataclass_field.name in restored_names:
-                continue
-            if dataclass_field.name == "_candidate_equal":
-                object.__setattr__(self, dataclass_field.name, None)
-            elif dataclass_field.name in {
-                "_validated_record_candidate",
-                "_validated_refined_candidate",
-            }:
-                object.__setattr__(
-                    self,
-                    dataclass_field.name,
-                    _UNVALIDATED_REFINEMENT_CANDIDATE,
-                )
+        effective_candidate_equal = candidate_equal
+        if effective_candidate_equal is None:
+            effective_candidate_equal = self._candidate_equal
+        self._validate(candidate_equal=effective_candidate_equal)
 
     @property
     def observation(self) -> Observation[CandidateT]:
@@ -317,3 +293,52 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
             msg = "evaluation outcome does not carry a scalar Observation"
             raise TypeError(msg)
         return cast(Observation[CandidateT], self.record)
+
+
+def evaluation_outcome_getstate(
+    self: EvaluationOutcome[CandidateT, OutcomeRecordT],
+) -> list[object | None]:
+    state: list[object | None] = []
+    for dataclass_field in fields(self):
+        if dataclass_field.name == "_candidate_equal":
+            state.append(None)
+            continue
+        state.append(getattr(self, dataclass_field.name, None))
+    return state
+
+
+def evaluation_outcome_setstate(
+    self: EvaluationOutcome[CandidateT, OutcomeRecordT],
+    state: list[object | None],
+) -> None:
+    restored_names: set[str] = set()
+    dataclass_fields = fields(self)
+    for dataclass_field, value in zip(dataclass_fields, state):
+        restored_names.add(dataclass_field.name)
+        if dataclass_field.name == "_candidate_equal":
+            object.__setattr__(self, dataclass_field.name, None)
+            continue
+        object.__setattr__(self, dataclass_field.name, value)
+
+    for dataclass_field in dataclass_fields:
+        if dataclass_field.name in restored_names:
+            continue
+        if dataclass_field.name == "_candidate_equal":
+            object.__setattr__(self, dataclass_field.name, None)
+        elif dataclass_field.name == "_candidate_equal_required":
+            object.__setattr__(self, dataclass_field.name, False)
+        elif dataclass_field.name in {
+            "_validated_record_candidate",
+            "_validated_refined_candidate",
+        }:
+            object.__setattr__(
+                self,
+                dataclass_field.name,
+                _UNVALIDATED_REFINEMENT_CANDIDATE,
+            )
+
+setattr(EvaluationOutcome, "__getstate__", evaluation_outcome_getstate)
+setattr(EvaluationOutcome, "__setstate__", evaluation_outcome_setstate)
+
+del evaluation_outcome_getstate
+del evaluation_outcome_setstate

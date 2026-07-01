@@ -422,6 +422,46 @@ class RuntimeArtifactsTests:
         assert restored_outcome.refinement.refined_candidate.stable_id == 1
         assert updated_outcome.evaluation_count == 2
 
+    def test_unpickled_evaluation_outcome_requires_candidate_equal_for_new_refinement(
+        self,
+    ) -> None:
+        observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+        outcome = EvaluationOutcome(
+            observation=observation,
+            refinement=refinement,
+            candidate_equal=space_owned_candidates_equal,
+        )
+        restored_outcome = cast(
+            EvaluationOutcome[SpaceOwnedEqualityCandidate],
+            pickle.loads(pickle.dumps(outcome)),
+        )
+        replacement_refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=(("replacement",),),
+        )
+
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = replace(restored_outcome, refinement=replacement_refinement)
+
+        updated_outcome = replace(
+            restored_outcome,
+            refinement=replacement_refinement,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert updated_outcome.refinement == replacement_refinement
+
     def test_observation_rejects_negative_elapsed_seconds(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
 
