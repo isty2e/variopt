@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import final
+from typing import TypeVar, final
 
 from typing_extensions import override
 
@@ -46,6 +46,9 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
+from variopt.spaces import LeafPath
+
+OutcomeCandidateT = TypeVar("OutcomeCandidateT")
 
 
 class SquareObjective(Objective[int]):
@@ -368,6 +371,33 @@ class ExactAsyncCapableBatchQueueOptimizer(BatchQueueOptimizer):
                 SYNC_BATCH_EXECUTION_MODEL,
                 EXACT_ASYNC_EXECUTION_MODEL,
             },
+        )
+
+
+class OutcomeAwareBatchQueueOptimizer(BatchQueueOptimizer):
+    """Batch-queue optimizer that records full outcome metadata."""
+
+    seen_changed_leaf_paths: tuple[tuple[LeafPath, ...] | None, ...]
+
+    def __init__(self, proposal_batches: list[tuple[Proposal[int], ...]]) -> None:
+        super().__init__(proposal_batches)
+        self.seen_changed_leaf_paths = ()
+
+    @override
+    def tell_outcomes(
+        self,
+        state: BatchQueueOptimizerState,
+        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[int]]],
+    ) -> BatchQueueOptimizerState:
+        self.seen_changed_leaf_paths += tuple(
+            None
+            if outcome.refinement is None
+            else outcome.refinement.changed_leaf_paths
+            for outcome in outcomes
+        )
+        return super().tell(
+            state,
+            tuple(outcome.record for outcome in outcomes),
         )
 
 

@@ -376,7 +376,10 @@ def run_stale_async(
                         ] = [None for _index in range(records_before_group)]
                         refinement_history.extend(group_refinements)
                         refinements = refinement_history
-                    state = study.run_method.tell(state, group_records)
+                    state = study.run_method.tell_outcomes(
+                        state,
+                        completed_group,
+                    )
                     group_evaluation_count = sum(
                         outcome.evaluation_count for outcome in completed_group
                     )

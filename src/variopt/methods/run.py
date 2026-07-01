@@ -2,23 +2,27 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Generic
+from typing import Generic, TypeVar
 
-from ..artifacts import ProposalEvaluationSpec
+from ..artifacts import ProposalEvaluationSpec, RequestAlignedEvaluationRecord
 from ..execution import (
     SEQUENTIAL_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,
     ExecutionModel,
 )
 from ..kernel import ProposalKernelHint
-from ..typevars import EvaluationRecordT, ProposalT, RunMethodStateT
+from ..outcomes import EvaluationOutcome
+from ..typevars import ProposalT, RunMethodStateT
 from .base import SearchMethod
+
+OutcomeCandidateT = TypeVar("OutcomeCandidateT")
+RunMethodRecordT = TypeVar("RunMethodRecordT", bound=RequestAlignedEvaluationRecord)
 
 
 class RunMethod(
     SearchMethod,
     ABC,
-    Generic[RunMethodStateT, ProposalT, EvaluationRecordT],
+    Generic[RunMethodStateT, ProposalT, RunMethodRecordT],
 ):
     """Run-scoped transition law over explicit search state.
 
@@ -77,7 +81,7 @@ class RunMethod(
     def tell(
         self,
         state: RunMethodStateT,
-        observations: Sequence[EvaluationRecordT],
+        observations: Sequence[RunMethodRecordT],
     ) -> RunMethodStateT:
         """Advance the run-method state with one observation batch.
 
@@ -93,6 +97,34 @@ class RunMethod(
         RunMethodStateT
             Advanced immutable run-method state.
         """
+
+    def tell_outcomes(
+        self,
+        state: RunMethodStateT,
+        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, RunMethodRecordT]],
+    ) -> RunMethodStateT:
+        """Advance state from full evaluation outcomes.
+
+        Parameters
+        ----------
+        state : RunMethodStateT
+            Current immutable run-method state.
+        outcomes : Sequence[EvaluationOutcome[OutcomeCandidateT, EvaluationRecordT]]
+            Evaluation outcomes aligned to the proposals issued by ``ask``.
+
+        Returns
+        -------
+        RunMethodStateT
+            Advanced immutable run-method state.
+
+        Notes
+        -----
+        The default implementation preserves the canonical record-only
+        ``tell`` contract. Outcome-aware run methods may override this hook
+        when execution-side metadata, such as candidate-refinement provenance,
+        affects adaptive search state.
+        """
+        return self.tell(state, tuple(outcome.record for outcome in outcomes))
 
     def proposal_kernel_hints(
         self,

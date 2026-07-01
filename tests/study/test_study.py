@@ -15,6 +15,7 @@ from tests.study_support import (
     LabelProtocol,
     LabelRecord,
     MisorderedEvaluator,
+    OutcomeAwareBatchQueueOptimizer,
     RecordingExecutionResourcesKernel,
     RecordingKernel,
     RefinementKernel,
@@ -705,6 +706,32 @@ class StudyTests:
         assert late_refinement is not None
         assert late_refinement.source_candidate == 3
         assert late_refinement.refined_candidate == result.observations[1].candidate
+
+    def test_study_assimilation_uses_outcome_aware_run_method_hook(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = OutcomeAwareBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=0, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RefinementKernel(),
+        )
+
+        report, _ = study.run(max_evaluations=2, batch_size=2)
+
+        assert tuple(record.candidate for record in report.records) == (3, 0)
+        assert optimizer.seen_changed_leaf_paths == (((),), None)
 
     def test_study_passes_evaluator_execution_resources_to_kernel(self) -> None:
         problem = Problem(

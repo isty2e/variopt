@@ -244,7 +244,10 @@ class StudyExactAsyncStepSession(
         outcomes = finalize_ordered_outcomes(self.ordered_outcomes)
         validate_aligned_outcomes(self.requests, outcomes)
         records = tuple(outcome.record for outcome in outcomes)
-        next_state = self.study.run_method.tell(self.post_ask_state, records)
+        next_state = self.study.run_method.tell_outcomes(
+            self.post_ask_state,
+            outcomes,
+        )
         self._final_records = records
         self._final_state = next_state
         return records, next_state

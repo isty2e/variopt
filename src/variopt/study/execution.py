@@ -270,8 +270,7 @@ def evaluate_step(
     outcomes = study.kernel.run(top_level_query, batch_executor)
     requests = requests_for_query(top_level_query)
     validate_aligned_outcomes(requests, outcomes)
-    records = tuple(outcome.record for outcome in outcomes)
-    next_state = study.run_method.tell(next_state, records)
+    next_state = study.run_method.tell_outcomes(next_state, outcomes)
     return StudyStepResult(outcomes=outcomes, state=next_state)
 
 

@@ -51,6 +51,7 @@ def apply_tell(
     infer_average_distance: InferAverageDistance[CandidateT],
     infer_score_gap: InferScoreGap[CandidateT],
     infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT] | None = None,
+    explicit_local_displacement_leaf_paths: Sequence[tuple[LeafPath, ...] | None] | None = None,
     infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT] | None = None,
 ) -> CSAEngineState[CandidateT]:
     """Apply one tell batch to the CSA engine state.
@@ -80,6 +81,10 @@ def apply_tell(
     infer_local_displacement_leaf_paths : InferLocalDisplacementLeafPaths[CandidateT] | None, default=None
         Optional callback that infers leaf-path displacement for proposal
         attribution.
+    explicit_local_displacement_leaf_paths : Sequence[tuple[LeafPath, ...] | None] | None, default=None
+        Optional observation-aligned local-displacement paths supplied by
+        candidate-refinement metadata. Entries set to ``None`` use fallback
+        inference when available.
     infer_numeric_subspace_displacement : InferNumericSubspaceDisplacement[CandidateT] | None, default=None
         Optional callback that infers numeric-subspace displacement for
         covariance attribution.
@@ -142,6 +147,7 @@ def apply_tell(
         proposal_state=update_proposal_state(
             engine_state.proposal_state,
             validated_observations,
+            explicit_local_displacement_leaf_paths=explicit_local_displacement_leaf_paths,
             infer_local_displacement_leaf_paths=infer_local_displacement_leaf_paths,
             infer_numeric_subspace_displacement=infer_numeric_subspace_displacement,
         ),
