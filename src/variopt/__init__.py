@@ -1,6 +1,7 @@
 """Public interfaces for the variopt package."""
 
 from .artifacts import (
+    CandidateRefinement,
     EvaluationRecord,
     EvaluationRequest,
     NondominatedRunSurface,
@@ -57,6 +58,7 @@ from .study import Study
 
 __all__ = [
     "ArraySpace",
+    "CandidateRefinement",
     "CategoricalSpace",
     "DiversityMetric",
     "EvaluationOutcome",

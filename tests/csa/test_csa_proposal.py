@@ -1,6 +1,7 @@
 """Tests for CSA proposal-adaptation ontology and reducer state."""
 
 from collections.abc import Sequence
+from typing import overload
 
 import numpy as np
 import pytest
@@ -8,6 +9,8 @@ from typing_extensions import override
 
 from tests.numeric_support import approx_equal
 from variopt import (
+    CandidateRefinement,
+    EvaluationOutcome,
     IntegerSpace,
     Observation,
     Proposal,
@@ -38,6 +41,32 @@ from variopt.algorithms.population.csa.generation.proposal.state import (
 )
 from variopt.kernel import ProposalLocalSearchContext
 from variopt.operators import VariationOperator
+from variopt.spaces import LeafPath
+
+
+class ExplodingExplicitPathSequence(Sequence[tuple[LeafPath, ...] | None]):
+    """Sequence that fails if proposal update code tries to materialize it."""
+
+    @overload
+    def __getitem__(self, index: int) -> tuple[LeafPath, ...] | None: ...
+
+    @overload
+    def __getitem__(
+        self,
+        index: slice,
+    ) -> Sequence[tuple[LeafPath, ...] | None]: ...
+
+    @override
+    def __getitem__(
+        self,
+        index: int | slice,
+    ) -> tuple[LeafPath, ...] | None | Sequence[tuple[LeafPath, ...] | None]:
+        _ = index
+        raise AssertionError("explicit paths should not be materialized")
+
+    @override
+    def __len__(self) -> int:
+        raise AssertionError("explicit paths should not be measured")
 
 
 class CSAProposalStateTests:
@@ -115,13 +144,15 @@ class CSAProposalStateTests:
                 mutated_leaf_paths=(("x",),),
             ),
         )
+        source_candidate: tuple[str, str] = ("before-x", "before-y")
+        refined_candidate: tuple[str, str] = ("after-x", "after-y")
         proposal: Proposal[tuple[str, str]] = Proposal(
-            candidate=("before-x", "before-y"),
+            candidate=source_candidate,
             proposal_id="p-1",
         )
         observation: Observation[tuple[str, str]] = Observation(
             proposal=proposal,
-            candidate=("after-x", "after-y"),
+            candidate=refined_candidate,
             value=3.0,
             score=3.0,
         )
@@ -137,6 +168,335 @@ class CSAProposalStateTests:
         assert len(next_state.local_displacement_leaf_stats) == 1
         assert next_state.local_displacement_leaf_stats[0].path == ("y",)
         assert next_state.local_displacement_leaf_stats[0].discounted_score_credit == 7.0
+
+    def test_update_proposal_state_prefers_explicit_refinement_paths(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=(("x",),),
+            ),
+        )
+        proposal: Proposal[tuple[str, str]] = Proposal(
+            candidate=("before-x", "before-y"),
+            proposal_id="p-1",
+        )
+        observation: Observation[tuple[str, str]] = Observation(
+            proposal=proposal,
+            candidate=("after-x", "after-y"),
+            value=3.0,
+            score=3.0,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=((("x",),),),
+            infer_local_displacement_leaf_paths=lambda _before, _after: (("y",),),
+        )
+
+        assert len(next_state.local_displacement_leaf_stats) == 1
+        assert next_state.local_displacement_leaf_stats[0].path == ("x",)
+
+    def test_update_proposal_state_records_explicit_numeric_refinement_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=((0,),),
+            ),
+        )
+        source_candidate: tuple[int, int] = (1, 2)
+        refined_candidate: tuple[int, int] = (3, 2)
+        observation: Observation[tuple[int, int]] = Observation(
+            proposal=Proposal(candidate=source_candidate, proposal_id="p-1"),
+            candidate=refined_candidate,
+            value=3.0,
+            score=3.0,
+        )
+
+        def raise_if_called(
+            _before: tuple[int, int],
+            _after: tuple[int, int],
+        ) -> tuple[LeafPath, ...]:
+            raise AssertionError("inference should not run")
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=(((0,),),),
+            infer_local_displacement_leaf_paths=raise_if_called,
+        )
+
+        assert len(next_state.local_displacement_leaf_stats) == 1
+        assert next_state.local_displacement_leaf_stats[0].path == (0,)
+
+    def test_update_proposal_state_records_explicit_mixed_refinement_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=((0,), ("color",)),
+            ),
+        )
+        source_candidate: tuple[int, str, float] = (1, "red", 0.5)
+        refined_candidate: tuple[int, str, float] = (2, "blue", 0.5)
+        observation: Observation[tuple[int, str, float]] = Observation(
+            proposal=Proposal(candidate=source_candidate, proposal_id="p-1"),
+            candidate=refined_candidate,
+            value=3.0,
+            score=3.0,
+        )
+
+        def raise_if_called(
+            _before: tuple[int, str, float],
+            _after: tuple[int, str, float],
+        ) -> tuple[LeafPath, ...]:
+            raise AssertionError("inference should not run")
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=(((0,), ("color",)),),
+            infer_local_displacement_leaf_paths=raise_if_called,
+        )
+
+        assert tuple(
+            stat.path for stat in next_state.local_displacement_leaf_stats
+        ) == ((0,), ("color",))
+
+    def test_update_proposal_state_falls_back_when_refinement_paths_are_absent(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=(("x",),),
+            ),
+        )
+        source_candidate: tuple[str, str] = ("before-x", "before-y")
+        refined_candidate: tuple[str, str] = ("after-x", "after-y")
+        observation: Observation[tuple[str, str]] = Observation(
+            proposal=Proposal(candidate=source_candidate, proposal_id="p-1"),
+            candidate=refined_candidate,
+            value=3.0,
+            score=3.0,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=(None,),
+            infer_local_displacement_leaf_paths=lambda _before, _after: (("y",),),
+        )
+
+        assert len(next_state.local_displacement_leaf_stats) == 1
+        assert next_state.local_displacement_leaf_stats[0].path == ("y",)
+
+    def test_update_proposal_state_treats_empty_explicit_refinement_paths_as_noop(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=(("x",),),
+            ),
+        )
+        observation = Observation(
+            proposal=Proposal(candidate=("same-x", "same-y"), proposal_id="p-1"),
+            candidate=("same-x", "same-y"),
+            value=3.0,
+            score=3.0,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=((),),
+            infer_local_displacement_leaf_paths=self._raise_if_called,
+        )
+
+        assert next_state.local_displacement_leaf_stats == ()
+
+    def test_update_proposal_state_empty_explicit_paths_do_not_fall_back_after_change(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=(("x",),),
+            ),
+        )
+        source_candidate: tuple[str, ...] = ("before",)
+        refined_candidate: tuple[str, ...] = ("after",)
+        proposal: Proposal[tuple[str, ...]] = Proposal(
+            candidate=source_candidate,
+            proposal_id="p-1",
+        )
+        observation: Observation[tuple[str, ...]] = Observation(
+            proposal=proposal,
+            candidate=refined_candidate,
+            value=3.0,
+            score=3.0,
+        )
+
+        def raise_if_called(
+            _before: tuple[str, ...],
+            _after: tuple[str, ...],
+        ) -> tuple[LeafPath, ...]:
+            raise AssertionError("inference should not run")
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=((),),
+            infer_local_displacement_leaf_paths=raise_if_called,
+        )
+
+        assert next_state.local_displacement_leaf_stats == ()
+        assert next_state.pending_attributions == ()
+
+    def test_update_proposal_state_rejects_misaligned_explicit_refinement_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        with pytest.raises(ValueError, match="align"):
+            _ = update_proposal_state(
+                state,
+                (observation,),
+                explicit_local_displacement_leaf_paths=(None, None),
+            )
+
+    def test_update_proposal_state_ignores_explicit_paths_when_policy_disabled(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=(None, None),
+            infer_local_displacement_leaf_paths=self._raise_if_called,
+        )
+
+        assert next_state == state
+
+    def test_update_proposal_state_does_not_materialize_disabled_explicit_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=ExplodingExplicitPathSequence(),
+            infer_local_displacement_leaf_paths=self._raise_if_called,
+        )
+
+        assert next_state == state
+
+    def test_update_proposal_state_does_not_materialize_empty_batch_explicit_paths(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+
+        next_state = update_proposal_state(
+            state,
+            (),
+            explicit_local_displacement_leaf_paths=ExplodingExplicitPathSequence(),
+            infer_local_displacement_leaf_paths=self._raise_if_called,
+        )
+
+        assert next_state == state
+
+    def test_update_proposal_state_accepts_paths_extracted_from_refinement(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                source_score=10.0,
+                proposal_family_key="mutation:0",
+                mutated_leaf_paths=(("x",),),
+            ),
+        )
+        source_candidate: tuple[str, str] = ("before-x", "before-y")
+        refined_candidate: tuple[str, str] = ("after-x", "after-y")
+        observation: Observation[tuple[str, str]] = Observation(
+            proposal=Proposal(candidate=source_candidate, proposal_id="p-1"),
+            candidate=refined_candidate,
+            value=3.0,
+            score=3.0,
+        )
+        refinement: CandidateRefinement[tuple[str, str]] = CandidateRefinement(
+            source_candidate=source_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=(("y",),),
+        )
+
+        outcome = EvaluationOutcome(
+            observation=observation,
+            refinement=refinement,
+        )
+        outcome_refinement = outcome.refinement
+        assert outcome_refinement is not None
+
+        next_state = update_proposal_state(
+            state,
+            (observation,),
+            explicit_local_displacement_leaf_paths=(
+                outcome_refinement.changed_leaf_paths,
+            ),
+        )
+
+        assert len(next_state.local_displacement_leaf_stats) == 1
+        assert next_state.local_displacement_leaf_stats[0].path == ("y",)
 
     def test_plan_mutated_leaf_paths_prefers_recently_successful_leaf(self) -> None:
         policy = CSAProposalPolicy(
@@ -606,6 +966,13 @@ class CSAProposalStateTests:
     def test_proposal_policy_rejects_negative_failure_cooldown_updates(self) -> None:
         with pytest.raises(ValueError, match="non-negative"):
             _ = CSAProposalPolicy(local_search_failure_cooldown_updates=-1)
+
+    @staticmethod
+    def _raise_if_called(
+        _before: tuple[str, str] | int,
+        _after: tuple[str, str] | int,
+    ) -> tuple[tuple[str, ...], ...]:
+        raise AssertionError("inference should not run")
 
 
 class IdentityMutation(VariationOperator[int]):

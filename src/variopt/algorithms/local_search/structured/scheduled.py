@@ -217,6 +217,13 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
             status = KernelStatus.CONVERGED
             message = "no improving scheduled move found"
 
+        refinement = None
+        if completed_steps > 0:
+            refinement = runtime.candidate_refinement(
+                source_candidate=proposal.candidate,
+                refined_candidate=current_candidate,
+            )
+
         return EvaluationOutcome(
             record=Observation.from_objective_value(
                 proposal=proposal,
@@ -232,6 +239,7 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
                 status=status,
                 message=message,
             ),
+            refinement=refinement,
         )
 
     @override

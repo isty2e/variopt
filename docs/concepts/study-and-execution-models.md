@@ -107,3 +107,18 @@ The run method still assimilates results under an exact state-transition law —
 completions may arrive out of order from the evaluator, but the study
 reorders them before handing them to the optimizer. The optimizer sees
 the same logical sequence it would under `sync_batch`.
+
+## Outcome Metadata
+
+Each execution model transports `EvaluationOutcome` values, not just raw
+records. That matters for kernel diagnostics, evaluation-cost accounting, and
+candidate-refinement provenance.
+
+`Study` preserves that metadata in terminal surfaces while keeping the semantic
+feedback record-based. Run methods normally consume `EvaluationRecord` values
+through `tell(...)`; methods that adapt from execution-side metadata can
+override `tell_outcomes(...)` without making refinement part of the evaluation
+protocol.
+
+For the refinement vocabulary, see
+[Candidate Refinement](candidate-refinement.md).

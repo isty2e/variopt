@@ -9,9 +9,43 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..typevars import CandidateT
-from .records import ObjectiveVectorRecord, Observation
+from .records import ObjectiveVectorRecord, Observation, RequestAlignedEvaluationRecord
+from .refinement import CandidateRefinement, require_scalar_candidate_equality
 
-RunRecordT = TypeVar("RunRecordT")
+RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
+
+
+def _normalize_refinements(
+    *,
+    records: Sequence[RequestAlignedEvaluationRecord],
+    refinements: Sequence[CandidateRefinement[CandidateT] | None],
+    record_label: str,
+) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+    refinement_tuple = tuple(refinements)
+    if refinement_tuple == ():
+        return ()
+
+    if len(refinement_tuple) != len(records):
+        msg = f"refinements must be empty or align with {record_label}"
+        raise ValueError(msg)
+
+    if all(refinement is None for refinement in refinement_tuple):
+        return ()
+
+    for record, refinement in zip(records, refinement_tuple, strict=True):
+        if refinement is None:
+            continue
+
+        require_scalar_candidate_equality(
+            record_candidate=record.candidate,
+            refined_candidate=refinement.refined_candidate,
+            mismatch_message=(
+                "refinement refined_candidate must match the aligned "
+                f"{record_label} candidate"
+            ),
+        )
+
+    return refinement_tuple
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,11 +131,15 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
+    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
+        Optional record-aligned refinement provenance. An empty tuple means no
+        refinement metadata was recorded for the run.
     """
 
     records: tuple[RunRecordT, ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate report accounting invariants.
@@ -109,8 +147,12 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         Raises
         ------
         ValueError
-            If ``evaluation_count`` is negative or smaller than
-            ``len(records)``.
+            If ``evaluation_count`` is negative, smaller than ``len(records)``,
+            if non-empty refinement metadata is not aligned with records, or
+            if a refinement's evaluated candidate disagrees with the aligned
+            record candidate.
+        TypeError
+            If candidate equality does not produce a scalar truth value.
         """
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
@@ -120,12 +162,23 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             msg = "evaluation_count must be at least the number of records"
             raise ValueError(msg)
 
+        object.__setattr__(
+            self,
+            "refinements",
+            _normalize_refinements(
+                records=self.records,
+                refinements=self.refinements,
+                record_label="records",
+            ),
+        )
+
     @classmethod
     def from_records(
         cls,
         records: Sequence[RunRecordT],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
     ) -> Self:
         """Build a terminal report from an arbitrary record sequence.
 
@@ -137,6 +190,10 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             Optional logical evaluation cost. Defaults to ``len(records)``.
         trace : Trace | None, optional
             Optional diagnostics trace. Defaults to an empty trace.
+        refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
+            Optional record-aligned refinement provenance. ``None`` keeps the
+            compact no-metadata sentinel. Aligned all-``None`` metadata is
+            canonicalized to the same sentinel.
 
         Returns
         -------
@@ -145,6 +202,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         """
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
+        refinement_tuple = () if refinements is None else tuple(refinements)
         normalized_evaluation_count = len(record_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
@@ -153,6 +211,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             records=record_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
+            refinements=refinement_tuple,
         )
 
 
@@ -170,12 +229,16 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
+    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
+        Optional observation-aligned refinement provenance. An empty tuple
+        means no refinement metadata was recorded for the run.
     """
 
     best_observation: Observation[CandidateT] | None
     observations: tuple[Observation[CandidateT], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate scalar run-summary invariants.
@@ -212,12 +275,23 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "best_observation must have the minimal observation score"
             raise ValueError(msg)
 
+        object.__setattr__(
+            self,
+            "refinements",
+            _normalize_refinements(
+                records=self.observations,
+                refinements=self.refinements,
+                record_label="observations",
+            ),
+        )
+
     @classmethod
     def from_observations(
         cls,
         observations: Sequence[Observation[CandidateT]],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
     ) -> Self:
         """Build a scalar run summary from an observation history.
 
@@ -229,6 +303,9 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Optional logical evaluation cost. Defaults to ``len(observations)``.
         trace : Trace | None, optional
             Optional diagnostics trace. Defaults to an empty trace.
+        refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
+            Optional observation-aligned refinement provenance. ``None`` keeps
+            the compact no-metadata sentinel.
 
         Returns
         -------
@@ -237,6 +314,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         observation_tuple = tuple(observations)
         normalized_trace = Trace() if trace is None else trace
+        refinement_tuple = () if refinements is None else tuple(refinements)
         normalized_evaluation_count = len(observation_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
@@ -247,6 +325,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 observations=(),
                 evaluation_count=normalized_evaluation_count,
                 trace=normalized_trace,
+                refinements=refinement_tuple,
             )
 
         best_observation = min(
@@ -259,6 +338,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             observations=observation_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
+            refinements=refinement_tuple,
         )
 
 
@@ -345,12 +425,16 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
+    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
+        Optional record-aligned refinement provenance. An empty tuple means no
+        refinement metadata was recorded for the run.
     """
 
     nondominated_records: tuple[ObjectiveVectorRecord[CandidateT], ...]
     records: tuple[ObjectiveVectorRecord[CandidateT], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate multi-objective surface invariants.
@@ -386,12 +470,23 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             )
             raise ValueError(msg)
 
+        object.__setattr__(
+            self,
+            "refinements",
+            _normalize_refinements(
+                records=self.records,
+                refinements=self.refinements,
+                record_label="records",
+            ),
+        )
+
     @classmethod
     def from_records(
         cls,
         records: Sequence[ObjectiveVectorRecord[CandidateT]],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
     ) -> Self:
         """Build a nondominated surface from vector-valued records.
 
@@ -403,6 +498,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Optional logical evaluation cost. Defaults to ``len(records)``.
         trace : Trace | None, optional
             Optional diagnostics trace. Defaults to an empty trace.
+        refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
+            Optional record-aligned refinement provenance. ``None`` keeps the
+            compact no-metadata sentinel.
 
         Returns
         -------
@@ -412,6 +510,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
+        refinement_tuple = () if refinements is None else tuple(refinements)
         normalized_evaluation_count = len(record_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
@@ -421,6 +520,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             records=record_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
+            refinements=refinement_tuple,
         )
 
     @classmethod
@@ -444,4 +544,5 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             records=report.records,
             evaluation_count=report.evaluation_count,
             trace=report.trace,
+            refinements=report.refinements,
         )

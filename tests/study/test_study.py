@@ -15,8 +15,10 @@ from tests.study_support import (
     LabelProtocol,
     LabelRecord,
     MisorderedEvaluator,
+    OutcomeAwareBatchQueueOptimizer,
     RecordingExecutionResourcesKernel,
     RecordingKernel,
+    RefinementKernel,
     ScoringKernel,
     ShiftedObservationProtocol,
     SquareObjective,
@@ -465,6 +467,7 @@ class StudyTests:
         assert result.best_observation.value == 1.0
         assert result.best_observation.score == 1.0
         assert len(result.trace.events) == 2
+        assert result.refinements == ()
 
     def test_run_returns_terminal_run_report_for_scalar_observations(self) -> None:
         problem = Problem(
@@ -491,6 +494,125 @@ class StudyTests:
         assert report.records[1].value == 4.0
         assert report.records[2].value == 1.0
         assert tuple(event.value for event in report.trace.events) == (4.0, 1.0)
+
+    def test_run_preserves_record_aligned_refinement_metadata(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+                (Proposal(candidate=0, proposal_id="p-3"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RefinementKernel(),
+        )
+
+        report, final_state = study.run(max_evaluations=3, batch_size=2)
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+            "p-2",
+            "p-3",
+        )
+        assert tuple(record.candidate for record in report.records) == (3, 1, 0)
+        assert len(report.refinements) == 3
+        first_refinement = report.refinements[0]
+        second_refinement = report.refinements[1]
+        assert first_refinement is not None
+        assert second_refinement is not None
+        assert first_refinement.source_candidate == 4
+        assert first_refinement.refined_candidate == report.records[0].candidate
+        assert second_refinement.source_candidate == 2
+        assert second_refinement.refined_candidate == report.records[1].candidate
+        assert report.refinements[2] is None
+        assert final_state.tell_history == (
+            tuple(report.records[:2]),
+            tuple(report.records[2:]),
+        )
+
+    def test_run_keeps_no_refinement_report_allocation_light(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, _ = study.run(max_evaluations=1)
+
+        assert report.refinements == ()
+
+    def test_run_backfills_unrefined_history_when_late_refinement_appears(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=0, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RefinementKernel(),
+        )
+
+        report, _ = study.run(max_evaluations=2)
+
+        assert len(report.refinements) == 2
+        assert report.refinements[0] is None
+        late_refinement = report.refinements[1]
+        assert late_refinement is not None
+        assert late_refinement.source_candidate == 3
+        assert late_refinement.refined_candidate == report.records[1].candidate
+
+    def test_run_preserves_refinement_when_evaluation_cost_overshoots_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        report, _ = study.run(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+        )
+
+        assert report.evaluation_count == 7
+        assert len(report.records) == 1
+        assert len(report.refinements) == 1
+        refinement = report.refinements[0]
+        assert refinement is not None
+        assert refinement.source_candidate == 4
+        assert refinement.refined_candidate == report.records[0].candidate
 
     def test_study_kernel_makes_local_optimization_visible(self) -> None:
         problem = Problem(
@@ -545,7 +667,71 @@ class StudyTests:
         assert result.observations[0].candidate == 2
         assert result.observations[0].value == 4.0
         assert result.observations[0].score == 4.0
+        assert len(result.refinements) == 1
+        refinement = result.refinements[0]
+        assert refinement is not None
+        assert refinement.source_candidate == 4
+        assert refinement.refined_candidate == 2
         assert len(final_state.tell_history) == 1
+
+    def test_optimize_backfills_unrefined_history_when_late_refinement_appears(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=0, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RefinementKernel(),
+        )
+
+        result, _ = study.optimize(max_evaluations=2)
+
+        assert tuple(
+            observation.proposal.proposal_id for observation in result.observations
+        ) == ("p-1", "p-2")
+        assert len(result.refinements) == 2
+        assert result.refinements[0] is None
+        late_refinement = result.refinements[1]
+        assert late_refinement is not None
+        assert late_refinement.source_candidate == 3
+        assert late_refinement.refined_candidate == result.observations[1].candidate
+
+    def test_study_assimilation_uses_outcome_aware_run_method_hook(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = OutcomeAwareBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=0, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RefinementKernel(),
+        )
+
+        report, _ = study.run(max_evaluations=2, batch_size=2)
+
+        assert tuple(record.candidate for record in report.records) == (3, 0)
+        assert optimizer.seen_changed_leaf_paths == (((),), None)
 
     def test_study_passes_evaluator_execution_resources_to_kernel(self) -> None:
         problem = Problem(

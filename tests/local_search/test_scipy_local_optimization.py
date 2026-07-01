@@ -146,6 +146,15 @@ class ScipyMinimizeKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.method == "L-BFGS-B"
         assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == 4.0
+        assert approx_equal(
+            outcome.refinement.refined_candidate,
+            1.5,
+            rel=0.0,
+            abs=10 ** (-(5)),
+        )
+        assert outcome.refinement.changed_leaf_paths == ((),)
 
     def test_powell_improves_log_scaled_record_problem(self) -> None:
         space = RecordSpace(
@@ -193,6 +202,10 @@ class ScipyMinimizeKernelTests:
         )
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.method == "Powell"
+        assert outcome.refinement is not None
+        assert outcome.refinement.source_candidate == initial_candidate
+        assert outcome.refinement.refined_candidate == outcome.observation.candidate
+        assert outcome.refinement.changed_leaf_paths == (("x",), ("y",))
 
     def test_rejects_non_continuous_integer_problem(self) -> None:
         problem = Problem(
@@ -243,6 +256,7 @@ class ScipyMinimizeKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "local search disabled by run-method context"
+        assert outcome.refinement is None
 
     def test_context_can_override_scipy_iteration_budget(
         self,

@@ -56,6 +56,23 @@ The *mutation* family sits alongside the regular schedule and is used to
 inject occasional diversity, particularly late in the run when the cutoff has
 contracted.
 
+## Local Refinement Feedback
+
+When a kernel or evaluator refines a CSA proposal before evaluation, the
+resulting `CandidateRefinement` can include the structured leaf paths that
+changed. CSA proposal adaptation treats those explicit paths as authoritative
+local-displacement feedback. It falls back to comparing the proposed and
+evaluated candidates only when no refinement metadata is present.
+
+Explicit empty path metadata means "no local displacement paths were reported",
+not "infer them later". CSA therefore records no local displacement for that
+outcome and avoids candidate comparison in that path. This feedback affects only
+proposal adaptation; bank admission, scoring, evaluation accounting, and
+checkpoint state remain governed by the evaluated records.
+
+For the broader execution boundary, see
+[Candidate Refinement](candidate-refinement.md).
+
 ## How CSA Differs From GA And DE
 
 CSA shares the ask/tell contract with the other population optimizers in

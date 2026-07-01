@@ -30,6 +30,7 @@ from .exact_async.orchestration import (
     resume_exact_async_step_session as resume_exact_async_step_session_for_study,
 )
 from .exact_async.session import StudyExactAsyncStepSession
+from .execution import materialize_scalar_run_result
 from .execution import optimize as optimize_study
 from .execution import run as run_study
 from .execution import step as step_study
@@ -300,6 +301,16 @@ class Study(FrozenGenericSlotsCompat,
         tuple[RunResult[CandidateT], RunMethodStateT]
             Terminal scalar run summary followed by the final run-method state.
         """
+        if execution_model == STALE_ASYNC_EXECUTION_MODEL:
+            run_report, state = self.run(
+                max_evaluations=max_evaluations,
+                batch_size=batch_size,
+                execution_model=execution_model,
+                count_evaluation_cost=count_evaluation_cost,
+                initial_state=initial_state,
+            )
+            return materialize_scalar_run_result(run_report), state
+
         return optimize_study(
             self,
             max_evaluations=max_evaluations,

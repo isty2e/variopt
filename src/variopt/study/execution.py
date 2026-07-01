@@ -8,6 +8,7 @@ from typing_extensions import TypeVar
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..artifacts import (
+    CandidateRefinement,
     EvaluationRequest,
     Observation,
     Proposal,
@@ -269,8 +270,7 @@ def evaluate_step(
     outcomes = study.kernel.run(top_level_query, batch_executor)
     requests = requests_for_query(top_level_query)
     validate_aligned_outcomes(requests, outcomes)
-    records = tuple(outcome.record for outcome in outcomes)
-    next_state = study.run_method.tell(next_state, records)
+    next_state = study.run_method.tell_outcomes(next_state, outcomes)
     return StudyStepResult(outcomes=outcomes, state=next_state)
 
 
@@ -393,6 +393,7 @@ def run(
     )
 
     records: list[StudyEvaluationRecordT] = []
+    refinements: list[CandidateRefinement[CandidateT] | None] | None = None
     trace = Trace()
     remaining = max_evaluations
     state = (
@@ -410,8 +411,20 @@ def run(
             execution_model=execution_model,
         )
         batch_records = tuple(outcome.record for outcome in step_result.outcomes)
+        batch_refinements = tuple(
+            outcome.refinement for outcome in step_result.outcomes
+        )
         state = step_result.state
+        records_before_batch = len(records)
         records.extend(batch_records)
+        if refinements is not None:
+            refinements.extend(batch_refinements)
+        elif any(refinement is not None for refinement in batch_refinements):
+            refinement_history: list[
+                CandidateRefinement[CandidateT] | None
+            ] = [None for _index in range(records_before_batch)]
+            refinement_history.extend(batch_refinements)
+            refinements = refinement_history
         batch_evaluation_count = sum(
             outcome.evaluation_count for outcome in step_result.outcomes
         )
@@ -432,8 +445,48 @@ def run(
             records=records,
             evaluation_count=max_evaluations - remaining,
             trace=trace,
+            refinements=None if refinements is None else tuple(refinements),
         ),
         state,
+    )
+
+
+def materialize_scalar_run_result(
+    run_report: RunReport[CandidateT, StudyEvaluationRecordT],
+) -> RunResult[CandidateT]:
+    """Project a generic run report into a scalar terminal result.
+
+    Parameters
+    ----------
+    run_report : RunReport[CandidateT, StudyEvaluationRecordT]
+        Generic terminal report to project.
+
+    Returns
+    -------
+    RunResult[CandidateT]
+        Scalar terminal result that preserves trace, accounting, and aligned
+        refinement provenance from ``run_report``.
+
+    Raises
+    ------
+    TypeError
+        If the report does not contain scalar :class:`Observation` records.
+    """
+    observations: list[Observation[CandidateT]] = []
+    for record in run_report.records:
+        if not isinstance(record, Observation):
+            msg = (
+                "Study.optimize currently requires scalar Observation records; "
+                "use Study.run for non-scalar evaluation protocols"
+            )
+            raise TypeError(msg)
+        observations.append(cast(Observation[CandidateT], record))
+
+    return RunResult[CandidateT].from_observations(
+        observations=tuple(observations),
+        evaluation_count=run_report.evaluation_count,
+        trace=run_report.trace,
+        refinements=run_report.refinements,
     )
 
 
@@ -488,21 +541,5 @@ def optimize(
         count_evaluation_cost=count_evaluation_cost,
         initial_state=initial_state,
     )
-    observations: list[Observation[CandidateT]] = []
-    for record in run_report.records:
-        if not isinstance(record, Observation):
-            msg = (
-                "Study.optimize currently requires scalar Observation records; "
-                "use Study.run for non-scalar evaluation protocols"
-            )
-            raise TypeError(msg)
-        observations.append(cast(Observation[CandidateT], record))
 
-    return (
-        RunResult[CandidateT].from_observations(
-            observations=tuple(observations),
-            evaluation_count=run_report.evaluation_count,
-            trace=run_report.trace,
-        ),
-        state,
-    )
+    return materialize_scalar_run_result(run_report), state

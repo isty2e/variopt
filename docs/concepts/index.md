@@ -11,6 +11,7 @@ everything into one optimizer object.
 - [Optimization Model](optimization-model.md)
 - [Spaces and Candidates](spaces-and-candidates.md)
 - [Study and Execution Models](study-and-execution-models.md)
+- [Candidate Refinement](candidate-refinement.md)
 
 ## Algorithm Families
 

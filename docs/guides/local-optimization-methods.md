@@ -16,6 +16,16 @@ The current boundary is:
 Local optimization therefore lives on the kernel side of the execution path,
 not inside evaluator backends.
 
+When local optimization changes a candidate, the kernel should attach
+[`CandidateRefinement`](../reference/api/variopt.md) to the returned
+`EvaluationOutcome`. That metadata records the source candidate, the candidate
+actually evaluated, and any structured leaf paths changed by the episode. It is
+provenance, not evaluation-protocol semantics; the evaluation record remains the
+authoritative result.
+
+For the proposed/refined/evaluated/accepted vocabulary, see
+[Candidate Refinement](../concepts/candidate-refinement.md).
+
 ## Current Built-In Support
 
 The current reusable built-in kernels are:
@@ -180,6 +190,10 @@ Practical guidance:
 If a custom kernel already computed the objective value, it should return both
 that value and the true `evaluation_count` so that `Study` can reuse the value
 instead of evaluating the objective again.
+
+Refinement metadata and budget metadata are orthogonal. A kernel can report a
+refined candidate with `evaluation_count=1`, or it can report no refinement while
+still charging a larger inner evaluation count.
 
 ## Evaluator Backend Interaction
 

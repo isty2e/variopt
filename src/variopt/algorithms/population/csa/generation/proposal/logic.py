@@ -559,6 +559,9 @@ def update_proposal_state(
     state: CSAProposalState,
     observations: Sequence[Observation[CandidateT]],
     *,
+    explicit_local_displacement_leaf_paths: (
+        Sequence[tuple[LeafPath, ...] | None] | None
+    ) = None,
     infer_local_displacement_leaf_paths: (
         Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
     ) = None,
@@ -577,6 +580,10 @@ def update_proposal_state(
         Current proposal adaptation state.
     observations : Sequence[Observation[CandidateT]]
         Observation batch to reduce into proposal statistics.
+    explicit_local_displacement_leaf_paths : Sequence[tuple[LeafPath, ...] | None] | None, default=None
+        Optional observation-aligned leaf paths supplied by execution
+        refinement metadata. ``None`` entries fall back to inference when an
+        inference callback is available; tuple entries are used directly.
     infer_local_displacement_leaf_paths : Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None, default=None
         Optional callback that infers structured leaf paths changed by local
         post-processing.
@@ -591,8 +598,17 @@ def update_proposal_state(
     if not state.policy.enabled or len(observations) == 0:
         return state
 
+    explicit_path_tuple: tuple[tuple[LeafPath, ...] | None, ...] | None = None
+    if explicit_local_displacement_leaf_paths is not None:
+        explicit_path_tuple = tuple(explicit_local_displacement_leaf_paths)
+        if len(explicit_path_tuple) != len(observations):
+            msg = (
+                "explicit_local_displacement_leaf_paths must align with observations"
+            )
+            raise ValueError(msg)
+
     next_state = state
-    for observation in observations:
+    for observation_index, observation in enumerate(observations):
         proposal_id = observation.proposal.proposal_id
         if proposal_id is None:
             continue
@@ -604,7 +620,14 @@ def update_proposal_state(
         score_improvement = attribution.source_score - observation.score
         local_displacement_leaf_paths: tuple[LeafPath, ...] = ()
         numeric_displacement: NumericSubspaceDisplacement | None = None
-        if infer_local_displacement_leaf_paths is not None:
+        explicit_leaf_paths = (
+            None
+            if explicit_path_tuple is None
+            else explicit_path_tuple[observation_index]
+        )
+        if explicit_leaf_paths is not None:
+            local_displacement_leaf_paths = explicit_leaf_paths
+        elif infer_local_displacement_leaf_paths is not None:
             local_displacement_leaf_paths = infer_local_displacement_leaf_paths(
                 observation.proposal.candidate,
                 observation.candidate,

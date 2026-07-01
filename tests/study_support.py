@@ -2,11 +2,12 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import final
+from typing import TypeVar, final
 
 from typing_extensions import override
 
 from variopt import (
+    CandidateRefinement,
     EvaluationOutcome,
     EvaluationProtocol,
     EvaluationRecord,
@@ -45,6 +46,9 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
+from variopt.spaces import LeafPath
+
+OutcomeCandidateT = TypeVar("OutcomeCandidateT")
 
 
 class SquareObjective(Objective[int]):
@@ -109,6 +113,27 @@ class LabelProtocol(EvaluationProtocol[int, LabelRecord]):
         )
 
 
+def _make_async_evaluation_outcome(
+    problem: Problem[int, int],
+    request: EvaluationRequest[int],
+    *,
+    attach_refinement: bool,
+) -> EvaluationOutcome[int, Observation[int]]:
+    record = problem.evaluation_protocol.evaluate_request(request)
+    refinement = None
+    if attach_refinement:
+        refinement = CandidateRefinement(
+            source_candidate=request.candidate,
+            refined_candidate=record.candidate,
+            changed_leaf_paths=((),),
+        )
+    return EvaluationOutcome(
+        record=record,
+        evaluation_count=1,
+        refinement=refinement,
+    )
+
+
 class DecrementKernel(
     Kernel[
         ProposalBatchQuery[int, int, Observation[int]],
@@ -151,6 +176,56 @@ class DecrementKernel(
         return tuple(outcomes)
 
 
+class RefinementKernel(
+    Kernel[
+        ProposalBatchQuery[int, int, Observation[int]],
+        tuple[EvaluationOutcome[int, Observation[int]], ...],
+    ],
+):
+    """Kernel that emits explicit refinement metadata when it changes a candidate."""
+
+    @override
+    def run(
+        self,
+        query: ProposalBatchQuery[int, int, Observation[int]],
+        runner: Callable[
+            [ProposalBatchQuery[int, int, Observation[int]]],
+            tuple[EvaluationOutcome[int, Observation[int]], ...],
+        ],
+    ) -> tuple[EvaluationOutcome[int, Observation[int]], ...]:
+        outcomes: list[EvaluationOutcome[int, Observation[int]]] = []
+        for proposal in query.proposals:
+            refined_candidate = max(0, proposal.candidate - 1)
+            local_outcomes = runner(
+                ProposalBatchQuery(
+                    problem=query.problem,
+                    proposals=(Proposal(candidate=refined_candidate),),
+                    execution_resources=query.execution_resources,
+                )
+            )
+            local_outcome = local_outcomes[0]
+            refinement = None
+            if refined_candidate != proposal.candidate:
+                refinement = CandidateRefinement(
+                    source_candidate=proposal.candidate,
+                    refined_candidate=refined_candidate,
+                    changed_leaf_paths=((),),
+                )
+            outcomes.append(
+                EvaluationOutcome(
+                    observation=Observation.from_objective_value(
+                        proposal=proposal,
+                        candidate=refined_candidate,
+                        value=local_outcome.observation.value,
+                        direction=query.problem.direction,
+                    ),
+                    evaluation_count=local_outcome.evaluation_count,
+                    refinement=refinement,
+                )
+            )
+        return tuple(outcomes)
+
+
 class ScoringKernel(
     Kernel[
         ProposalBatchQuery[int, int, Observation[int]],
@@ -172,6 +247,13 @@ class ScoringKernel(
         outcomes: list[EvaluationOutcome[int, Observation[int]]] = []
         for proposal in query.proposals:
             refined_candidate = max(0, proposal.candidate - 2)
+            refinement = None
+            if refined_candidate != proposal.candidate:
+                refinement = CandidateRefinement(
+                    source_candidate=proposal.candidate,
+                    refined_candidate=refined_candidate,
+                    changed_leaf_paths=((),),
+                )
             outcomes.append(
                 EvaluationOutcome(
                     observation=Observation.from_objective_value(
@@ -187,6 +269,7 @@ class ScoringKernel(
                         status=KernelStatus.CONVERGED,
                         message="ok",
                     ),
+                    refinement=refinement,
                 )
             )
         return tuple(outcomes)
@@ -288,6 +371,33 @@ class ExactAsyncCapableBatchQueueOptimizer(BatchQueueOptimizer):
                 SYNC_BATCH_EXECUTION_MODEL,
                 EXACT_ASYNC_EXECUTION_MODEL,
             },
+        )
+
+
+class OutcomeAwareBatchQueueOptimizer(BatchQueueOptimizer):
+    """Batch-queue optimizer that records full outcome metadata."""
+
+    seen_changed_leaf_paths: tuple[tuple[LeafPath, ...] | None, ...]
+
+    def __init__(self, proposal_batches: list[tuple[Proposal[int], ...]]) -> None:
+        super().__init__(proposal_batches)
+        self.seen_changed_leaf_paths = ()
+
+    @override
+    def tell_outcomes(
+        self,
+        state: BatchQueueOptimizerState,
+        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[int]]],
+    ) -> BatchQueueOptimizerState:
+        self.seen_changed_leaf_paths += tuple(
+            None
+            if outcome.refinement is None
+            else outcome.refinement.changed_leaf_paths
+            for outcome in outcomes
+        )
+        return super().tell(
+            state,
+            tuple(outcome.record for outcome in outcomes),
         )
 
 
@@ -456,10 +566,12 @@ class OutOfOrderAsyncEvaluator(
         str,
         tuple[CompletionGroup[EvaluationOutcome[int, Observation[int]]], ...],
     ]
+    _attach_refinement: bool
 
-    def __init__(self) -> None:
+    def __init__(self, *, attach_refinement: bool = False) -> None:
         self._next_batch_id = 0
         self._pending_groups = {}
+        self._attach_refinement = attach_refinement
 
     @override
     def submit_batch(
@@ -476,9 +588,10 @@ class OutOfOrderAsyncEvaluator(
             CompletionGroup(
                 start_index=index,
                 outcomes=(
-                    EvaluationOutcome(
-                        record=problem.evaluation_protocol.evaluate_request(request),
-                        evaluation_count=1,
+                    _make_async_evaluation_outcome(
+                        problem,
+                        request,
+                        attach_refinement=self._attach_refinement,
                     ),
                 ),
             )
@@ -519,8 +632,8 @@ class OutOfOrderAsyncEvaluator(
 class SessionRecordingAsyncEvaluator(OutOfOrderAsyncEvaluator):
     """Async evaluator that records exact-async session openings."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *, attach_refinement: bool = False) -> None:
+        super().__init__(attach_refinement=attach_refinement)
         self.opened_batch_sizes: tuple[int, ...] = ()
 
     @override
@@ -591,10 +704,11 @@ class ResumableOutOfOrderAsyncEvaluator(
         tuple[CompletionGroup[EvaluationOutcome[int, Observation[int]]], ...],
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, *, attach_refinement: bool = False) -> None:
         self._next_batch_id = 0
         self._pending_groups = {}
         self._suspended_groups = {}
+        self._attach_refinement = attach_refinement
 
     @override
     def open_session(
@@ -622,9 +736,10 @@ class ResumableOutOfOrderAsyncEvaluator(
             CompletionGroup(
                 start_index=index,
                 outcomes=(
-                    EvaluationOutcome(
-                        record=problem.evaluation_protocol.evaluate_request(request),
-                        evaluation_count=1,
+                    _make_async_evaluation_outcome(
+                        problem,
+                        request,
+                        attach_refinement=self._attach_refinement,
                     ),
                 ),
             )

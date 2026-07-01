@@ -101,5 +101,6 @@ The full documentation is organized as:
 | Pick an optimizer family | [Choose an Optimizer](docs/guides/choose-an-optimizer.md) |
 | CSA preset and profile customization | [Customize an Optimizer Profile](docs/guides/customize-optimizer-profile.md) |
 | Local-search kernel guidance | [Local Optimization Methods](docs/guides/local-optimization-methods.md) |
+| Candidate refinement provenance | [Candidate Refinement](docs/concepts/candidate-refinement.md) |
 | Non-scalar / multi-objective patterns | [Canonical Usage Patterns](docs/guides/canonical-usage-patterns.md) |
 | Public API reference | [API Surface](docs/reference/api.md) |

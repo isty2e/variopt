@@ -3,6 +3,7 @@
 
 import variopt
 from variopt.artifacts import (
+    CandidateRefinement,
     EvaluationRequest,
     NondominatedRunSurface,
     Observation,
@@ -43,6 +44,7 @@ class RootFacadeExportTests:
     """Lock the 0.1.0 variopt root facade to direct-use and common contract nouns."""
 
     def test_root_facade_reexports_common_direct_use_and_contract_nouns(self) -> None:
+        assert variopt.CandidateRefinement is CandidateRefinement
         assert variopt.EvaluationOutcome is EvaluationOutcome
         assert variopt.EvaluationRequest is EvaluationRequest
         assert variopt.Evaluator is Evaluator

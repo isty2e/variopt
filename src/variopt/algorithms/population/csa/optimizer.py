@@ -21,6 +21,7 @@ from ....execution import (
 from ....json_types import JSONDict, JSONValue
 from ....kernel import ProposalLocalSearchContext
 from ....methods import RunMethod
+from ....outcomes import EvaluationOutcome
 from ....randomness import RandomSeed, RandomStateSnapshot
 from ....sampling import CandidateSampler
 from ....spaces import LeafPath, SearchSpace
@@ -78,6 +79,7 @@ from .selection.state import SeedSelectionState
 from .trace.events.state import CSAEventTraceState
 
 BoundaryT = TypeVar("BoundaryT")
+OutcomeCandidateT = TypeVar("OutcomeCandidateT")
 StructuredBoundaryT = TypeVar("StructuredBoundaryT")
 StructuredCandidateT = TypeVar("StructuredCandidateT", bound=SpaceCandidateValue)
 
@@ -578,6 +580,64 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
             Updated immutable engine state after score, bank, and lifecycle
             updates.
         """
+        return self._tell_with_explicit_local_displacements(
+            state,
+            observations,
+        )
+
+    @override
+    def tell_outcomes(
+        self,
+        state: CSAEngineState[CandidateT],
+        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[CandidateT]]],
+    ) -> CSAEngineState[CandidateT]:
+        """Advance CSA state with full outcomes when refinement metadata exists.
+
+        Parameters
+        ----------
+        state : CSAEngineState[CandidateT]
+            Current immutable engine state.
+        outcomes : Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[CandidateT]]]
+            Evaluation outcomes aligned with currently pending proposals.
+
+        Returns
+        -------
+        CSAEngineState[CandidateT]
+            Updated immutable engine state after score, bank, and lifecycle
+            updates.
+        """
+        observations: list[Observation[CandidateT]] = []
+        explicit_paths: list[tuple[LeafPath, ...] | None] | None = None
+        for outcome_index, outcome in enumerate(outcomes):
+            observations.append(outcome.record)
+            refinement = outcome.refinement
+            if explicit_paths is not None:
+                explicit_paths.append(
+                    None if refinement is None else refinement.changed_leaf_paths
+                )
+            elif refinement is not None:
+                explicit_paths = [None for _index in range(outcome_index)]
+                explicit_paths.append(refinement.changed_leaf_paths)
+
+        if explicit_paths is None:
+            return self.tell(state, tuple(observations))
+
+        return self._tell_with_explicit_local_displacements(
+            state,
+            tuple(observations),
+            explicit_local_displacement_leaf_paths=tuple(explicit_paths),
+        )
+
+    def _tell_with_explicit_local_displacements(
+        self,
+        state: CSAEngineState[CandidateT],
+        observations: Sequence[Observation[CandidateT]],
+        *,
+        explicit_local_displacement_leaf_paths: (
+            Sequence[tuple[LeafPath, ...] | None] | None
+        ) = None,
+    ) -> CSAEngineState[CandidateT]:
+        """Advance CSA state with optional explicit local-displacement paths."""
         local_displacement_leaf_path_inference: (
             Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
         ) = None
@@ -648,6 +708,7 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
                 infer_average_distance=self.infer_average_distance_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
+                explicit_local_displacement_leaf_paths=explicit_local_displacement_leaf_paths,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
             )
 
@@ -664,6 +725,7 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
                 infer_average_distance=self.infer_average_distance_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
+                explicit_local_displacement_leaf_paths=explicit_local_displacement_leaf_paths,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
             ),
         )

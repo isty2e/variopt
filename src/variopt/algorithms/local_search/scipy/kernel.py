@@ -8,7 +8,12 @@ from typing_extensions import override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ....artifacts import Observation, Proposal, ProposalEvaluationSpec
+from ....artifacts import (
+    CandidateRefinement,
+    Observation,
+    Proposal,
+    ProposalEvaluationSpec,
+)
 from ....kernel import (
     Kernel,
     KernelDiagnostics,
@@ -26,6 +31,47 @@ from .runner import run_scipy_minimize
 
 BoundaryT = TypeVar("BoundaryT")
 ContinuousCandidateT = TypeVar("ContinuousCandidateT", bound=SpaceCandidateValue)
+
+
+def _candidate_refinement_from_codec(
+    *,
+    codec: ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT],
+    source_candidate: ContinuousCandidateT,
+    refined_candidate: ContinuousCandidateT,
+) -> CandidateRefinement[ContinuousCandidateT] | None:
+    """Return candidate-refinement provenance from continuous codec topology.
+
+    Parameters
+    ----------
+    codec : ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT]
+        Codec that owns the real-valued structured leaf paths.
+    source_candidate : ContinuousCandidateT
+        Candidate before SciPy-backed local optimization.
+    refined_candidate : ContinuousCandidateT
+        Candidate returned by SciPy-backed local optimization.
+
+    Returns
+    -------
+    CandidateRefinement[ContinuousCandidateT] | None
+        Refinement payload with changed leaf paths, or ``None`` when the final
+        optimized candidate preserves every structured leaf value.
+    """
+    codec.space.validate(source_candidate)
+    codec.space.validate(refined_candidate)
+    changed_leaf_paths = tuple(
+        path
+        for path in codec.leaf_paths
+        if codec.space.leaf_value_at_path(source_candidate, path)
+        != codec.space.leaf_value_at_path(refined_candidate, path)
+    )
+    if len(changed_leaf_paths) == 0:
+        return None
+
+    return CandidateRefinement(
+        source_candidate=source_candidate,
+        refined_candidate=refined_candidate,
+        changed_leaf_paths=changed_leaf_paths,
+    )
 
 
 def _as_local_search_context(
@@ -278,6 +324,11 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             proposal.candidate,
             scipy_result.coordinates,
         )
+        refinement = _candidate_refinement_from_codec(
+            codec=codec,
+            source_candidate=proposal.candidate,
+            refined_candidate=optimized_candidate,
+        )
         return EvaluationOutcome(
             record=Observation.from_objective_value(
                 proposal=proposal,
@@ -288,6 +339,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             ),
             evaluation_count=evaluation_count,
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),
+            refinement=refinement,
         )
 
     @override
