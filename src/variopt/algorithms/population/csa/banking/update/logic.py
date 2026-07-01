@@ -22,7 +22,7 @@ from ..growth.logic import (
     should_attempt_remove_top,
     try_append_growth_entry,
 )
-from ..queries import crowded_indices, crowding_aware_scores
+from ..queries import BankDistanceWorkspace, crowded_indices, crowding_aware_scores
 from .admission import admit_observation, replace_bank_entry
 from .policy import CSABankUpdatePolicy
 from .result import BankUpdateResult, changed_indices, significant_update_indices
@@ -284,6 +284,19 @@ def admit_full_bank_observation(
         value=observation.score,
         proposal_id=observation.proposal.proposal_id,
     )
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
+
+    def get_distance_workspace() -> BankDistanceWorkspace[CandidateT]:
+        nonlocal distance_workspace
+        workspace = distance_workspace
+        if workspace is None:
+            workspace = BankDistanceWorkspace(
+                entries=bank.entries,
+                diversity_metric=diversity_metric,
+            )
+            distance_workspace = workspace
+        return workspace
+
     entry_distances = tuple(
         require_valid_distance(
             diversity_metric.distance(observation.candidate, entry.candidate),
@@ -296,6 +309,11 @@ def admit_full_bank_observation(
         distance_cutoff=distance_cutoff,
         minimum_distance_cutoff=minimum_distance_cutoff,
         masked_entry_indices=masked_seed_indices,
+        distance_workspace=(
+            get_distance_workspace()
+            if score_model_state.score_model.has_biased_potential
+            else None
+        ),
     )
     trial = score_model_state.score_trial(
         observation=observation,
@@ -441,6 +459,7 @@ def admit_full_bank_observation(
                 entries=bank.entries,
                 diversity_metric=diversity_metric,
                 distance_cutoff=distance_cutoff,
+                distance_workspace=get_distance_workspace(),
             )
         )
         if crowded_removable_indices:
@@ -454,6 +473,7 @@ def admit_full_bank_observation(
             distance_cutoff=distance_cutoff,
             penalty_ratio=update_policy.crowding_penalty_ratio,
             niche_quality_policy=update_policy.niche_quality_policy,
+            distance_workspace=get_distance_workspace(),
         )
         worst_index = max(range(len(removal_scores)), key=removal_scores.__getitem__)
     else:

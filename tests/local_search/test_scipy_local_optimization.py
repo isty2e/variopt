@@ -33,8 +33,10 @@ from variopt.spaces import (
     RealSpace,
     RecordCandidate,
     RecordSpace,
+    SearchSpace,
     SpaceBoundaryValue,
 )
+from variopt.spaces.projections import ContinuousStructuredSpaceCodec
 
 BoundaryRunnerT = TypeVar("BoundaryRunnerT")
 CandidateRunnerT = TypeVar("CandidateRunnerT")
@@ -318,6 +320,125 @@ class ScipyMinimizeKernelTests:
         _ = kernel.run(query, evaluate_query_directly)
 
         assert captured_options == [{"maxiter": 3}]
+
+    def test_structured_codec_is_prepared_once_per_query(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=4.0, proposal_id="p-1"),
+                Proposal(candidate=-2.0, proposal_id="p-2"),
+            ),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+        )
+        codec_call_count = 0
+
+        def count_from_space(
+            cls: type[ContinuousStructuredSpaceCodec[float | int, float]],
+            space: SearchSpace[float | int, float],
+        ) -> ContinuousStructuredSpaceCodec[float | int, float]:
+            nonlocal codec_call_count
+            _ = cls
+            codec_call_count += 1
+            if not isinstance(space, RealSpace):
+                msg = "test codec only supports RealSpace"
+                raise TypeError(msg)
+            return ContinuousStructuredSpaceCodec(
+                space=space,
+                leaf_paths=space.leaf_paths(),
+                leaf_spaces=(space,),
+            )
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: object,
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                objective_in_coordinate_space,
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=0.0,
+                nfev=1,
+                success=True,
+                message="ok",
+            )
+
+        monkeypatch.setattr(
+            ContinuousStructuredSpaceCodec,
+            "from_space",
+            classmethod(count_from_space),
+        )
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(query, evaluate_query_directly)
+
+        assert len(outcomes) == 2
+        assert codec_call_count == 1
+
+    def test_disabled_local_search_does_not_prepare_structured_codec(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=4.0, proposal_id="p-1"),),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+            proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
+        )
+
+        def reject_from_space(
+            cls: type[ContinuousStructuredSpaceCodec[float | int, float]],
+            space: SearchSpace[float | int, float],
+        ) -> ContinuousStructuredSpaceCodec[float | int, float]:
+            _ = (cls, space)
+            raise AssertionError("disabled local search should not prepare codec")
+
+        monkeypatch.setattr(
+            ContinuousStructuredSpaceCodec,
+            "from_space",
+            classmethod(reject_from_space),
+        )
+
+        outcomes = kernel.run(query, evaluate_query_directly)
+
+        assert outcomes[0].observation.candidate == 4.0
 
     def test_rejects_non_local_search_kernel_hint(self) -> None:
         problem = Problem(

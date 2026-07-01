@@ -13,6 +13,7 @@ from variopt.algorithms.population.csa import (
     CSAAdaptivePotentialAxis,
     CSABankGrowthPolicy,
     CSABankUpdatePolicy,
+    CSABiasedPotential,
     CSAClusteringPolicy,
     CSACutoffSchedule,
     CSANicheQualityPolicy,
@@ -56,6 +57,20 @@ class AbsoluteDistance(DiversityMetric[int]):
     @override
     def distance(self, left: int, right: int) -> float:
         return float(abs(left - right))
+
+
+class CountingAbsoluteDistance(AbsoluteDistance):
+    """Absolute-value distance that records every concrete distance call."""
+
+    call_count: int
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.call_count += 1
+        return super().distance(left, right)
 
 
 class CSAClusteringRuntimeTests:
@@ -615,6 +630,55 @@ class CSAClusteringRuntimeTests:
         )
         assert len(best_mean_result.bank.entries) == 4
 
+    def test_bank_distance_workspace_is_shared_across_scoring_and_crowding(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+
+        batch_result = run_cluster_batch(
+            bank=Bank(
+                capacity=3,
+                entries=(
+                    BankEntry(candidate=0, value=50.0),
+                    BankEntry(candidate=1, value=40.0),
+                    BankEntry(candidate=100, value=100.0),
+                ),
+            ),
+            observation=Observation(
+                proposal=Proposal(candidate=20, proposal_id="p-1"),
+                candidate=20,
+                value=60.0,
+                score=60.0,
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(),
+            ),
+            distance_cutoff=2.0,
+            score_model=CSAScoreModel(
+                biased_potential=CSABiasedPotential(
+                    maximum_bias=1.0,
+                    sigma=1.0,
+                    sigma_reference="constant",
+                ),
+            ),
+            update_policy=CSABankUpdatePolicy(
+                far_update_mode="crowding_aware",
+                crowding_penalty_ratio=1.0,
+                niche_quality_policy=CSANicheQualityPolicy(
+                    mode="best_mean",
+                    ratio=1.0,
+                ),
+            ),
+            diversity_metric=diversity_metric,
+        )
+
+        assert len(batch_result.bank.entries) == 3
+        expected_trial_bank_distances = 3
+        expected_bank_pair_distances = 3
+        assert (
+            diversity_metric.call_count
+            == expected_trial_bank_distances + expected_bank_pair_distances
+        )
+
+
 def run_cluster_batch(
     *,
     bank: Bank[int],
@@ -623,6 +687,7 @@ def run_cluster_batch(
     distance_cutoff: float,
     score_model: CSAScoreModel[int] | None = None,
     update_policy: CSABankUpdatePolicy | None = None,
+    diversity_metric: DiversityMetric[int] | None = None,
 ) -> BankUpdateResult[int]:
     resolved_score_model: CSAScoreModel[int]
     if score_model is None:
@@ -650,7 +715,11 @@ def run_cluster_batch(
             ),
         ),
         observations=(observation,),
-        diversity_metric=AbsoluteDistance(),
+        diversity_metric=(
+            AbsoluteDistance()
+            if diversity_metric is None
+            else diversity_metric
+        ),
         infer_average_distance=lambda entries: infer_average_distance(entries),
         infer_score_gap=infer_constant_score_gap,
         cutoff_schedule=CSACutoffSchedule(

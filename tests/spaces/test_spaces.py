@@ -394,6 +394,36 @@ class SearchSpaceTests:
 
         assert replaced.entries == (("depth", 3), ("scale", 1.0))
 
+    def test_record_space_uses_field_indices_for_internal_candidate_access(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        lookup_count = 0
+        original_getitem = RecordCandidate.__getitem__
+
+        def count_getitem(
+            candidate: RecordCandidate,
+            key: str,
+        ) -> SpaceCandidateValue:
+            nonlocal lookup_count
+            lookup_count += 1
+            return original_getitem(candidate, key)
+
+        monkeypatch.setattr(RecordCandidate, "__getitem__", count_getitem)
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            scale=RealSpace(0.0, 2.0),
+        )
+        candidate = RecordCandidate(entries=(("depth", 2), ("scale", 1.0)))
+
+        space.validate(candidate)
+        value = space.leaf_value_at_path(candidate, ("depth",))
+        replaced = space.replace_leaf_values(candidate, {("scale",): 1.5})
+
+        assert value == 2
+        assert replaced.entries == (("depth", 2), ("scale", 1.5))
+        assert lookup_count == 0
+
     def test_array_space_replace_leaf_values_updates_only_touched_index(self) -> None:
         space = ArraySpace(IntegerSpace(0, 9), length=3)
         candidate = space.normalize([1, 2, 3])
