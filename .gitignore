@@ -1,6 +1,7 @@
 .venv/
 dist/
 site/
+.tickets/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
