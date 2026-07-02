@@ -5,7 +5,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from variopt.generic_runtime import FrozenGenericSlotsCompat
+from variopt.generic_runtime import (
+    FrozenGenericSlotsCompat,
+    install_frozen_generic_slots_pickle,
+)
 
 from ..typevars import CandidateT
 
@@ -180,6 +183,9 @@ class InteractionEvaluationUnit(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Candidates carried by the requests in this unit.
         """
         return tuple(request.candidate for request in self.requests)
+
+
+install_frozen_generic_slots_pickle(InteractionEvaluationUnit)
 
 
 def normalize_evaluation_request(

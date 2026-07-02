@@ -5,7 +5,10 @@ from typing import Generic, cast
 
 from typing_extensions import TypeVar, override
 
-from variopt.generic_runtime import FrozenGenericSlotsCompat
+from variopt.generic_runtime import (
+    FrozenGenericSlotsCompat,
+    install_frozen_generic_slots_pickle,
+)
 
 from .artifacts import (
     EvaluationRequest,
@@ -313,6 +316,9 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
         return objective
 
 
+install_frozen_generic_slots_pickle(Problem)
+
+
 @dataclass(frozen=True, slots=True)
 class InteractionProblem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, InteractionProblemRecordT]):
     """Immutable interaction-aware optimization problem.
@@ -345,3 +351,6 @@ class InteractionProblem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT
         if self.name == "":
             msg = "name must not be empty"
             raise ValueError(msg)
+
+
+install_frozen_generic_slots_pickle(InteractionProblem)

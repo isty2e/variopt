@@ -7,7 +7,10 @@ from typing import Generic
 import numpy as np
 from typing_extensions import override
 
-from variopt.generic_runtime import FrozenGenericSlotsCompat
+from variopt.generic_runtime import (
+    FrozenGenericSlotsCompat,
+    install_frozen_generic_slots_pickle,
+)
 
 from .....operators import VariationOperator
 from .....typevars import CandidateT
@@ -94,3 +97,6 @@ class MixtureVariation(FrozenGenericSlotsCompat,
         operator_index = sample_weighted_index(self.weights, random_state)
         operator = self.operators[operator_index]
         return operator.apply(parents[: operator.arity], random_state)
+
+
+install_frozen_generic_slots_pickle(MixtureVariation)
