@@ -1,6 +1,7 @@
 """Private bank query primitives shared by CSA bank update components."""
 
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from typing import ClassVar, Generic, Protocol, TypeVar
 
 from .....distance import require_valid_distance
@@ -78,6 +79,52 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         self.entries = entries
         self.diversity_metric = diversity_metric
         self.distances = {}
+
+    def rebase(
+        self,
+        *,
+        entries: Sequence[CandidateEntry[CandidateT]],
+        invalidated_indices: AbstractSet[int],
+    ) -> "BankDistanceWorkspace[CandidateT]":
+        """Return a workspace aligned to a related bank snapshot.
+
+        Parameters
+        ----------
+        entries : Sequence[CandidateEntry[CandidateT]]
+            New bank entries for the rebased workspace.
+        invalidated_indices : collections.abc.Set[int]
+            Indices whose candidate changed or was appended in ``entries``.
+
+        Returns
+        -------
+        BankDistanceWorkspace[CandidateT]
+            Workspace aligned to ``entries`` with reusable pair distances
+            retained.
+        """
+        if entries is self.entries and not invalidated_indices:
+            return self
+
+        workspace = type(self)(
+            entries=entries,
+            diversity_metric=self.diversity_metric,
+        )
+        if not self.distances or len(entries) < len(self.entries):
+            return workspace
+
+        common_entry_count = min(len(self.entries), len(entries))
+        invalidated_index_set = frozenset(
+            index
+            for index in invalidated_indices
+            if index >= 0
+        )
+        workspace.distances.update(
+            (key, distance)
+            for key, distance in self.distances.items()
+            if key[1] < common_entry_count
+            and key[0] not in invalidated_index_set
+            and key[1] not in invalidated_index_set
+        )
+        return workspace
 
     def distance(self, left_index: int, right_index: int) -> float:
         """Return one validated pairwise distance, computing it at most once.

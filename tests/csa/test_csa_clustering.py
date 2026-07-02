@@ -72,13 +72,16 @@ class CountingAbsoluteDistance(AbsoluteDistance):
     """Absolute-value distance that records every concrete distance call."""
 
     call_count: int
+    calls: list[tuple[int, int]]
 
     def __init__(self) -> None:
         self.call_count = 0
+        self.calls = []
 
     @override
     def distance(self, left: int, right: int) -> float:
         self.call_count += 1
+        self.calls.append((left, right))
         return super().distance(left, right)
 
 
@@ -745,6 +748,210 @@ class CSAClusteringRuntimeTests:
             == expected_trial_bank_distances + expected_bank_pair_distances
         )
 
+    def test_distance_workspace_rebase_keeps_existing_pairs_after_append(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+        entries = (
+            BankEntry(candidate=0, value=0.0),
+            BankEntry(candidate=10, value=1.0),
+        )
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+
+        assert distance_workspace.distance(0, 1) == 10.0
+        rebased_workspace = distance_workspace.rebase(
+            entries=entries + (BankEntry(candidate=20, value=2.0),),
+            invalidated_indices=frozenset({2}),
+        )
+
+        assert rebased_workspace.distance(0, 1) == 10.0
+        assert diversity_metric.call_count == 1
+        assert rebased_workspace.distance(0, 2) == 20.0
+        assert diversity_metric.call_count == 2
+
+    def test_distance_workspace_rebase_invalidates_replaced_entry_pairs(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+        entries = (
+            BankEntry(candidate=0, value=0.0),
+            BankEntry(candidate=10, value=1.0),
+            BankEntry(candidate=100, value=2.0),
+        )
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+        _ = distance_workspace.distance(0, 1)
+        _ = distance_workspace.distance(0, 2)
+        _ = distance_workspace.distance(1, 2)
+
+        rebased_workspace = distance_workspace.rebase(
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=20, value=1.0),
+                BankEntry(candidate=100, value=2.0),
+            ),
+            invalidated_indices=frozenset({1}),
+        )
+
+        assert rebased_workspace.distance(0, 2) == 100.0
+        assert diversity_metric.call_count == 3
+        assert rebased_workspace.distance(0, 1) == 20.0
+        assert diversity_metric.call_count == 4
+
+    def test_distance_workspace_rebase_drops_pairs_after_removal(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+        entries = (
+            BankEntry(candidate=0, value=0.0),
+            BankEntry(candidate=10, value=1.0),
+            BankEntry(candidate=100, value=2.0),
+        )
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=diversity_metric,
+        )
+        _ = distance_workspace.distance(0, 1)
+
+        rebased_workspace = distance_workspace.rebase(
+            entries=(entries[0], entries[2]),
+            invalidated_indices=frozenset(),
+        )
+
+        assert rebased_workspace.distance(0, 1) == 100.0
+        assert diversity_metric.call_count == 2
+
+    def test_batch_distance_workspace_is_reused_across_rejected_observations(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+        bank_candidates = (0, 10, 100)
+
+        batch_result = run_cluster_batch_many(
+            bank=Bank(
+                capacity=3,
+                entries=(
+                    BankEntry(candidate=0, value=0.0),
+                    BankEntry(candidate=10, value=1.0),
+                    BankEntry(candidate=100, value=2.0),
+                ),
+            ),
+            observations=(
+                Observation(
+                    proposal=Proposal(candidate=1000, proposal_id="p-1"),
+                    candidate=1000,
+                    value=10_000.0,
+                    score=10_000.0,
+                ),
+                Observation(
+                    proposal=Proposal(candidate=1001, proposal_id="p-2"),
+                    candidate=1001,
+                    value=10_000.0,
+                    score=10_000.0,
+                ),
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(),
+            ),
+            distance_cutoff=2.0,
+            score_model=CSAScoreModel(
+                adaptive_potential=CSAAdaptivePotential(
+                    axes=(
+                        CSAAdaptivePotentialAxis(
+                            reference_candidate=-1000,
+                            minimum_distance=0.0,
+                            maximum_distance=3000.0,
+                            bin_count=1,
+                        ),
+                    ),
+                    increment=0.0,
+                    overflow_energy=0.0,
+                ),
+            ),
+            update_policy=CSABankUpdatePolicy(
+                far_update_mode="crowding_aware",
+                crowding_penalty_ratio=1.0,
+            ),
+            diversity_metric=diversity_metric,
+        )
+
+        assert batch_result.bank.entries == (
+            BankEntry(candidate=0, value=0.0),
+            BankEntry(candidate=10, value=1.0),
+            BankEntry(candidate=100, value=2.0),
+        )
+        assert bank_pair_call_counts(
+            diversity_metric,
+            candidates=bank_candidates,
+        ) == {
+            (0, 10): 1,
+            (0, 100): 1,
+            (10, 100): 1,
+        }
+
+    def test_batch_distance_workspace_keeps_unaffected_replacement_pairs(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+
+        batch_result = run_cluster_batch_many(
+            bank=Bank(
+                capacity=3,
+                entries=(
+                    BankEntry(candidate=0, value=50.0),
+                    BankEntry(candidate=1, value=40.0),
+                    BankEntry(candidate=100, value=100.0),
+                ),
+            ),
+            observations=(
+                Observation(
+                    proposal=Proposal(candidate=20, proposal_id="p-1"),
+                    candidate=20,
+                    value=60.0,
+                    score=60.0,
+                ),
+                Observation(
+                    proposal=Proposal(candidate=30, proposal_id="p-2"),
+                    candidate=30,
+                    value=55.0,
+                    score=55.0,
+                ),
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(),
+            ),
+            distance_cutoff=0.1,
+            update_policy=CSABankUpdatePolicy(
+                far_update_mode="crowding_aware",
+                crowding_penalty_ratio=1.0,
+            ),
+            diversity_metric=diversity_metric,
+        )
+
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 1, 30)
+        assert bank_pair_call_counts(
+            diversity_metric,
+            candidates=(0, 1, 20, 100),
+        )[(0, 1)] == 1
+
+    def test_unchanged_aligned_clustering_skips_recluster_distance_work(self) -> None:
+        bank = Bank(
+            capacity=2,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+            ),
+        )
+        clustering_state: CSAClusteringState[int] = CSAClusteringState(
+            policy=CSAClusteringPolicy(enabled=True),
+            cluster_distance=2.0,
+            cluster_labels=(1, 2),
+        )
+
+        result = run_empty_cluster_batch(
+            bank=bank,
+            clustering_state=clustering_state,
+            infer_average_distance=reject_average_distance,
+            diversity_metric=RejectingDistance(),
+        )
+
+        assert result.clustering_state == clustering_state
+
     def test_crowding_aware_scores_reuse_supplied_distance_workspace(self) -> None:
         entries = (
             BankEntry(candidate=0, value=10.0),
@@ -913,6 +1120,27 @@ def run_cluster_batch(
     update_policy: CSABankUpdatePolicy | None = None,
     diversity_metric: DiversityMetric[int] | None = None,
 ) -> BankUpdateResult[int]:
+    return run_cluster_batch_many(
+        bank=bank,
+        observations=(observation,),
+        clustering_state=clustering_state,
+        distance_cutoff=distance_cutoff,
+        score_model=score_model,
+        update_policy=update_policy,
+        diversity_metric=diversity_metric,
+    )
+
+
+def run_cluster_batch_many(
+    *,
+    bank: Bank[int],
+    observations: Sequence[Observation[int]],
+    clustering_state: CSAClusteringState[int],
+    distance_cutoff: float,
+    score_model: CSAScoreModel[int] | None = None,
+    update_policy: CSABankUpdatePolicy | None = None,
+    diversity_metric: DiversityMetric[int] | None = None,
+) -> BankUpdateResult[int]:
     resolved_score_model: CSAScoreModel[int]
     if score_model is None:
         resolved_score_model = CSAScoreModel()
@@ -938,7 +1166,7 @@ def run_cluster_batch(
                 max_capacity=bank.capacity,
             ),
         ),
-        observations=(observation,),
+        observations=observations,
         diversity_metric=(
             AbsoluteDistance()
             if diversity_metric is None
@@ -969,6 +1197,7 @@ def run_empty_cluster_batch(
     bank: Bank[int],
     clustering_state: CSAClusteringState[int],
     infer_average_distance: Callable[[Sequence[BankEntry[int]]], float],
+    diversity_metric: DiversityMetric[int] | None = None,
 ) -> BankUpdateResult[int]:
     growth_policy = CSABankGrowthPolicy()
     return apply_bank_update_batch(
@@ -985,7 +1214,11 @@ def run_empty_cluster_batch(
             ),
         ),
         observations=(),
-        diversity_metric=AbsoluteDistance(),
+        diversity_metric=(
+            AbsoluteDistance()
+            if diversity_metric is None
+            else diversity_metric
+        ),
         infer_average_distance=infer_average_distance,
         infer_score_gap=infer_constant_score_gap,
         cutoff_schedule=CSACutoffSchedule(
@@ -1004,6 +1237,22 @@ def run_empty_cluster_batch(
         masked_seed_indices=frozenset(),
         random_state=np.random.RandomState(0),
     )
+
+
+def bank_pair_call_counts(
+    diversity_metric: CountingAbsoluteDistance,
+    *,
+    candidates: Sequence[int],
+) -> dict[tuple[int, int], int]:
+    candidate_set = frozenset(candidates)
+    counts: dict[tuple[int, int], int] = {}
+    for left, right in diversity_metric.calls:
+        if left == right or left not in candidate_set or right not in candidate_set:
+            continue
+
+        key = (left, right) if left < right else (right, left)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def reject_average_distance(entries: Sequence[BankEntry[int]]) -> float:
