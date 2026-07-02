@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 
 from typing_extensions import Self
 
-from .......json_types import JSONDict, JSONValue
+from .......json_types import JSONDict, JSONValue, require_json_int
 from .......spaces import LeafPath
 from ..policy import CSAProposalPolicy
 from .attribution import NumericSubspaceDisplacement, ProposalAttribution
@@ -137,7 +137,10 @@ class CSAProposalState:
         raw_leaf_stats = data.get("leaf_stats")
         raw_local_displacement_leaf_stats = data.get("local_displacement_leaf_stats")
         raw_numeric_covariance_stats = data.get("numeric_covariance_stats")
-        update_index = data.get("update_index")
+        update_index = require_json_int(
+            data.get("update_index"),
+            field_name="update_index",
+        )
         if not isinstance(raw_pending_attributions, list):
             msg = "proposal-state snapshot requires pending_attributions list"
             raise TypeError(msg)
@@ -156,10 +159,6 @@ class CSAProposalState:
         if not isinstance(raw_numeric_covariance_stats, list):
             msg = "proposal-state snapshot requires numeric_covariance_stats list"
             raise TypeError(msg)
-        if not isinstance(update_index, int):
-            msg = "proposal-state snapshot requires integer update_index"
-            raise TypeError(msg)
-
         family_stats: list[ProposalFamilyStat] = []
         for raw_family_stat in raw_family_stats:
             if not isinstance(raw_family_stat, dict):

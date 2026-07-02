@@ -9,7 +9,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Observation
-from .....json_types import JSONDict, JSONValue, require_json_bool
+from .....json_types import JSONDict, JSONValue, require_json_bool, require_json_int
 from .....typevars import CandidateT
 from .bank import Bank, BankEntry
 
@@ -119,12 +119,9 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        capacity = data.get("capacity")
+        capacity = require_json_int(data.get("capacity"), field_name="capacity")
         raw_entries = data.get("entries")
         raw_initialized = data.get("initialized")
-        if not isinstance(capacity, int):
-            msg = "reference bank snapshot requires integer capacity"
-            raise TypeError(msg)
         if not isinstance(raw_entries, list):
             msg = "reference bank snapshot requires entry list"
             raise TypeError(msg)

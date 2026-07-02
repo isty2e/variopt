@@ -747,6 +747,38 @@ class BankUpdatePolicyTests:
 class CSABankingTests(CSAOptimizerTestCase):
     """White-box tests for CSA banking and score-model state transitions."""
 
+    def test_bank_entry_rejects_non_finite_value(self) -> None:
+        with pytest.raises(ValueError, match="value must be finite"):
+            _ = BankEntry(candidate=0, value=float("inf"))
+
+        with pytest.raises(ValueError, match="value must be finite"):
+            _ = BankEntry(candidate=0, value=float("nan"))
+
+    def test_bank_entry_from_dict_rejects_bool_and_non_finite_value(self) -> None:
+        def candidate_from_dict(value: JSONValue) -> int:
+            if type(value) is not int:
+                msg = "candidate must be an integer"
+                raise TypeError(msg)
+            return value
+
+        with pytest.raises(TypeError, match="value must be a JSON number"):
+            _ = BankEntry[int].from_dict(
+                {"candidate": 0, "value": True, "proposal_id": None},
+                candidate_from_dict=candidate_from_dict,
+            )
+
+        with pytest.raises(ValueError, match="value must be finite"):
+            _ = BankEntry[int].from_dict(
+                {"candidate": 0, "value": float("nan"), "proposal_id": None},
+                candidate_from_dict=candidate_from_dict,
+            )
+
+        with pytest.raises(ValueError, match="value must be finite"):
+            _ = BankEntry[int].from_dict(
+                {"candidate": 0, "value": float("inf"), "proposal_id": None},
+                candidate_from_dict=candidate_from_dict,
+            )
+
     def test_reference_bank_legacy_snapshot_derives_initialized_state(self) -> None:
         def candidate_from_dict(value: JSONValue) -> int:
             if type(value) is not int:

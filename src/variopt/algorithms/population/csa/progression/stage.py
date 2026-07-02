@@ -119,18 +119,22 @@ class CSAStageState:
         raw_partner_mask = require_json_list(data.get("partner_mask"), field_name="partner_mask")
 
         seed_mask: list[int] = []
-        for raw_index in raw_seed_mask:
-            if not isinstance(raw_index, int):
-                msg = "stage-state snapshot seed_mask values must be integers"
-                raise TypeError(msg)
-            seed_mask.append(raw_index)
+        for raw_position, raw_index in enumerate(raw_seed_mask):
+            seed_mask.append(
+                require_json_int(
+                    raw_index,
+                    field_name=f"seed_mask[{raw_position}]",
+                ),
+            )
 
         partner_mask: list[int] = []
-        for raw_index in raw_partner_mask:
-            if not isinstance(raw_index, int):
-                msg = "stage-state snapshot partner_mask values must be integers"
-                raise TypeError(msg)
-            partner_mask.append(raw_index)
+        for raw_position, raw_index in enumerate(raw_partner_mask):
+            partner_mask.append(
+                require_json_int(
+                    raw_index,
+                    field_name=f"partner_mask[{raw_position}]",
+                ),
+            )
 
         return cls(
             base_capacity=base_capacity,
