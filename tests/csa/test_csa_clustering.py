@@ -345,6 +345,54 @@ class CSAClusteringRuntimeTests:
 
         assert next_runtime.cluster_labels == (1, 2, 1)
 
+    def test_close_replacement_inherits_nearest_cluster_when_target_differs(self) -> None:
+        runtime: CSAClusteringState[int] = CSAClusteringState(
+            policy=CSAClusteringPolicy(enabled=True),
+            cluster_distance=3.0,
+            cluster_labels=(1, 1, 2, 2, 2),
+        )
+
+        next_runtime = runtime.register_admission(
+            admitted_index=4,
+            nearest_index=1,
+            nearest_distance=1.0,
+            appended=False,
+        )
+
+        assert next_runtime.cluster_labels == (1, 1, 2, 2, 1)
+
+    def test_cutoff_distance_replacement_inherits_nearest_cluster(self) -> None:
+        runtime: CSAClusteringState[int] = CSAClusteringState(
+            policy=CSAClusteringPolicy(enabled=True),
+            cluster_distance=3.0,
+            cluster_labels=(1, 1, 2),
+        )
+
+        next_runtime = runtime.register_admission(
+            admitted_index=2,
+            nearest_index=0,
+            nearest_distance=3.0,
+            appended=False,
+        )
+
+        assert next_runtime.cluster_labels == (1, 1, 1)
+
+    def test_far_replacement_opens_new_cluster(self) -> None:
+        runtime: CSAClusteringState[int] = CSAClusteringState(
+            policy=CSAClusteringPolicy(enabled=True),
+            cluster_distance=3.0,
+            cluster_labels=(1, 1, 2),
+        )
+
+        next_runtime = runtime.register_admission(
+            admitted_index=1,
+            nearest_index=0,
+            nearest_distance=4.0,
+            appended=False,
+        )
+
+        assert next_runtime.cluster_labels == (1, 3, 2)
+
     def test_largest_cluster_mode_separates_comparison_and_removal_targets(self) -> None:
         runtime: CSAClusteringState[int] = CSAClusteringState(
             policy=CSAClusteringPolicy(
@@ -397,6 +445,7 @@ class CSAClusteringRuntimeTests:
         assert batch_result.bank.entries[4].candidate == 2
         assert batch_result.bank.entries[4].value == 8.0
         assert batch_result.bank.entries[1].candidate == 1
+        assert batch_result.clustering_state.cluster_labels == (1, 1, 2, 2, 1)
 
     def test_cluster_update_current_cluster_mode_replaces_current_cluster_worst(self) -> None:
         batch_result = run_cluster_batch(

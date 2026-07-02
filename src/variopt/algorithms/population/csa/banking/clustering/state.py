@@ -418,7 +418,7 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         elif appended:
             admitted_label = 1 if not labels else labels[nearest_index]
         else:
-            admitted_label = labels[admitted_index]
+            admitted_label = labels[nearest_index]
 
         if appended:
             labels.append(admitted_label)

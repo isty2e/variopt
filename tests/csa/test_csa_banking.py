@@ -16,10 +16,12 @@ from tests.csa_support import (
     CSABankGrowthPolicy,
     CSABankUpdatePolicy,
     CSABiasedPotential,
+    CSACutoffSchedule,
     CSACutoffState,
     CSANicheQualityPolicy,
     CSAOptimizerTestCase,
     CSAScoreModel,
+    CSAStageState,
     DiversityMetric,
     IntegerSpace,
     NaNDistance,
@@ -41,10 +43,18 @@ from variopt.algorithms.population.csa.banking.clustering import (
     CSAClusteringPolicy,
     CSAClusteringState,
 )
+from variopt.algorithms.population.csa.banking.growth import CSABankGrowthState
 from variopt.algorithms.population.csa.banking.queries import (
     BankDistanceWorkspace,
     best_mean_niche_scores,
     crowding_aware_scores,
+)
+from variopt.algorithms.population.csa.banking.update.logic import (
+    apply_bank_update_batch,
+)
+from variopt.algorithms.population.csa.progression.state import CSAProgressionState
+from variopt.algorithms.population.csa.scoring.acceptance_state import (
+    CSAAcceptanceState,
 )
 from variopt.algorithms.population.csa.scoring.model_state import CSAScoreModelState
 from variopt.algorithms.population.csa.selection.state import SeedSelectionState
@@ -1176,6 +1186,20 @@ class CSABankingTests(CSAOptimizerTestCase):
             minimum_distance_cutoff=2.0,
             cutoff_recover_limit=2.0,
         )
+        optimizer.engine_state = replace(
+            optimizer.engine_state,
+            selection_state=SeedSelectionState(
+                used_entry_indices=frozenset({0, 2}),
+                bank_status=(True, False, True),
+            ),
+            progression_state=replace(
+                optimizer.engine_state.progression_state,
+                stage_state=optimizer.engine_state.progression_state.stage_state.with_masks(
+                    seed_mask=frozenset({0, 2}),
+                    partner_mask=frozenset({1, 2}),
+                ),
+            ).with_refresh_mask(frozenset({2})),
+        )
         proposal = Proposal(candidate=30, proposal_id="p-1")
         optimizer.pending_by_id = {"p-1": proposal}
 
@@ -1194,6 +1218,139 @@ class CSABankingTests(CSAOptimizerTestCase):
         assert (
             tuple(entry.value for entry in optimizer.bank.entries) == (0.0, 0.5)
         )
+        assert optimizer.selection_state.used_entry_indices == frozenset({0})
+        assert optimizer.selection_state.bank_status == (True, False)
+        assert optimizer.engine_state.progression_state.stage_state.seed_mask == frozenset(
+            {0},
+        )
+        assert optimizer.engine_state.progression_state.stage_state.partner_mask == frozenset(
+            {1},
+        )
+        assert optimizer.engine_state.progression_state.refresh_mask == frozenset()
+
+    def test_update_indices_are_reported_before_energy_cut_removal(self) -> None:
+        growth_policy = CSABankGrowthPolicy(
+            enabled=True,
+            maximum_capacity=3,
+            initial_energy_gap_limit=1.0,
+        )
+
+        result = apply_bank_update_batch(
+            bank=Bank(
+                capacity=3,
+                entries=(
+                    BankEntry(candidate=0, value=10.0, proposal_id="b-0"),
+                    BankEntry(candidate=10, value=0.0, proposal_id="b-1"),
+                    BankEntry(candidate=20, value=5.0, proposal_id="b-2"),
+                ),
+            ),
+            state=CSAProgressionState(
+                cutoff_state=CSACutoffState(
+                    distance_cutoff=2.0,
+                    minimum_distance_cutoff=2.0,
+                    cutoff_recover_limit=2.0,
+                ),
+                stage_state=CSAStageState(base_capacity=2, max_capacity=3),
+            ),
+            observations=(
+                Observation(
+                    proposal=Proposal(candidate=21, proposal_id="p-1"),
+                    candidate=21,
+                    value=-1.0,
+                    score=-1.0,
+                ),
+            ),
+            diversity_metric=AbsoluteDistance(),
+            infer_average_distance=lambda entries: 2.0,
+            infer_score_gap=lambda entries: 11.0,
+            cutoff_schedule=CSACutoffSchedule(
+                initial_distance_cutoff=2.0,
+                minimum_distance_cutoff=2.0,
+            ),
+            update_policy=CSABankUpdatePolicy(),
+            acceptance_state=CSAAcceptanceState.from_policy(CSAAcceptancePolicy()),
+            score_model_state=CSAScoreModelState(score_model=CSAScoreModel()),
+            growth_state=CSABankGrowthState[int](
+                policy=growth_policy,
+                active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
+            ),
+            clustering_state=CSAClusteringState(policy=CSAClusteringPolicy(enabled=False)),
+            base_bank_capacity=2,
+            masked_seed_indices=frozenset(),
+            random_state=None,
+        )
+
+        assert result.removed_indices == frozenset({0})
+        assert result.changed_indices == frozenset({2})
+        assert result.significant_update_indices == frozenset({2})
+        assert tuple(entry.candidate for entry in result.bank.entries) == (10, 21)
+
+    def test_update_then_energy_cut_remaps_selection_and_progression_masks(self) -> None:
+        optimizer = make_optimizer(
+            space=IntegerSpace(low=0, high=100),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            growth_policy=CSABankGrowthPolicy(
+                enabled=True,
+                maximum_capacity=3,
+                initial_energy_gap_limit=1.0,
+            ),
+            random_state=0,
+        )
+        optimizer.bank = Bank(
+            capacity=3,
+            entries=(
+                BankEntry(candidate=0, value=10.0, proposal_id="b-0"),
+                BankEntry(candidate=10, value=0.0, proposal_id="b-1"),
+                BankEntry(candidate=20, value=5.0, proposal_id="b-2"),
+            ),
+        )
+        optimizer.reference_bank = ReferenceBank(
+            capacity=3,
+            entries=optimizer.bank.entries,
+        )
+        optimizer.cutoff_state = CSACutoffState(
+            distance_cutoff=2.0,
+            minimum_distance_cutoff=2.0,
+            cutoff_recover_limit=2.0,
+        )
+        optimizer.engine_state = replace(
+            optimizer.engine_state,
+            selection_state=SeedSelectionState(
+                used_entry_indices=frozenset({1, 2}),
+                bank_status=(True, True, True),
+            ),
+            progression_state=replace(
+                optimizer.engine_state.progression_state,
+                stage_state=optimizer.engine_state.progression_state.stage_state.with_masks(
+                    seed_mask=frozenset({2}),
+                    partner_mask=frozenset({1, 2}),
+                ),
+            ).with_refresh_mask(frozenset({2})),
+        )
+        proposal = Proposal(candidate=21, proposal_id="p-1")
+        optimizer.pending_by_id = {"p-1": proposal}
+
+        optimizer.tell(
+            (
+                Observation(
+                    proposal=proposal,
+                    candidate=21,
+                    value=-1.0,
+                    score=-1.0,
+                ),
+            )
+        )
+
+        assert tuple(entry.candidate for entry in optimizer.bank.entries) == (10, 21)
+        assert optimizer.selection_state.used_entry_indices == frozenset({0})
+        assert optimizer.selection_state.bank_status == (True, False)
+        assert optimizer.engine_state.progression_state.stage_state.seed_mask == frozenset()
+        assert optimizer.engine_state.progression_state.stage_state.partner_mask == frozenset(
+            {0, 1},
+        )
+        assert optimizer.engine_state.progression_state.refresh_mask == frozenset()
 
     def test_initial_fill_sorts_bank_and_reference_bank_by_score(self) -> None:
         problem = Problem(

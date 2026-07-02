@@ -33,9 +33,10 @@ class BankUpdateResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     trace_state : CSAEventTraceState[CandidateT] | None
         Optional updated trace reducer state.
     changed_indices : frozenset[int]
-        Bank indices whose entries changed at all.
+        Bank indices whose entries changed before post-batch removals are applied.
     significant_update_indices : frozenset[int]
-        Bank indices whose score change exceeded the significance floor.
+        Changed bank indices whose score gap exceeded the significance floor
+        before post-batch removals are applied.
     removed_indices : frozenset[int]
         Bank indices removed from the previous bank snapshot.
     """
