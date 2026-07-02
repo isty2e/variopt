@@ -441,6 +441,271 @@ class ScipyMinimizeKernelTests:
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == "iteration limit"
 
+    def test_non_finite_scipy_coordinates_fall_back_to_original_proposal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        runner_call_count = 0
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            _ = objective_in_coordinate_space(initial_coordinates)
+            return FakeScipyOptimizeResult(
+                x=(float("nan"),),
+                fun=float("nan"),
+                nfev=1,
+                success=False,
+                message="non-finite result",
+            )
+
+        def counting_runner(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> tuple[EvaluationOutcome[float], ...]:
+            nonlocal runner_call_count
+            runner_call_count += 1
+            return evaluate_query_directly(local_query)
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            counting_runner,
+        )
+
+        outcome = outcomes[0]
+        assert runner_call_count == 1
+        assert outcome.observation.proposal.proposal_id == "p-1"
+        assert outcome.observation.candidate == 4.0
+        assert outcome.observation.value == 6.25
+        assert outcome.evaluation_count == 1
+        assert outcome.refinement is None
+        assert outcome.kernel_diagnostics is not None
+        assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
+        assert outcome.kernel_diagnostics.message == "non-finite result"
+
+    def test_empty_scipy_coordinates_evaluate_original_proposal_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        runner_call_count = 0
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                objective_in_coordinate_space,
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            return FakeScipyOptimizeResult(
+                x=(),
+                fun=float("inf"),
+                nfev=0,
+                success=False,
+                message="empty result",
+            )
+
+        def counting_runner(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> tuple[EvaluationOutcome[float], ...]:
+            nonlocal runner_call_count
+            runner_call_count += 1
+            return evaluate_query_directly(local_query)
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            counting_runner,
+        )
+
+        outcome = outcomes[0]
+        assert runner_call_count == 1
+        assert outcome.observation.candidate == 4.0
+        assert outcome.observation.value == 6.25
+        assert outcome.evaluation_count == 1
+        assert outcome.refinement is None
+        assert outcome.kernel_diagnostics is not None
+        assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
+        assert outcome.kernel_diagnostics.message == "empty result"
+
+    def test_successful_scipy_result_with_non_finite_fun_falls_back(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            _ = objective_in_coordinate_space((1.5,))
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=float("nan"),
+                nfev=1,
+                success=True,
+                message="success with nan",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            evaluate_query_directly,
+        )
+
+        outcome = outcomes[0]
+        assert outcome.observation.candidate == 4.0
+        assert outcome.observation.value == 6.25
+        assert outcome.evaluation_count == 2
+        assert outcome.refinement is None
+        assert outcome.kernel_diagnostics is not None
+        assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
+        assert outcome.kernel_diagnostics.message == "success with nan"
+
+    def test_invalid_scipy_result_does_not_abort_neighboring_proposals(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=4.0, proposal_id="p-1"),
+                Proposal(candidate=-2.0, proposal_id="p-2"),
+            ),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+        )
+        scipy_call_count = 0
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            nonlocal scipy_call_count
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            scipy_call_count += 1
+            if scipy_call_count == 1:
+                return FakeScipyOptimizeResult(
+                    x=(float("nan"),),
+                    fun=float("nan"),
+                    nfev=0,
+                    success=False,
+                    message="bad first proposal",
+                )
+
+            objective_score = objective_in_coordinate_space((1.5,))
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=objective_score,
+                nfev=1,
+                success=True,
+                message="ok",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(query, evaluate_query_directly)
+
+        assert tuple(outcome.observation.candidate for outcome in outcomes) == (
+            4.0,
+            1.5,
+        )
+        statuses = tuple(
+            outcome.kernel_diagnostics.status
+            for outcome in outcomes
+            if outcome.kernel_diagnostics is not None
+        )
+        assert statuses == (
+            KernelStatus.STOPPED,
+            KernelStatus.CONVERGED,
+        )
+
     def test_powell_improves_log_scaled_record_problem(self) -> None:
         space = RecordSpace(
             x=RealSpace(1e-4, 10.0, scale="log"),

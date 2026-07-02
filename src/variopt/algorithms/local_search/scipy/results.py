@@ -1,8 +1,8 @@
 """Normalized result nouns for SciPy local-search integration."""
 
 from dataclasses import dataclass
+from math import isfinite
 
-import numpy as np
 from typing_extensions import Self
 
 from ....kernel import KernelDiagnostics, KernelStatus
@@ -16,9 +16,11 @@ class ScipyMinimizeResult:
     Parameters
     ----------
     coordinates : tuple[float, ...]
-        Final coordinate vector reported by SciPy.
+        Coordinate vector reported by SciPy. Failed backend runs may report an
+        empty or non-finite vector.
     function_value : float
-        Final minimized function value reported by SciPy.
+        Minimized function value reported by SciPy. This payload may be
+        non-finite when the backend fails.
     evaluation_count : int
         Total number of objective evaluations consumed by the SciPy run.
     converged : bool
@@ -34,19 +36,7 @@ class ScipyMinimizeResult:
     message: str | None = None
 
     def __post_init__(self) -> None:
-        """Reject invalid normalized SciPy minimize results."""
-        if len(self.coordinates) == 0:
-            msg = "coordinates must not be empty"
-            raise ValueError(msg)
-
-        if not all(np.isfinite(coordinate) for coordinate in self.coordinates):
-            msg = "coordinates must be finite"
-            raise ValueError(msg)
-
-        if not np.isfinite(self.function_value):
-            msg = "function_value must be finite"
-            raise ValueError(msg)
-
+        """Validate backend metadata that must remain structurally sound."""
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
@@ -54,6 +44,23 @@ class ScipyMinimizeResult:
         if self.message == "":
             msg = "message must not be empty"
             raise ValueError(msg)
+
+    @property
+    def has_finite_solution(self) -> bool:
+        """Whether SciPy returned a coordinate vector safe to materialize.
+
+        Returns
+        -------
+        bool
+            ``True`` when both the reported coordinates and minimized function
+            value are finite. Empty or non-finite results are retained as
+            diagnostics payloads but must not be converted into search-space
+            candidates.
+        """
+        function_value_is_finite = isfinite(self.function_value)
+        return len(self.coordinates) > 0 and all(
+            isfinite(coordinate) for coordinate in self.coordinates
+        ) and function_value_is_finite
 
     @classmethod
     def from_optimize_result(cls, optimize_result: ScipyOptimizeResult) -> Self:
@@ -97,7 +104,7 @@ class ScipyMinimizeResult:
             Diagnostics payload aligned with the normalized result.
         """
         status = KernelStatus.STOPPED
-        if self.converged:
+        if self.converged and self.has_finite_solution:
             status = KernelStatus.CONVERGED
 
         return KernelDiagnostics(
