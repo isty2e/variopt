@@ -1,6 +1,7 @@
 """Tests for sync and general Study facade behavior."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import cast
 
 import pytest
@@ -8,6 +9,7 @@ from typing_extensions import override
 
 from tests.study_support import (
     BatchQueueOptimizer,
+    BatchQueueOptimizerState,
     ContextAwareBatchQueueOptimizer,
     CountingObjective,
     DecrementKernel,
@@ -29,9 +31,11 @@ from tests.study_support import (
     SquareObjective,
 )
 from variopt import (
+    CandidateRefinement,
     EvaluationOutcome,
     EvaluationRequest,
     IntegerSpace,
+    Objective,
     Observation,
     OptimizationDirection,
     Problem,
@@ -94,6 +98,94 @@ class RepeatingSubqueryKernel(
                     + second_outcome.evaluation_count
                 ),
             ),
+        )
+
+
+class LocalProposalEvaluationSpec(ProposalEvaluationSpec):
+    """Request metadata marker for direct-scalar fast-path tests."""
+
+
+class StaticProposalSpecOptimizer(BatchQueueOptimizer):
+    """Batch-queue optimizer that returns a fixed proposal-spec batch."""
+
+    _proposal_evaluation_specs: tuple[ProposalEvaluationSpec | None, ...]
+
+    def __init__(
+        self,
+        *,
+        proposal_batches: list[tuple[Proposal[int], ...]],
+        proposal_evaluation_specs: tuple[ProposalEvaluationSpec | None, ...],
+    ) -> None:
+        super().__init__(proposal_batches)
+        self._proposal_evaluation_specs = proposal_evaluation_specs
+
+    @override
+    def proposal_evaluation_specs(
+        self,
+        state: BatchQueueOptimizerState,
+        proposals: Sequence[Proposal[int]],
+    ) -> tuple[ProposalEvaluationSpec | None, ...] | None:
+        _ = state, proposals
+        return self._proposal_evaluation_specs
+
+
+class StaticKernelHintOptimizer(BatchQueueOptimizer):
+    """Batch-queue optimizer that returns a fixed kernel-hint batch."""
+
+    _proposal_kernel_hints: tuple[ProposalLocalSearchContext | None, ...]
+
+    def __init__(
+        self,
+        *,
+        proposal_batches: list[tuple[Proposal[int], ...]],
+        proposal_kernel_hints: tuple[ProposalLocalSearchContext | None, ...],
+    ) -> None:
+        super().__init__(proposal_batches)
+        self._proposal_kernel_hints = proposal_kernel_hints
+
+    @override
+    def proposal_kernel_hints(
+        self,
+        state: BatchQueueOptimizerState,
+        proposals: Sequence[Proposal[int]],
+    ) -> tuple[ProposalLocalSearchContext | None, ...] | None:
+        _ = state, proposals
+        return self._proposal_kernel_hints
+
+
+class RequestAwareObjective(Objective[int]):
+    """Objective that relies on the canonical request evaluation protocol."""
+
+    direct_evaluation_count: int
+    request_evaluation_count: int
+
+    def __init__(self) -> None:
+        self.direct_evaluation_count = 0
+        self.request_evaluation_count = 0
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        self.direct_evaluation_count += 1
+        return float(-(candidate * candidate))
+
+    @override
+    def evaluate_request(
+        self,
+        request: EvaluationRequest[int],
+        *,
+        direction: OptimizationDirection,
+    ) -> Observation[int]:
+        self.request_evaluation_count += 1
+        spec_bonus = (
+            100.0
+            if isinstance(request.proposal_evaluation_spec, LocalProposalEvaluationSpec)
+            else 0.0
+        )
+        return Observation.from_objective_value(
+            request=request,
+            candidate=request.candidate,
+            value=float(request.candidate) + spec_bonus,
+            direction=direction,
         )
 
 
@@ -473,6 +565,226 @@ class StudyTests:
         assert result.best_observation.score == 1.0
         assert len(result.trace.events) == 2
         assert result.refinements == ()
+
+    def test_optimize_uses_direct_scalar_sequential_fast_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail_evaluate_step(*args: object, **kwargs: object) -> object:
+            _ = args, kwargs
+            raise AssertionError("generic evaluate_step should not be called")
+
+        monkeypatch.setattr(
+            "variopt.study.execution.evaluate_step",
+            fail_evaluate_step,
+        )
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+                (Proposal(candidate=1, proposal_id="p-3"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, final_state = study.optimize(max_evaluations=3, batch_size=2)
+
+        assert tuple(observation.proposal.proposal_id for observation in result.observations) == (
+            "p-1",
+            "p-2",
+            "p-3",
+        )
+        assert tuple(observation.value for observation in result.observations) == (
+            16.0,
+            4.0,
+            1.0,
+        )
+        assert result.evaluation_count == 3
+        assert result.best_observation is not None
+        assert result.best_observation.proposal.proposal_id == "p-3"
+        assert tuple(event.value for event in result.trace.events) == (4.0, 1.0)
+        assert final_state.ask_history == (2, 1)
+        assert tuple(
+            tuple(observation.proposal.proposal_id for observation in batch)
+            for batch in final_state.tell_history
+        ) == (("p-1", "p-2"), ("p-3",))
+
+    def test_optimize_fast_path_preserves_outcome_aware_tell_hook(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = OutcomeAwareBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert tuple(observation.candidate for observation in result.observations) == (4, 2)
+        assert optimizer.seen_changed_leaf_paths == (None, None)
+
+    def test_optimize_fast_path_carries_result_candidate_equality(self) -> None:
+        problem = Problem(
+            space=SpaceOwnedEqualitySpace(),
+            objective=SpaceOwnedEqualityObjective(),
+        )
+        optimizer = SpaceOwnedEqualityOptimizer()
+        evaluator = SequentialEvaluator[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+        ]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(max_evaluations=1)
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(99),
+            refined_candidate=SpaceOwnedEqualityCandidate(2),
+            changed_leaf_paths=((),),
+        )
+
+        updated_result = replace(result, refinements=(refinement,))
+
+        assert result.refinements == ()
+        assert updated_result.refinements == (refinement,)
+
+    def test_optimize_keeps_request_aware_scalar_protocol_on_generic_path(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=ShiftedObservationProtocol(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(max_evaluations=1)
+
+        assert problem.direct_objective is None
+        assert result.observations[0].proposal.proposal_id == "p-1"
+        assert result.observations[0].candidate == 3
+
+    def test_optimize_keeps_request_overriding_objective_on_generic_path(self) -> None:
+        spec = LocalProposalEvaluationSpec()
+        objective = RequestAwareObjective()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+        optimizer = StaticProposalSpecOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+            proposal_evaluation_specs=(spec,),
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(max_evaluations=1)
+
+        assert result.observations[0].request.proposal_evaluation_spec is spec
+        assert result.observations[0].value == 104.0
+        assert objective.request_evaluation_count == 1
+        assert objective.direct_evaluation_count == 0
+
+    def test_optimize_fast_path_validates_candidates_before_objective(self) -> None:
+        objective = CountingObjective()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=99, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        with pytest.raises(ValueError):
+            _ = study.optimize(max_evaluations=1)
+
+        assert objective.evaluation_count == 0
+
+    def test_optimize_fast_path_preserves_proposal_evaluation_specs(self) -> None:
+        spec = LocalProposalEvaluationSpec()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = StaticProposalSpecOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+            proposal_evaluation_specs=(spec,),
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(max_evaluations=1)
+
+        assert result.observations[0].request.proposal_evaluation_spec is spec
+
+    def test_optimize_fast_path_rejects_misaligned_proposal_metadata(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        spec_optimizer = StaticProposalSpecOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+            proposal_evaluation_specs=(LocalProposalEvaluationSpec(), None),
+        )
+        hint_optimizer = StaticKernelHintOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+            proposal_kernel_hints=(ProposalLocalSearchContext(), None),
+        )
+        evaluator = SequentialEvaluator[int, int]()
+
+        with pytest.raises(ValueError, match="proposal_evaluation_specs"):
+            _ = Study(
+                problem=problem,
+                run_method=spec_optimizer,
+                evaluator=evaluator,
+            ).optimize(max_evaluations=1)
+
+        with pytest.raises(ValueError, match="proposal_kernel_hints"):
+            _ = Study(
+                problem=problem,
+                run_method=hint_optimizer,
+                evaluator=evaluator,
+            ).optimize(max_evaluations=1)
+
+    def test_optimize_fast_path_preserves_budget_boundaries(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, final_state = study.optimize(max_evaluations=0)
+
+        assert result.evaluation_count == 0
+        assert result.observations == ()
+        assert result.trace.events == ()
+        assert final_state.ask_history == ()
+        with pytest.raises(ValueError, match="batch_size"):
+            _ = study.optimize(
+                max_evaluations=1,
+                batch_size=2,
+                execution_model=SEQUENTIAL_EXECUTION_MODEL,
+            )
 
     def test_run_returns_terminal_run_report_for_scalar_observations(self) -> None:
         problem = Problem(
