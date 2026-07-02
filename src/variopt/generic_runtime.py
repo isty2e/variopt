@@ -1,5 +1,6 @@
 """Runtime compatibility helpers for generic dataclasses."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field, fields
 
 
@@ -51,8 +52,38 @@ def frozen_generic_slots_compat_setstate(
         object.__setattr__(self, dataclass_field.name, value)
 
 
-setattr(FrozenGenericSlotsCompat, "__getstate__", frozen_generic_slots_compat_getstate)
-setattr(FrozenGenericSlotsCompat, "__setstate__", frozen_generic_slots_compat_setstate)
+def install_frozen_generic_slots_pickle(
+    cls: type[FrozenGenericSlotsCompat],
+    *,
+    getstate: Callable[
+        [FrozenGenericSlotsCompat],
+        list[object | None],
+    ] = frozen_generic_slots_compat_getstate,
+    setstate: Callable[
+        [FrozenGenericSlotsCompat, list[object | None]],
+        None,
+    ] = frozen_generic_slots_compat_setstate,
+) -> None:
+    """Install tolerant pickle hooks on one frozen slotted dataclass.
+
+    Parameters
+    ----------
+    cls : type[FrozenGenericSlotsCompat]
+        Frozen slotted dataclass type that should tolerate a missing
+        ``__orig_class__`` slot during pickling.
+
+    Notes
+    -----
+    ``@dataclass(frozen=True, slots=True)`` installs pickle hooks on every
+    dataclass subclass. Apply this helper after the subclass decorator has run
+    when a custom ``__init__`` cannot rely on dataclasses to populate inherited
+    runtime generic metadata.
+    """
+    setattr(cls, "__getstate__", getstate)
+    setattr(cls, "__setstate__", setstate)
+
+
+install_frozen_generic_slots_pickle(FrozenGenericSlotsCompat)
 
 del frozen_generic_slots_compat_getstate
 del frozen_generic_slots_compat_setstate

@@ -5,7 +5,10 @@ from typing import Generic
 
 from typing_extensions import TypeVar
 
-from variopt.generic_runtime import FrozenGenericSlotsCompat
+from variopt.generic_runtime import (
+    FrozenGenericSlotsCompat,
+    install_frozen_generic_slots_pickle,
+)
 
 from ..artifacts import EvaluationRequest, Proposal, RunReport, RunResult
 from ..evaluators.base import Evaluator
@@ -325,3 +328,6 @@ class Study(FrozenGenericSlotsCompat,
             count_evaluation_cost=count_evaluation_cost,
             initial_state=initial_state,
         )
+
+
+install_frozen_generic_slots_pickle(Study)

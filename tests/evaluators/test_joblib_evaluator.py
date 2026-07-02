@@ -209,6 +209,20 @@ class JoblibEvaluatorTests:
         assert tuple(outcome.observation.proposal.proposal_id for outcome in outcomes) == ("p-1", "p-2")
         assert tuple(outcome.observation.value for outcome in outcomes) == (16.0, 1.0)
 
+    def test_loky_backend_evaluates_picklable_problem(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        evaluator = JoblibEvaluator[int, int](backend="loky", n_jobs=2)
+
+        outcomes = evaluator.evaluate(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        assert tuple(outcome.observation.value for outcome in outcomes) == (16.0,)
+
     def test_execution_resources_report_evaluator_ownership(self) -> None:
         evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
 
@@ -246,6 +260,20 @@ class AsyncJoblibEvaluatorTests:
 
         assert tuple(outcome.observation.proposal.proposal_id for outcome in outcomes) == ("p-1", "p-2")
         assert tuple(outcome.observation.value for outcome in outcomes) == (16.0, 1.0)
+
+    def test_loky_backend_evaluates_picklable_problem(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        evaluator = AsyncJoblibEvaluator[int, int](backend="loky", n_jobs=2)
+
+        outcomes = evaluator.evaluate(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        assert tuple(outcome.observation.value for outcome in outcomes) == (16.0,)
 
     def test_execution_resources_report_evaluator_ownership(self) -> None:
         evaluator = AsyncJoblibEvaluator[int, int](backend="threading", n_jobs=2)

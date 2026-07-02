@@ -5,7 +5,10 @@ from typing import Generic, cast
 
 from typing_extensions import TypeVar, override
 
-from variopt.generic_runtime import FrozenGenericSlotsCompat
+from variopt.generic_runtime import (
+    FrozenGenericSlotsCompat,
+    install_frozen_generic_slots_pickle,
+)
 
 from .artifacts import (
     EvaluationRequest,
@@ -311,6 +314,9 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
             return None
 
         return objective
+
+
+install_frozen_generic_slots_pickle(Problem)
 
 
 @dataclass(frozen=True, slots=True)
