@@ -18,6 +18,7 @@ from variopt import (
     Proposal,
 )
 from variopt.algorithms.local_search import ScipyMinimizeKernel
+from variopt.algorithms.local_search.scipy import ScipyMinimizeResult
 from variopt.algorithms.local_search.scipy import kernel as scipy_kernel_module
 from variopt.artifacts import ProposalEvaluationSpec
 from variopt.execution import (
@@ -96,11 +97,11 @@ class IntegerObjective(Objective[int]):
         return float(candidate * candidate)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class FakeScipyOptimizeResult:
     """Typed stand-in for one SciPy optimize result in tests."""
 
-    x: tuple[float, ...]
+    x: Sequence[float]
     fun: float
     nfev: int
     success: bool
@@ -132,6 +133,19 @@ class ScipyMinimizeKernelTests:
                 owner_backend="sequential",
             ),
         )
+
+    def test_scipy_minimize_result_names_backend_function_value(self) -> None:
+        result = ScipyMinimizeResult.from_optimize_result(
+            FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=-10.0,
+                nfev=3,
+                success=True,
+                message="ok",
+            ),
+        )
+
+        assert result.function_value == -10.0
 
     def test_lbfgsb_improves_one_dimensional_real_problem(self) -> None:
         problem = Problem(

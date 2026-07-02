@@ -314,6 +314,9 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 runner=runner,
             )
             evaluation_count += local_outcome.evaluation_count
+            # Local search assumes deterministic evaluations; if SciPy probes
+            # the same coordinates more than once, keep the latest outcome seen
+            # by the minimized function.
             evaluated_outcomes_by_coordinates[coordinate_key] = local_outcome
             return local_outcome.record.score
 
