@@ -861,22 +861,22 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
                     random_state=random_state,
                 ),
             )
-            candidate, next_engine_state = commit_materialized_generation(
+            generated_candidate, next_engine_state = commit_materialized_generation(
                 engine_state.replace_random_state(next_random_state),
                 materialized_generation,
             )
             return (
-                candidate.candidate,
+                generated_candidate.candidate,
                 True,
-                candidate.planned_attribution,
+                generated_candidate.planned_attribution,
                 next_engine_state,
             )
 
-        candidate, next_engine_state = dequeue_generation_candidate(engine_state)
+        generated_candidate, next_engine_state = dequeue_generation_candidate(engine_state)
         return (
-            candidate.candidate,
+            generated_candidate.candidate,
             True,
-            candidate.planned_attribution,
+            generated_candidate.planned_attribution,
             next_engine_state,
         )
 

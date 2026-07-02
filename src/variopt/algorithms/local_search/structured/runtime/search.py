@@ -188,7 +188,8 @@ def first_improving_pair_move_outcome(
         return None, 0
 
     evaluated_neighbor_count = 0
-    for left_index, (left_path, left_space) in enumerate(limited_schedule[:-1]):
+    for left_index in range(len(limited_schedule) - 1):
+        left_path, left_space = limited_schedule[left_index]
         left_current_value = runtime.neighborhood.space.leaf_value_at_path(
             candidate,
             left_path,
@@ -197,7 +198,8 @@ def first_improving_pair_move_outcome(
         if len(left_neighbors) == 0:
             continue
 
-        for right_path, right_space in limited_schedule[left_index + 1 :]:
+        for right_index in range(left_index + 1, len(limited_schedule)):
+            right_path, right_space = limited_schedule[right_index]
             right_current_value = runtime.neighborhood.space.leaf_value_at_path(
                 candidate,
                 right_path,

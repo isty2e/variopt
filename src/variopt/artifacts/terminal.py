@@ -157,6 +157,15 @@ def _normalize_terminal_refinements(
     )
 
 
+def _optional_refinement_tuple(
+    refinements: Sequence[CandidateRefinement[CandidateT] | None] | None,
+) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+    if refinements is None:
+        return ()
+
+    return tuple(refinements)
+
+
 @dataclass(frozen=True, slots=True)
 class TraceEvent:
     """Immutable diagnostics event emitted during a run.
@@ -350,7 +359,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         """
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
-        refinement_tuple = () if refinements is None else tuple(refinements)
+        refinement_tuple = _optional_refinement_tuple(refinements)
         normalized_evaluation_count = len(record_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
@@ -502,7 +511,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         observation_tuple = tuple(observations)
         normalized_trace = Trace() if trace is None else trace
-        refinement_tuple = () if refinements is None else tuple(refinements)
+        refinement_tuple = _optional_refinement_tuple(refinements)
         normalized_evaluation_count = len(observation_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
@@ -739,7 +748,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
-        refinement_tuple = () if refinements is None else tuple(refinements)
+        refinement_tuple = _optional_refinement_tuple(refinements)
         normalized_evaluation_count = len(record_tuple)
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count

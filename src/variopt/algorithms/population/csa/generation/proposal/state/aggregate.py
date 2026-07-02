@@ -306,7 +306,7 @@ class CSAProposalState:
         local_displacement_leaf_paths: Sequence[LeafPath] = (),
         numeric_displacement: NumericSubspaceDisplacement | None = None,
         score_improvement: float,
-    ) -> Self:
+    ) -> "CSAProposalState":
         """Return a state with one additional proposal-side reward update.
 
         Parameters
@@ -324,7 +324,7 @@ class CSAProposalState:
 
         Returns
         -------
-        Self
+        CSAProposalState
             Updated proposal state with all applicable adaptive statistics
             incremented.
         """
@@ -337,7 +337,7 @@ class CSAProposalState:
             return self
 
         next_update_index = self.update_index + 1
-        next_state = self
+        next_state: CSAProposalState = self
         if family_key is not None:
             next_state = next_state.record_family_score_improvement(
                 family_key,

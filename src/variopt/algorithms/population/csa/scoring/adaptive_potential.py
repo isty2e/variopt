@@ -2,7 +2,8 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Generic, cast
+from math import prod
+from typing import Generic
 
 import numpy as np
 from numpy.typing import NDArray
@@ -17,6 +18,50 @@ from .....typevars import CandidateT
 from .model import CSAAdaptivePotential
 
 AdaptiveBinIndex = tuple[int, ...] | None
+
+
+def _potential_to_json_value(
+    potential: NDArray[np.float64],
+    *,
+    shape: tuple[int, ...],
+) -> JSONValue:
+    value_count = prod(shape)
+    values = tuple(float(potential.item(index)) for index in range(value_count))
+    nested_value, next_offset = _nested_potential_json_value(
+        values=values,
+        shape=shape,
+        axis=0,
+        offset=0,
+    )
+    if next_offset != len(values):
+        msg = "potential serialization did not consume all values"
+        raise RuntimeError(msg)
+    return nested_value
+
+
+def _nested_potential_json_value(
+    *,
+    values: tuple[float, ...],
+    shape: tuple[int, ...],
+    axis: int,
+    offset: int,
+) -> tuple[JSONValue, int]:
+    axis_length = shape[axis]
+    if axis == len(shape) - 1:
+        next_offset = offset + axis_length
+        return list(values[offset:next_offset]), next_offset
+
+    items: list[JSONValue] = []
+    next_offset = offset
+    for _ in range(axis_length):
+        item, next_offset = _nested_potential_json_value(
+            values=values,
+            shape=shape,
+            axis=axis + 1,
+            offset=next_offset,
+        )
+        items.append(item)
+    return items, next_offset
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +113,7 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if bin_index is None:
             return self.model.overflow_energy, None
 
-        potential_value = cast(np.float64, self.potential[bin_index])
-        return float(potential_value), bin_index
+        return float(self.potential.item(bin_index)), bin_index
 
     def bin_index(
         self,
@@ -145,7 +189,10 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             JSON-safe adaptive-potential snapshot.
         """
         return {
-            "potential": self.potential.tolist(),
+            "potential": _potential_to_json_value(
+                self.potential,
+                shape=tuple(axis.bin_count for axis in self.model.axes),
+            ),
         }
 
     @classmethod

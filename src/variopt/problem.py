@@ -145,7 +145,11 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
     evaluation_protocol: EvaluationProtocol[CandidateT, ProblemEvaluationRecordT]
     direction: OptimizationDirection = OptimizationDirection.MINIMIZE
     name: str | None = None
-    _objective_compat: Objective[CandidateT] | None = field(repr=False, compare=False)
+    _objective_compat: Objective[CandidateT] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
