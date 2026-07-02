@@ -5,6 +5,87 @@ from enum import Enum
 from typing import Literal
 
 
+class EvaluationBudgetExhausted(RuntimeError):
+    """Raised when an execution path would exceed its evaluation budget."""
+
+
+@dataclass(slots=True)
+class EvaluationBudget:
+    """Mutable runtime ledger for a hard evaluation budget.
+
+    Parameters
+    ----------
+    remaining : int
+        Number of evaluation units still available.
+
+    Notes
+    -----
+    Study orchestration consumes this ledger before submitting evaluator work.
+    Kernels that compute outcomes without calling the evaluator may consume it
+    directly, and the study layer reconciles any unmetered reported cost before
+    assimilating outcomes.
+    """
+
+    remaining: int
+
+    def __post_init__(self) -> None:
+        """Validate the initial budget."""
+        if self.remaining < 0:
+            msg = "remaining evaluation budget must be non-negative"
+            raise ValueError(msg)
+
+    @property
+    def is_exhausted(self) -> bool:
+        """Return whether no evaluation units remain."""
+        return self.remaining == 0
+
+    def can_consume(self, count: int = 1) -> bool:
+        """Return whether ``count`` evaluation units can be consumed.
+
+        Parameters
+        ----------
+        count : int, default=1
+            Requested evaluation-unit count.
+
+        Returns
+        -------
+        bool
+            ``True`` when the ledger has at least ``count`` units remaining.
+
+        Raises
+        ------
+        ValueError
+            If ``count`` is negative.
+        """
+        if count < 0:
+            msg = "evaluation budget count must be non-negative"
+            raise ValueError(msg)
+        return count <= self.remaining
+
+    def consume(self, count: int = 1) -> None:
+        """Consume ``count`` evaluation units or raise.
+
+        Parameters
+        ----------
+        count : int, default=1
+            Evaluation-unit count to consume.
+
+        Raises
+        ------
+        ValueError
+            If ``count`` is negative.
+        EvaluationBudgetExhausted
+            If consuming ``count`` would exceed the budget.
+        """
+        if count < 0:
+            msg = "evaluation budget count must be non-negative"
+            raise ValueError(msg)
+        if count > self.remaining:
+            msg = "evaluation budget exhausted"
+            raise EvaluationBudgetExhausted(msg)
+        self.remaining -= count
+
+
 class ExecutionCompletionMode(Enum):
     """Completion-order axis for an execution model.
 

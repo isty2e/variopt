@@ -16,7 +16,7 @@ from .artifacts import (
     ProposalEvaluationSpec,
     RequestAlignedEvaluationRecord,
 )
-from .execution import ExecutionResources
+from .execution import EvaluationBudget, ExecutionResources
 from .problem import Problem
 from .spaces import LeafPath
 
@@ -137,7 +137,9 @@ class ProposalLocalSearchContext(ProposalKernelHint):
             msg = "local_budget must be positive when provided"
             raise ValueError(msg)
 
-        normalized_leaf_paths = tuple(tuple(path) for path in self.prioritized_leaf_paths)
+        normalized_leaf_paths = tuple(
+            tuple(path) for path in self.prioritized_leaf_paths
+        )
         if len(set(normalized_leaf_paths)) != len(normalized_leaf_paths):
             msg = "prioritized_leaf_paths must not contain duplicates"
             raise ValueError(msg)
@@ -146,7 +148,9 @@ class ProposalLocalSearchContext(ProposalKernelHint):
 
 
 @dataclass(frozen=True, slots=True)
-class ProposalBatchQuery(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, QueryEvaluationRecordT]):
+class ProposalBatchQuery(
+    FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, QueryEvaluationRecordT]
+):
     """Canonical kernel query over a proposal batch.
 
     Parameters
@@ -162,6 +166,9 @@ class ProposalBatchQuery(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT
     proposal_kernel_hints : tuple[ProposalKernelHint | None, ...] | None, optional
         Optional per-proposal kernel hints aligned one-to-one with
         ``proposals``.
+    evaluation_budget : EvaluationBudget | None, optional
+        Shared runtime ledger for hard evaluation budgeting. Kernels may inspect
+        or consume this ledger before issuing evaluator work.
 
     Notes
     -----
@@ -174,6 +181,7 @@ class ProposalBatchQuery(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT
     execution_resources: ExecutionResources
     proposal_evaluation_specs: tuple[ProposalEvaluationSpec | None, ...] | None = None
     proposal_kernel_hints: tuple[ProposalKernelHint | None, ...] | None = None
+    evaluation_budget: EvaluationBudget | None = None
 
     def __post_init__(self) -> None:
         """Validate aligned per-proposal metadata.

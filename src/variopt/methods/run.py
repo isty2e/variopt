@@ -191,3 +191,21 @@ class RunMethod(
                 SYNC_BATCH_EXECUTION_MODEL,
             },
         )
+
+    def is_checkpoint_safe_state(self, state: RunMethodStateT) -> bool:
+        """Return whether ``state`` can be persisted as a checkpoint.
+
+        Parameters
+        ----------
+        state : RunMethodStateT
+            Run-method state to inspect.
+
+        Returns
+        -------
+        bool
+            ``True`` when checkpointing this state preserves resumable optimizer
+            semantics. Stateless or always-serializable run methods use the
+            default ``True`` contract.
+        """
+        _ = state
+        return True
