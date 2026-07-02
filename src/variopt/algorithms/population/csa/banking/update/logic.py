@@ -101,6 +101,7 @@ def apply_bank_update_batch(
     shadow_score_model_state = score_model_state
     shadow_growth_state = growth_state
     shadow_clustering_state = clustering_state
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
     if shadow_clustering_state.requires_initialization(entries=shadow_bank.entries):
         # Guard before calling ensure_initialized: Python evaluates arguments
         # eagerly, so this branch owns average-distance inference laziness.
@@ -137,6 +138,7 @@ def apply_bank_update_batch(
                 shadow_score_model_state,
                 shadow_growth_state,
                 shadow_clustering_state,
+                distance_workspace,
             ) = admit_full_bank_observation(
                 bank=shadow_bank,
                 observation=observation,
@@ -151,6 +153,7 @@ def apply_bank_update_batch(
                 base_bank_capacity=base_bank_capacity,
                 masked_seed_indices=masked_seed_indices,
                 random_state=random_state,
+                distance_workspace=distance_workspace,
             )
         shadow_state = initialize_cutoff_if_needed(
             bank=shadow_bank,
@@ -205,10 +208,11 @@ def apply_bank_update_batch(
         ),
         minimum_distance_cutoff=shadow_state.minimum_distance_cutoff,
     )
-    shadow_clustering_state = shadow_clustering_state.recluster(
-        entries=shadow_bank.entries,
-        diversity_metric=diversity_metric,
-    )
+    if final_changed_indices or removed_indices:
+        shadow_clustering_state = shadow_clustering_state.recluster(
+            entries=shadow_bank.entries,
+            diversity_metric=diversity_metric,
+        )
     return BankUpdateResult(
         bank=shadow_bank,
         state=shadow_state,
@@ -237,11 +241,13 @@ def admit_full_bank_observation(
     base_bank_capacity: int,
     masked_seed_indices: frozenset[int],
     random_state: np.random.RandomState | None,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None,
 ) -> tuple[
     Bank[CandidateT],
     CSAScoreModelState[CandidateT],
     CSABankGrowthState[CandidateT],
     CSAClusteringState[CandidateT],
+    BankDistanceWorkspace[CandidateT] | None,
 ]:
     """Admit or reject one observation when the bank is already full.
 
@@ -273,18 +279,21 @@ def admit_full_bank_observation(
         Seed indices that must be excluded from some update paths.
     random_state : numpy.random.RandomState | None
         Random-state instance used by stochastic acceptance, when required.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None
+        Batch-local distance workspace aligned to ``bank.entries``, when one
+        has already been created.
 
     Returns
     -------
-    tuple[Bank[CandidateT], CSAScoreModelState[CandidateT], CSABankGrowthState[CandidateT], CSAClusteringState[CandidateT]]
-        Updated bank and associated CSA runtime states.
+    tuple[Bank[CandidateT], CSAScoreModelState[CandidateT], CSABankGrowthState[CandidateT], CSAClusteringState[CandidateT], BankDistanceWorkspace[CandidateT] | None]
+        Updated bank, associated CSA runtime states, and the next batch-local
+        distance workspace.
     """
     new_entry = BankEntry(
         candidate=observation.candidate,
         value=observation.score,
         proposal_id=observation.proposal.proposal_id,
     )
-    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
 
     def get_distance_workspace() -> BankDistanceWorkspace[CandidateT]:
         nonlocal distance_workspace
@@ -296,6 +305,20 @@ def admit_full_bank_observation(
             )
             distance_workspace = workspace
         return workspace
+
+    def rebase_distance_workspace(
+        *,
+        next_bank: Bank[CandidateT],
+        invalidated_indices: frozenset[int],
+    ) -> BankDistanceWorkspace[CandidateT] | None:
+        workspace = distance_workspace
+        if workspace is None:
+            return None
+
+        return workspace.rebase(
+            entries=next_bank.entries,
+            invalidated_indices=invalidated_indices,
+        )
 
     entry_distances = tuple(
         require_valid_distance(
@@ -351,12 +374,13 @@ def admit_full_bank_observation(
                 reference_score=comparison_score,
                 random_state=random_state,
             ):
+                next_bank = replace_bank_entry(
+                    bank=bank,
+                    index=nearest_index,
+                    new_entry=new_entry,
+                )
                 return (
-                    replace_bank_entry(
-                        bank=bank,
-                        index=nearest_index,
-                        new_entry=new_entry,
-                    ),
+                    next_bank,
                     score_model_state.bump_trial(trial),
                     growth_state,
                     clustering_state.register_admission(
@@ -364,6 +388,10 @@ def admit_full_bank_observation(
                         nearest_index=nearest_index,
                         nearest_distance=nearest_distance,
                         appended=False,
+                    ),
+                    rebase_distance_workspace(
+                        next_bank=next_bank,
+                        invalidated_indices=frozenset({nearest_index}),
                     ),
                 )
 
@@ -385,15 +413,20 @@ def admit_full_bank_observation(
         adaptive_potential_active=adaptive_potential_active,
     )
     if did_grow:
+        appended_index = len(bank.entries) - 1
         return (
             bank,
             score_model_state,
             growth_state,
             clustering_state.register_admission(
-                admitted_index=len(bank.entries) - 1,
+                admitted_index=appended_index,
                 nearest_index=nearest_index,
                 nearest_distance=nearest_distance,
                 appended=True,
+            ),
+            rebase_distance_workspace(
+                next_bank=bank,
+                invalidated_indices=frozenset(),
             ),
         )
 
@@ -420,12 +453,13 @@ def admit_full_bank_observation(
                 reference_score=cluster_update.comparison_score,
                 random_state=random_state,
             ):
+                next_bank = replace_bank_entry(
+                    bank=bank,
+                    index=cluster_update.remove_index,
+                    new_entry=new_entry,
+                )
                 return (
-                    replace_bank_entry(
-                        bank=bank,
-                        index=cluster_update.remove_index,
-                        new_entry=new_entry,
-                    ),
+                    next_bank,
                     score_model_state.bump_trial(trial),
                     growth_state,
                     clustering_state.register_admission(
@@ -433,6 +467,10 @@ def admit_full_bank_observation(
                         nearest_index=nearest_index,
                         nearest_distance=nearest_distance,
                         appended=False,
+                    ),
+                    rebase_distance_workspace(
+                        next_bank=next_bank,
+                        invalidated_indices=frozenset({cluster_update.remove_index}),
                     ),
                 )
 
@@ -455,7 +493,13 @@ def admit_full_bank_observation(
         minimum_capacity=base_bank_capacity,
         adaptive_potential_active=adaptive_potential_active,
     ):
-        return bank, score_model_state, growth_state, clustering_state
+        return (
+            bank,
+            score_model_state,
+            growth_state,
+            clustering_state,
+            distance_workspace,
+        )
 
     adjusted_bank_scores = score_model_state.trial_adjusted_bank_scores(
         scored_bank=scored_bank,
@@ -500,12 +544,13 @@ def admit_full_bank_observation(
         reference_score=comparison_score,
         random_state=random_state,
     ):
+        next_bank = replace_bank_entry(
+            bank=bank,
+            index=worst_index,
+            new_entry=new_entry,
+        )
         return (
-            replace_bank_entry(
-                bank=bank,
-                index=worst_index,
-                new_entry=new_entry,
-            ),
+            next_bank,
             score_model_state.bump_trial(trial),
             growth_state,
             clustering_state.register_admission(
@@ -514,6 +559,10 @@ def admit_full_bank_observation(
                 nearest_distance=nearest_distance,
                 appended=False,
             ),
+            rebase_distance_workspace(
+                next_bank=next_bank,
+                invalidated_indices=frozenset({worst_index}),
+            ),
         )
 
     if adaptive_potential_active:
@@ -521,7 +570,13 @@ def admit_full_bank_observation(
             candidate=bank.entries[worst_index].candidate,
             diversity_metric=diversity_metric,
         )
-    return bank, score_model_state, growth_state, clustering_state
+    return (
+        bank,
+        score_model_state,
+        growth_state,
+        clustering_state,
+        distance_workspace,
+    )
 
 
 def initialize_cutoff_if_needed(
