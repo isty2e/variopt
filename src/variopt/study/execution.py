@@ -245,23 +245,6 @@ def _current_remaining_budget(
     return evaluation_budget.remaining
 
 
-def _current_step_batch_size(
-    _study: StudyExecutionOwner[
-        BoundaryT,
-        CandidateT,
-        RunMethodStateT,
-        StudyEvaluationRecordT,
-    ],
-    *,
-    batch_size: int,
-    remaining: int,
-    evaluation_budget: EvaluationBudget | None,
-) -> int:
-    """Return a batch size that preserves hard budget safety for kernels."""
-    _ = evaluation_budget
-    return min(batch_size, remaining)
-
-
 def _optimize_direct_scalar_sequential(
     study: DirectScalarSequentialStudyOwner[
         BoundaryT,
@@ -760,12 +743,7 @@ def run(
             evaluation_budget=evaluation_budget,
             record_budget_remaining=record_budget_remaining,
         )
-        current_batch_size = _current_step_batch_size(
-            study,
-            batch_size=batch_size,
-            remaining=remaining,
-            evaluation_budget=evaluation_budget,
-        )
+        current_batch_size = min(batch_size, remaining)
         step_result = evaluate_step(
             study,
             state,
