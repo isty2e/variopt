@@ -453,26 +453,28 @@ class ScipyMinimizeKernel(
             proposal.candidate,
             optimized_coordinates,
         )
-        optimized_outcome = evaluated_outcomes_by_coordinates.get(optimized_coordinates)
-        if optimized_outcome is None:
+        cached_optimized_outcome = evaluated_outcomes_by_coordinates.get(
+            optimized_coordinates,
+        )
+        if cached_optimized_outcome is None:
             if (
                 query.evaluation_budget is not None
                 and not can_evaluate_local_candidate()
                 and len(evaluated_outcomes_by_coordinates) > 0
             ):
-                optimized_outcome = min(
+                best_seen_outcome = min(
                     evaluated_outcomes_by_coordinates.values(),
                     key=lambda outcome: outcome.record.score,
                 )
-                return budget_exhausted_outcome(optimized_outcome)
+                return budget_exhausted_outcome(best_seen_outcome)
 
-            optimized_outcome = self._evaluate_candidate(
+            cached_optimized_outcome = self._evaluate_candidate(
                 query=query,
                 candidate=optimized_candidate,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 runner=runner,
             )
-            evaluation_count += optimized_outcome.evaluation_count
+            evaluation_count += cached_optimized_outcome.evaluation_count
         refinement = _candidate_refinement_from_codec(
             codec=codec,
             source_candidate=proposal.candidate,
@@ -483,9 +485,9 @@ class ScipyMinimizeKernel(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 candidate=optimized_candidate,
-                value=optimized_outcome.record.value,
-                score=optimized_outcome.record.score,
-                elapsed_seconds=optimized_outcome.record.elapsed_seconds,
+                value=cached_optimized_outcome.record.value,
+                score=cached_optimized_outcome.record.score,
+                elapsed_seconds=cached_optimized_outcome.record.elapsed_seconds,
             ),
             evaluation_count=evaluation_count,
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),
