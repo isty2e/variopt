@@ -189,6 +189,35 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
         ],
     ) -> EvaluationOutcome[ContinuousCandidateT]:
         """Evaluate one original proposal once without local search."""
+        local_outcome = self._evaluate_proposal(
+            query=query,
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            runner=runner,
+        )
+        return EvaluationOutcome(
+            record=local_outcome.record,
+            evaluation_count=local_outcome.evaluation_count,
+            kernel_diagnostics=KernelDiagnostics(
+                backend="scipy.optimize.minimize",
+                method=self.method,
+                status=KernelStatus.STOPPED,
+                message="local search disabled by run-method context",
+            ),
+        )
+
+    def _evaluate_proposal(
+        self,
+        *,
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        proposal: Proposal[ContinuousCandidateT],
+        proposal_evaluation_spec: ProposalEvaluationSpec | None,
+        runner: Callable[
+            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
+            tuple[EvaluationOutcome[ContinuousCandidateT], ...],
+        ],
+    ) -> EvaluationOutcome[ContinuousCandidateT]:
+        """Evaluate one concrete proposal through the supplied evaluator runner."""
         local_outcomes = runner(
             ProposalBatchQuery(
                 problem=query.problem,
@@ -205,17 +234,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             msg = "kernel runner must return exactly one outcome for one proposal"
             raise ValueError(msg)
 
-        local_outcome = local_outcomes[0]
-        return EvaluationOutcome(
-            record=local_outcome.record,
-            evaluation_count=local_outcome.evaluation_count,
-            kernel_diagnostics=KernelDiagnostics(
-                backend="scipy.optimize.minimize",
-                method=self.method,
-                status=KernelStatus.STOPPED,
-                message="local search disabled by run-method context",
-            ),
-        )
+        return local_outcomes[0]
 
     def _scipy_options(
         self,
@@ -330,6 +349,33 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 options=self._scipy_options(context=context),
             )
         )
+        if not scipy_result.has_finite_solution:
+            original_outcome = evaluated_outcomes_by_coordinates.get(
+                initial_coordinates,
+            )
+            if original_outcome is None:
+                original_outcome = self._evaluate_proposal(
+                    query=query,
+                    proposal=proposal,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    runner=runner,
+                )
+                evaluation_count += original_outcome.evaluation_count
+
+            return EvaluationOutcome(
+                record=Observation(
+                    proposal=proposal,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    candidate=proposal.candidate,
+                    value=original_outcome.record.value,
+                    score=original_outcome.record.score,
+                    elapsed_seconds=original_outcome.record.elapsed_seconds,
+                ),
+                evaluation_count=evaluation_count,
+                kernel_diagnostics=scipy_result.diagnostics(method=self.method),
+                candidate_equal=query.problem.space.candidates_equal,
+            )
+
         optimized_coordinates = scipy_result.coordinates
         optimized_candidate = codec.candidate_from_coordinates(
             proposal.candidate,
