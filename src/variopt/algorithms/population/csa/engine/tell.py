@@ -188,12 +188,30 @@ def apply_tell(
     )
     updated_indices = batch_result.changed_indices
     significant_update_indices = batch_result.significant_update_indices
+    entry_count_before_removal = (
+        len(batch_result.bank.entries) + len(batch_result.removed_indices)
+    )
+    progression_state = batch_result.state
     if updated_indices:
-        engine_state = replace(
-            engine_state,
-            progression_state=engine_state.progression_state.without_updated_seed_mask(
-                updated_indices,
-            ),
+        progression_state = progression_state.without_updated_seed_mask(
+            updated_indices,
+        )
+    if batch_result.removed_indices:
+        progression_state = progression_state.remove_indices(
+            removed_indices=batch_result.removed_indices,
+            entry_count=len(batch_result.bank.entries),
+        )
+
+    selection_state = engine_state.selection_state
+    if significant_update_indices:
+        selection_state = selection_state.invalidate_for_bank_update(
+            updated_indices=significant_update_indices,
+            entry_count=entry_count_before_removal,
+        )
+    if batch_result.removed_indices:
+        selection_state = selection_state.remove_indices(
+            removed_indices=batch_result.removed_indices,
+            entry_count=len(batch_result.bank.entries),
         )
 
     engine_state = replace(
@@ -204,7 +222,8 @@ def apply_tell(
             growth_state=batch_result.growth_state,
             clustering_state=batch_result.clustering_state,
         ),
-        progression_state=batch_result.state,
+        progression_state=progression_state,
+        selection_state=selection_state,
         scoring_state=replace(
             engine_state.scoring_state,
             model_state=batch_result.score_model_state,
@@ -215,24 +234,6 @@ def apply_tell(
             else batch_result.trace_state
         ),
     )
-
-    if batch_result.removed_indices:
-        engine_state = replace(
-            engine_state,
-            selection_state=engine_state.selection_state.remove_indices(
-                removed_indices=batch_result.removed_indices,
-                entry_count=len(engine_state.banking_state.bank.entries),
-            ),
-        )
-
-    if significant_update_indices:
-        engine_state = replace(
-            engine_state,
-            selection_state=engine_state.selection_state.invalidate_for_bank_update(
-                updated_indices=significant_update_indices,
-                entry_count=len(engine_state.banking_state.bank.entries),
-            ),
-        )
 
     engine_state = sync_reference_bank_if_uninitialized(
         engine_state,

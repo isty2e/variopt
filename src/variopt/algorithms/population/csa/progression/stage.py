@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing_extensions import Self
 
 from .....json_types import JSONDict, JSONValue, require_json_int, require_json_list
+from ..indexing import remap_indices_after_removal
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +186,51 @@ class CSAStageState:
                 index for index in self.seed_mask if index not in updated_indices
             ),
             partner_mask=self.partner_mask,
+        )
+
+    def remove_indices(
+        self,
+        *,
+        removed_indices: AbstractSet[int],
+        entry_count: int,
+    ) -> Self:
+        """Return a copy remapped after bank indices have been removed.
+
+        Parameters
+        ----------
+        removed_indices : collections.abc.Set[int]
+            Bank indices removed from the previous bank snapshot.
+        entry_count : int
+            Current bank size after removal.
+
+        Returns
+        -------
+        Self
+            Stage state whose masks are aligned with the current bank indexing.
+
+        Raises
+        ------
+        ValueError
+            If ``entry_count`` is negative.
+        """
+        if entry_count < 0:
+            msg = "entry_count must be non-negative"
+            raise ValueError(msg)
+
+        if not removed_indices:
+            return self
+
+        return self.with_masks(
+            seed_mask=remap_indices_after_removal(
+                self.seed_mask,
+                removed_indices=removed_indices,
+                entry_count=entry_count,
+            ),
+            partner_mask=remap_indices_after_removal(
+                self.partner_mask,
+                removed_indices=removed_indices,
+                entry_count=entry_count,
+            ),
         )
 
     def with_masks(

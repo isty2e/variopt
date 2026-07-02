@@ -180,6 +180,15 @@ def apply_bank_update_batch(
                 significant_update_indices=batch_significant_update_indices,
             )
 
+    final_changed_indices = changed_indices(
+        previous_bank=previous_bank,
+        next_bank=shadow_bank,
+    )
+    final_significant_update_indices = significant_update_indices(
+        previous_bank=previous_bank,
+        next_bank=shadow_bank,
+        minimum_significant_score_gap=update_policy.minimum_significant_score_gap,
+    )
     removed_indices: frozenset[int] = frozenset()
     (
         shadow_bank,
@@ -199,15 +208,6 @@ def apply_bank_update_batch(
     shadow_clustering_state = shadow_clustering_state.recluster(
         entries=shadow_bank.entries,
         diversity_metric=diversity_metric,
-    )
-    final_changed_indices = changed_indices(
-        previous_bank=previous_bank,
-        next_bank=shadow_bank,
-    )
-    final_significant_update_indices = significant_update_indices(
-        previous_bank=previous_bank,
-        next_bank=shadow_bank,
-        minimum_significant_score_gap=update_policy.minimum_significant_score_gap,
     )
     return BankUpdateResult(
         bank=shadow_bank,

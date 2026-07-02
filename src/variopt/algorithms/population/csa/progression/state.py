@@ -15,6 +15,7 @@ from .....json_types import (
     require_json_list,
     require_json_mapping,
 )
+from ..indexing import remap_indices_after_removal
 from .cutoff.state import CSACutoffState
 from .stage import CSAStageState
 
@@ -549,6 +550,52 @@ class CSAProgressionState:
             stage_state=self.stage_state.without_updated_seed_mask(updated_indices),
             refresh_mask=frozenset(
                 index for index in self.refresh_mask if index not in updated_indices
+            ),
+        )
+
+    def remove_indices(
+        self,
+        *,
+        removed_indices: AbstractSet[int],
+        entry_count: int,
+    ) -> Self:
+        """Return a copy remapped after bank indices have been removed.
+
+        Parameters
+        ----------
+        removed_indices : collections.abc.Set[int]
+            Bank indices removed from the previous bank snapshot.
+        entry_count : int
+            Current bank size after removal.
+
+        Returns
+        -------
+        Self
+            Progression state whose stage and refresh masks are aligned with the
+            current bank indexing.
+
+        Raises
+        ------
+        ValueError
+            If ``entry_count`` is negative.
+        """
+        if entry_count < 0:
+            msg = "entry_count must be non-negative"
+            raise ValueError(msg)
+
+        if not removed_indices:
+            return self
+
+        return replace(
+            self,
+            stage_state=self.stage_state.remove_indices(
+                removed_indices=removed_indices,
+                entry_count=entry_count,
+            ),
+            refresh_mask=remap_indices_after_removal(
+                self.refresh_mask,
+                removed_indices=removed_indices,
+                entry_count=entry_count,
             ),
         )
 

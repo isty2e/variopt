@@ -237,6 +237,25 @@ class CSAEngineStateTests:
 
         assert next_state.refresh_mask == frozenset({0})
 
+    def test_progression_masks_remap_after_bank_removal(self) -> None:
+        state = build_engine_state()
+        progression_state = replace(
+            state.progression_state,
+            stage_state=state.progression_state.stage_state.with_masks(
+                seed_mask=frozenset({0, 2, 4}),
+                partner_mask=frozenset({1, 3, 4}),
+            ),
+        ).with_refresh_mask(frozenset({2, 4}))
+
+        next_state = progression_state.remove_indices(
+            removed_indices=frozenset({1, 4}),
+            entry_count=3,
+        )
+
+        assert next_state.stage_state.seed_mask == frozenset({0, 1})
+        assert next_state.stage_state.partner_mask == frozenset({2})
+        assert next_state.refresh_mask == frozenset({1})
+
 
 class CSAAskEngineTests:
     """Regression tests for extracted ask-side engine planning."""

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing_extensions import Self
 
 from .....json_types import JSONDict, JSONValue
+from ..indexing import remap_indices_after_removal
 
 EMPTY_IGNORED_INDICES: frozenset[int] = frozenset()
 
@@ -280,24 +281,12 @@ class SeedSelectionState:
         if not removed_indices:
             return self
 
-        removed_index_set = frozenset(index for index in removed_indices if index >= 0)
-
-        def _remap_index(index: int) -> int | None:
-            if index in removed_index_set:
-                return None
-
-            return index - sum(
-                1
-                for removed_index in removed_index_set
-                if removed_index < index
-            )
-
-        remapped_used_indices = frozenset(
-            remapped_index
-            for index in self.used_entry_indices
-            if (remapped_index := _remap_index(index)) is not None
-            and 0 <= remapped_index < entry_count
+        remapped_used_indices = remap_indices_after_removal(
+            self.used_entry_indices,
+            removed_indices=removed_indices,
+            entry_count=entry_count,
         )
+        removed_index_set = frozenset(index for index in removed_indices if index >= 0)
         resized_status = [
             is_used
             for index, is_used in enumerate(self.resize_bank_status(entry_count=entry_count + len(removed_index_set)))
