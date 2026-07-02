@@ -43,8 +43,9 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class Study(FrozenGenericSlotsCompat,
-    Generic[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+class Study(
+    FrozenGenericSlotsCompat,
+    Generic[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT],
 ):
     """User-facing facade for running an optimization study.
 
@@ -230,8 +231,9 @@ class Study(FrozenGenericSlotsCompat,
         batch_size: int = 1,
         *,
         execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
-        count_evaluation_cost: bool = False,
+        count_evaluation_cost: bool = True,
         initial_state: RunMethodStateT | None = None,
+        stop_at_checkpoint_boundary: bool = False,
     ) -> tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
         """Run the study until the evaluation budget is exhausted.
 
@@ -244,11 +246,13 @@ class Study(FrozenGenericSlotsCompat,
         execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
             Execution-model contract that controls completion and assimilation
             order.
-        count_evaluation_cost : bool, default=False
+        count_evaluation_cost : bool, default=True
             Whether to consume budget using each outcome's logical evaluation
             cost instead of simple record count.
         initial_state : RunMethodStateT | None, optional
             Optional run-method state to start from.
+        stop_at_checkpoint_boundary : bool, default=False
+            Whether to return a checkpoint-safe terminal state boundary.
 
         Returns
         -------
@@ -262,6 +266,7 @@ class Study(FrozenGenericSlotsCompat,
                 batch_size=batch_size,
                 count_evaluation_cost=count_evaluation_cost,
                 initial_state=initial_state,
+                stop_at_checkpoint_boundary=stop_at_checkpoint_boundary,
             )
 
         return run_study(
@@ -271,6 +276,7 @@ class Study(FrozenGenericSlotsCompat,
             execution_model=execution_model,
             count_evaluation_cost=count_evaluation_cost,
             initial_state=initial_state,
+            stop_at_checkpoint_boundary=stop_at_checkpoint_boundary,
         )
 
     def optimize(
@@ -279,8 +285,9 @@ class Study(FrozenGenericSlotsCompat,
         batch_size: int = 1,
         *,
         execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
-        count_evaluation_cost: bool = False,
+        count_evaluation_cost: bool = True,
         initial_state: RunMethodStateT | None = None,
+        stop_at_checkpoint_boundary: bool = False,
     ) -> tuple[RunResult[CandidateT], RunMethodStateT]:
         """Run the study and materialize the scalar best-result summary.
 
@@ -293,11 +300,13 @@ class Study(FrozenGenericSlotsCompat,
         execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
             Execution-model contract that controls completion and assimilation
             order.
-        count_evaluation_cost : bool, default=False
+        count_evaluation_cost : bool, default=True
             Whether to consume budget using each outcome's logical evaluation
             cost instead of simple record count.
         initial_state : RunMethodStateT | None, optional
             Optional run-method state to start from.
+        stop_at_checkpoint_boundary : bool, default=False
+            Whether to return a checkpoint-safe terminal state boundary.
 
         Returns
         -------
@@ -311,6 +320,7 @@ class Study(FrozenGenericSlotsCompat,
                 execution_model=execution_model,
                 count_evaluation_cost=count_evaluation_cost,
                 initial_state=initial_state,
+                stop_at_checkpoint_boundary=stop_at_checkpoint_boundary,
             )
             return (
                 materialize_scalar_run_result(
@@ -327,6 +337,7 @@ class Study(FrozenGenericSlotsCompat,
             execution_model=execution_model,
             count_evaluation_cost=count_evaluation_cost,
             initial_state=initial_state,
+            stop_at_checkpoint_boundary=stop_at_checkpoint_boundary,
         )
 
 

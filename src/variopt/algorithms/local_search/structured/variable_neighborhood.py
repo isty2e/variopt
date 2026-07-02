@@ -34,7 +34,8 @@ from .runtime.search import run_structured_variable_neighborhood_stage_once
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
+class StructuredVariableNeighborhoodKernel(
+    FrozenGenericSlotsCompat,
     Kernel[
         ProposalBatchQuery[
             BoundaryT,
@@ -159,6 +160,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
         random_state: np.random.RandomState,
+        reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one variable-neighborhood local-search episode for one proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
@@ -200,6 +202,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                 leaf_schedule=leaf_schedule,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 random_state=random_state,
+                reserved_count=reserved_count,
             )
             evaluation_count += stage_attempt.evaluation_count
 
@@ -212,12 +215,21 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                 current_stage_index = 0
                 continue
 
-            if current_stage_index == len(self.stages) - 1:
+            if (
+                stage_attempt.budget_exhausted
+                or current_stage_index == len(self.stages) - 1
+            ):
                 refinement = None
                 if completed_steps > 0:
                     refinement = runtime.candidate_refinement(
                         source_candidate=proposal.candidate,
                         refined_candidate=current_candidate,
+                    )
+                terminal_message = stage_attempt.terminal_message
+                if not stage_attempt.budget_exhausted:
+                    terminal_message = (
+                        terminal_message
+                        + " after exhausting the configured variable-neighborhood stages"
                     )
 
                 return EvaluationOutcome(
@@ -233,10 +245,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                         backend="structured.local_search",
                         method="variable_neighborhood_search",
                         status=stage_attempt.terminal_status,
-                        message=(
-                            stage_attempt.terminal_message
-                            + " after exhausting the configured variable-neighborhood stages"
-                        ),
+                        message=terminal_message,
                     ),
                     refinement=refinement,
                     candidate_equal=runtime.query.problem.space.candidates_equal,
@@ -307,6 +316,7 @@ class StructuredVariableNeighborhoodKernel(FrozenGenericSlotsCompat,
                 proposal_index=proposal_index,
                 proposal=proposal,
                 random_state=random_state,
+                reserved_count=len(query.proposals) - proposal_index - 1,
             )
             for proposal_index, proposal in enumerate(query.proposals)
         )

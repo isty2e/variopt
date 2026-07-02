@@ -30,7 +30,8 @@ from .runtime.search import (
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
+class StructuredScheduledLocalSearchKernel(
+    FrozenGenericSlotsCompat,
     Kernel[
         ProposalBatchQuery[
             BoundaryT,
@@ -145,6 +146,7 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
+        reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one scheduled local-search episode for one original proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
@@ -176,20 +178,22 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
             runtime=runtime,
             context=context,
         )
+        budget_exhausted = False
 
         while completed_steps < episode_max_steps:
-            proposed_outcome, neighbor_evaluation_count = (
+            proposed_outcome, neighbor_evaluation_count, budget_exhausted = (
                 first_improving_single_leaf_outcome(
                     runtime=runtime,
                     candidate=current_candidate,
                     current_score=current_score,
                     leaf_schedule=leaf_schedule,
                     proposal_evaluation_spec=proposal_evaluation_spec,
+                    reserved_count=reserved_count,
                 )
             )
             evaluation_count += neighbor_evaluation_count
-            if proposed_outcome is None:
-                proposed_outcome, neighbor_evaluation_count = (
+            if proposed_outcome is None and not budget_exhausted:
+                proposed_outcome, neighbor_evaluation_count, budget_exhausted = (
                     first_improving_pair_move_outcome(
                         runtime=runtime,
                         candidate=current_candidate,
@@ -197,10 +201,13 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
                         leaf_schedule=leaf_schedule,
                         proposal_evaluation_spec=proposal_evaluation_spec,
                         pair_move_leaf_limit=self.pair_move_leaf_limit,
+                        reserved_count=reserved_count,
                     )
                 )
                 evaluation_count += neighbor_evaluation_count
 
+            if budget_exhausted:
+                break
             if proposed_outcome is None:
                 converged = True
                 break
@@ -213,6 +220,8 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
 
         status = KernelStatus.STOPPED
         message = "max_steps reached before local convergence"
+        if budget_exhausted:
+            message = "evaluation budget exhausted before local convergence"
         if converged:
             status = KernelStatus.CONVERGED
             message = "no improving scheduled move found"
@@ -278,6 +287,7 @@ class StructuredScheduledLocalSearchKernel(FrozenGenericSlotsCompat,
                 runtime=runtime,
                 proposal_index=proposal_index,
                 proposal=proposal,
+                reserved_count=len(query.proposals) - proposal_index - 1,
             )
             for proposal_index, proposal in enumerate(query.proposals)
         )

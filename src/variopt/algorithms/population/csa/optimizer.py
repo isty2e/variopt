@@ -85,7 +85,8 @@ StructuredCandidateT = TypeVar("StructuredCandidateT", bound=SpaceCandidateValue
 
 
 @dataclass(frozen=True, slots=True)
-class CSAOptimizer(FrozenGenericSlotsCompat,
+class CSAOptimizer(
+    FrozenGenericSlotsCompat,
     RunMethod[
         CSAEngineState[CandidateT],
         Proposal[CandidateT],
@@ -237,7 +238,10 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
             effective_profile = CSAProfile(
                 perturbation_schedule=effective_schedule,
             )
-        elif perturbation_schedule is not None or effective_profile.perturbation_schedule is None:
+        elif (
+            perturbation_schedule is not None
+            or effective_profile.perturbation_schedule is None
+        ):
             effective_profile = replace(
                 effective_profile,
                 perturbation_schedule=effective_schedule,
@@ -400,6 +404,23 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
             else candidate_to_dict
         )
         return state.to_dict(candidate_to_dict=serializer)
+
+    @override
+    def is_checkpoint_safe_state(self, state: CSAEngineState[CandidateT]) -> bool:
+        """Return whether a CSA state is at a safe checkpoint boundary.
+
+        Parameters
+        ----------
+        state : CSAEngineState[CandidateT]
+            Engine state to inspect.
+
+        Returns
+        -------
+        bool
+            ``True`` when no pending proposals or in-flight generation runtime
+            would be lost by checkpoint serialization.
+        """
+        return state.pending_proposals.is_empty and not state.generation_state.is_active
 
     def state_from_dict(
         self,
@@ -592,7 +613,9 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
     def tell_outcomes(
         self,
         state: CSAEngineState[CandidateT],
-        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[CandidateT]]],
+        outcomes: Sequence[
+            EvaluationOutcome[OutcomeCandidateT, Observation[CandidateT]]
+        ],
     ) -> CSAEngineState[CandidateT]:
         """Advance CSA state with full outcomes when refinement metadata exists.
 
@@ -645,7 +668,10 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
             Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
         ) = None
         numeric_subspace_displacement_inference: (
-            Callable[[ProposalAttribution, CandidateT], NumericSubspaceDisplacement | None] | None
+            Callable[
+                [ProposalAttribution, CandidateT], NumericSubspaceDisplacement | None
+            ]
+            | None
         ) = None
         if is_structured_candidate_space(self.space):
             structured_space = self.space
@@ -855,14 +881,16 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
             )
 
         if ask_plan.kind == "materialize_generation":
-            materialized_generation, next_random_state = engine_state.random_state.advance(
-                lambda random_state: materialize_generation(
-                    engine_state=engine_state,
-                    resolved_profile=self.resolved_profile,
-                    space=self.space,
-                    diversity_metric=self.diversity_metric,
-                    random_state=random_state,
-                ),
+            materialized_generation, next_random_state = (
+                engine_state.random_state.advance(
+                    lambda random_state: materialize_generation(
+                        engine_state=engine_state,
+                        resolved_profile=self.resolved_profile,
+                        space=self.space,
+                        diversity_metric=self.diversity_metric,
+                        random_state=random_state,
+                    ),
+                )
             )
             generated_candidate, next_engine_state = commit_materialized_generation(
                 engine_state.replace_random_state(next_random_state),
@@ -875,7 +903,9 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
                 next_engine_state,
             )
 
-        generated_candidate, next_engine_state = dequeue_generation_candidate(engine_state)
+        generated_candidate, next_engine_state = dequeue_generation_candidate(
+            engine_state
+        )
         return (
             generated_candidate.candidate,
             True,

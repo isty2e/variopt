@@ -18,7 +18,7 @@ from ..artifacts import (
 from ..evaluators.async_evaluator.contracts import AsyncEvaluator
 from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
 from ..evaluators.base import Evaluator
-from ..execution import STALE_ASYNC_EXECUTION_MODEL
+from ..execution import STALE_ASYNC_EXECUTION_MODEL, EvaluationBudget
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..outcomes import EvaluationOutcome
@@ -121,9 +121,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
                 msg = "completion group exceeds logical batch bounds"
                 raise ValueError(msg)
 
-            group_requests = self.requests[
-                completion_group.start_index:end_index
-            ]
+            group_requests = self.requests[completion_group.start_index : end_index]
             validate_aligned_outcomes(
                 group_requests,
                 completion_group.outcomes,
@@ -169,7 +167,10 @@ def open_stale_async_batch_session(
     ],
     state: RunMethodStateT,
     batch_size: int,
-) -> tuple[StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
+    evaluation_budget: EvaluationBudget | None = None,
+) -> tuple[
+    StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT], RunMethodStateT
+]:
     """Ask one batch and open its stale-async evaluator session.
 
     Parameters
@@ -186,6 +187,8 @@ def open_stale_async_batch_session(
         Current run-method state.
     batch_size : int
         Requested logical batch size.
+    evaluation_budget : EvaluationBudget | None, default=None
+        Optional hard evaluation-budget ledger consumed before submitting work.
 
     Returns
     -------
@@ -220,6 +223,8 @@ def open_stale_async_batch_session(
         proposals,
         proposal_evaluation_specs=proposal_evaluation_specs,
     )
+    if evaluation_budget is not None:
+        evaluation_budget.consume(len(requests))
     return (
         StaleAsyncActiveBatchSession(
             requests=requests,
@@ -261,6 +266,7 @@ def _open_stale_async_batch_session_for_study(
     state: RunMethodStateT,
     *,
     batch_size: int,
+    evaluation_budget: EvaluationBudget | None = None,
 ) -> tuple[
     StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT],
     RunMethodStateT,
@@ -281,6 +287,7 @@ def _open_stale_async_batch_session_for_study(
         proposal_evaluation_specs_for=study.run_method.proposal_evaluation_specs,
         state=state,
         batch_size=batch_size,
+        evaluation_budget=evaluation_budget,
     )
 
 
@@ -296,6 +303,7 @@ def run_stale_async(
     batch_size: int,
     count_evaluation_cost: bool,
     initial_state: RunMethodStateT | None,
+    stop_at_checkpoint_boundary: bool = False,
 ) -> tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
     """Run stale-incremental async orchestration with rolling batch refill.
 
@@ -312,6 +320,9 @@ def run_stale_async(
         instead of completed record count.
     initial_state : RunMethodStateT | None
         Optional initial run-method state.
+    stop_at_checkpoint_boundary : bool, default=False
+        Whether to roll the returned state/report back to the latest
+        checkpoint-safe boundary if the budget ends inside an unsafe segment.
 
     Returns
     -------
@@ -323,20 +334,41 @@ def run_stale_async(
     records: list[StudyEvaluationRecordT] = []
     refinements: list[CandidateRefinement[CandidateT] | None] | None = None
     trace = Trace()
-    remaining = max_evaluations
+    evaluation_budget = (
+        EvaluationBudget(max_evaluations) if count_evaluation_cost else None
+    )
+    record_budget_remaining = max_evaluations
     state = (
         study.run_method.create_initial_state()
         if initial_state is None
         else initial_state
     )
+    safe_records: tuple[StudyEvaluationRecordT, ...] | None = None
+    safe_refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None = None
+    safe_trace = trace
+    safe_evaluation_count = 0
+    safe_state = state
+    if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
+        safe_records = ()
     active_sessions: list[
         StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
     ] = []
 
     try:
         while active_sessions or (
-            remaining > 0 and not study.run_method.is_exhausted(state)
+            (
+                record_budget_remaining
+                if evaluation_budget is None
+                else evaluation_budget.remaining
+            )
+            > 0
+            and not study.run_method.is_exhausted(state)
         ):
+            remaining = (
+                record_budget_remaining
+                if evaluation_budget is None
+                else evaluation_budget.remaining
+            )
             if (
                 len(active_sessions) == 0
                 and remaining > 0
@@ -347,6 +379,7 @@ def run_stale_async(
                     study,
                     state,
                     batch_size=current_batch_size,
+                    evaluation_budget=evaluation_budget,
                 )
                 active_sessions.append(active_session)
 
@@ -362,12 +395,21 @@ def run_stale_async(
             for active_session in active_sessions:
                 completed_groups = active_session.poll_completed_groups()
                 for completed_group in completed_groups:
-                    group_records = tuple(
-                        outcome.record for outcome in completed_group
-                    )
+                    group_records = tuple(outcome.record for outcome in completed_group)
                     group_refinements = tuple(
                         outcome.refinement for outcome in completed_group
                     )
+                    group_evaluation_count = sum(
+                        outcome.evaluation_count for outcome in completed_group
+                    )
+                    if evaluation_budget is not None:
+                        unmetered_evaluation_count = group_evaluation_count - len(
+                            group_records,
+                        )
+                        if unmetered_evaluation_count > 0:
+                            evaluation_budget.consume(unmetered_evaluation_count)
+                    else:
+                        record_budget_remaining -= len(group_records)
                     records_before_group = len(records)
                     records.extend(group_records)
                     if refinements is not None:
@@ -384,13 +426,6 @@ def run_stale_async(
                         state,
                         completed_group,
                     )
-                    group_evaluation_count = sum(
-                        outcome.evaluation_count for outcome in completed_group
-                    )
-                    if count_evaluation_cost:
-                        remaining -= group_evaluation_count
-                    else:
-                        remaining -= len(group_records)
                     trace = trace.append(
                         TraceEvent(
                             kind="study.step",
@@ -398,13 +433,36 @@ def run_stale_async(
                             value=trace_value_for_records(group_records),
                         ),
                     )
+                    if (
+                        stop_at_checkpoint_boundary
+                        and study.run_method.is_checkpoint_safe_state(state)
+                    ):
+                        safe_records = tuple(records)
+                        safe_refinements = (
+                            None if refinements is None else tuple(refinements)
+                        )
+                        safe_trace = trace
+                        safe_evaluation_count = (
+                            max_evaluations - record_budget_remaining
+                            if evaluation_budget is None
+                            else max_evaluations - evaluation_budget.remaining
+                        )
+                        safe_state = state
 
+                    remaining = (
+                        record_budget_remaining
+                        if evaluation_budget is None
+                        else evaluation_budget.remaining
+                    )
                     if remaining > 0 and not study.run_method.is_exhausted(state):
                         refill_batch_size = min(len(group_records), remaining)
-                        refill_session, state = _open_stale_async_batch_session_for_study(
-                            study,
-                            state,
-                            batch_size=refill_batch_size,
+                        refill_session, state = (
+                            _open_stale_async_batch_session_for_study(
+                                study,
+                                state,
+                                batch_size=refill_batch_size,
+                                evaluation_budget=evaluation_budget,
+                            )
                         )
                         refill_sessions.append(refill_session)
 
@@ -417,10 +475,33 @@ def run_stale_async(
             active_session.cancel()
         raise
 
+    if stop_at_checkpoint_boundary and not study.run_method.is_checkpoint_safe_state(
+        state
+    ):
+        if safe_records is None:
+            msg = (
+                "run did not reach a checkpoint-safe state within the evaluation budget"
+            )
+            raise RuntimeError(msg)
+        return (
+            RunReport[CandidateT, StudyEvaluationRecordT].from_records(
+                records=safe_records,
+                evaluation_count=safe_evaluation_count,
+                trace=safe_trace,
+                refinements=safe_refinements,
+                candidate_equal=study.problem.space.candidates_equal,
+            ),
+            safe_state,
+        )
+
     return (
         RunReport[CandidateT, StudyEvaluationRecordT].from_records(
             records=records,
-            evaluation_count=max_evaluations - remaining,
+            evaluation_count=(
+                max_evaluations - record_budget_remaining
+                if evaluation_budget is None
+                else max_evaluations - evaluation_budget.remaining
+            ),
             trace=trace,
             refinements=None if refinements is None else tuple(refinements),
             candidate_equal=study.problem.space.candidates_equal,

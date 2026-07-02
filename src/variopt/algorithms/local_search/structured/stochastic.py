@@ -29,7 +29,8 @@ from .runtime.search import sample_structured_discrete_neighborhood
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
+class StructuredStochasticNeighborhoodKernel(
+    FrozenGenericSlotsCompat,
     Kernel[
         ProposalBatchQuery[
             BoundaryT,
@@ -152,6 +153,7 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
         random_state: np.random.RandomState,
+        reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one bounded stochastic local-search episode for one proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
@@ -183,6 +185,7 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
             context=context,
         )
         found_full_neighborhood_stop = False
+        budget_exhausted = False
 
         while completed_steps < episode_max_steps:
             sampled_neighborhood = sample_structured_discrete_neighborhood(
@@ -199,6 +202,9 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
 
             improved = False
             for move in sampled_neighborhood.moves:
+                if not runtime.can_evaluate(reserved_count=reserved_count):
+                    budget_exhausted = True
+                    break
                 proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
                     current_candidate,
                     {move.path: move.replacement},
@@ -219,12 +225,16 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
                     improved = True
                     break
 
+            if budget_exhausted:
+                break
             if not improved:
                 break
 
         status = KernelStatus.STOPPED
         message = "max_steps reached before stochastic local-search termination"
-        if completed_steps < episode_max_steps:
+        if budget_exhausted:
+            message = "evaluation budget exhausted before local convergence"
+        elif completed_steps < episode_max_steps:
             if found_full_neighborhood_stop:
                 status = KernelStatus.CONVERGED
                 message = "no improving move found in the full discrete neighborhood"
@@ -294,6 +304,7 @@ class StructuredStochasticNeighborhoodKernel(FrozenGenericSlotsCompat,
                 proposal_index=proposal_index,
                 proposal=proposal,
                 random_state=random_state,
+                reserved_count=len(query.proposals) - proposal_index - 1,
             )
             for proposal_index, proposal in enumerate(query.proposals)
         )

@@ -30,7 +30,8 @@ from .runtime.prepared import (
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
+class StructuredHillClimbKernel(
+    FrozenGenericSlotsCompat,
     Kernel[
         ProposalBatchQuery[
             BoundaryT,
@@ -132,6 +133,7 @@ class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
+        reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one local hill-climb episode for one original proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
@@ -164,6 +166,7 @@ class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
             context=context,
         )
 
+        budget_exhausted = False
         while completed_steps < episode_max_steps:
             improved = False
             for path, leaf_space in leaf_schedule:
@@ -175,6 +178,9 @@ class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
                     leaf_space,
                     current_leaf_value,
                 ):
+                    if not runtime.can_evaluate(reserved_count=reserved_count):
+                        budget_exhausted = True
+                        break
                     proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
                         current_candidate,
                         {path: replacement},
@@ -194,15 +200,19 @@ class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
                         completed_steps += 1
                         improved = True
                         break
-                if improved:
+                if improved or budget_exhausted:
                     break
 
+            if budget_exhausted:
+                break
             if not improved:
                 converged = True
                 break
 
         status = KernelStatus.STOPPED
         message = "max_steps reached before local convergence"
+        if budget_exhausted:
+            message = "evaluation budget exhausted before local convergence"
         if converged:
             status = KernelStatus.CONVERGED
             message = "no improving leafwise move found"
@@ -268,6 +278,7 @@ class StructuredHillClimbKernel(FrozenGenericSlotsCompat,
                 runtime=runtime,
                 proposal_index=proposal_index,
                 proposal=proposal,
+                reserved_count=len(query.proposals) - proposal_index - 1,
             )
             for proposal_index, proposal in enumerate(query.proposals)
         )

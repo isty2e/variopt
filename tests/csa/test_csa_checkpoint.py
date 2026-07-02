@@ -4,13 +4,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import pytest
+from typing_extensions import override
 
 from variopt import (
     IntegerSpace,
+    Objective,
     Observation,
+    Problem,
     Proposal,
     RealSpace,
     RecordSpace,
+    Study,
     TupleSpace,
 )
 from variopt.algorithms.population.csa import CSAOptimizer, CSAProfile
@@ -71,6 +75,7 @@ from variopt.algorithms.population.csa.scoring.model_state import (
 from variopt.algorithms.population.csa.selection.state import (
     SeedSelectionState,
 )
+from variopt.evaluators import SequentialEvaluator
 from variopt.json_types import JSONValue
 from variopt.randomness import RandomStateSnapshot
 from variopt.spaces import RecordCandidate, SpaceBoundaryValue, SpaceCandidateValue
@@ -101,6 +106,14 @@ def _evaluate_proposals(
     )
 
 
+class _SquareObjective(Objective[int]):
+    """Integer square objective used for CSA study checkpoint tests."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        return float(candidate * candidate)
+
+
 def _advance_to_safe_boundary(
     optimizer: CSAOptimizer[int, int],
     state: CSAEngineState[int],
@@ -115,7 +128,10 @@ def _advance_to_safe_boundary(
         observations = _evaluate_proposals(proposals)
         next_state = optimizer.tell(next_state, observations)
         trace.append((proposals, observations))
-        if next_state.pending_proposals.is_empty and not next_state.generation_state.is_active:
+        if (
+            next_state.pending_proposals.is_empty
+            and not next_state.generation_state.is_active
+        ):
             return tuple(trace), next_state
 
 
@@ -346,7 +362,9 @@ class CSAEngineCheckpointTests:
 class CSAOptimizerCheckpointTests:
     """Regression tests for public optimizer checkpoint helpers."""
 
-    def test_structured_optimizer_checkpoint_round_trip_matches_uninterrupted_run(self) -> None:
+    def test_structured_optimizer_checkpoint_round_trip_matches_uninterrupted_run(
+        self,
+    ) -> None:
         optimizer = CSAOptimizer.from_space_defaults(
             space=IntegerSpace(-10, 10),
             bank_capacity=6,
@@ -380,6 +398,39 @@ class CSAOptimizerCheckpointTests:
         assert optimizer.state_to_dict(resumed_state) == optimizer.state_to_dict(
             uninterrupted_state,
         )
+
+    def test_study_optimize_can_stop_at_checkpoint_safe_boundary(self) -> None:
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=IntegerSpace(-10, 10),
+            bank_capacity=6,
+            profile=CSAProfile(seed_count=3),
+            random_state=7,
+        )
+        study = Study(
+            problem=Problem(
+                space=IntegerSpace(-10, 10),
+                objective=_SquareObjective(),
+            ),
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        full_result, unsafe_state = study.optimize(max_evaluations=7)
+        safe_result, safe_state = study.optimize(
+            max_evaluations=7,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert full_result.evaluation_count == 7
+        assert not optimizer.is_checkpoint_safe_state(unsafe_state)
+        with pytest.raises(ValueError):
+            _ = optimizer.state_to_dict(unsafe_state)
+
+        assert 0 < safe_result.evaluation_count < full_result.evaluation_count
+        assert optimizer.is_checkpoint_safe_state(safe_state)
+        snapshot = optimizer.state_to_dict(safe_state)
+        restored_state = optimizer.state_from_dict(snapshot)
+        assert optimizer.state_to_dict(restored_state) == snapshot
 
     def test_record_space_checkpoint_restore_preserves_record_candidates(self) -> None:
         space = RecordSpace(

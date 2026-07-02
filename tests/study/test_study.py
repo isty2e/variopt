@@ -32,6 +32,7 @@ from tests.study_support import (
 )
 from variopt import (
     CandidateRefinement,
+    EvaluationBudgetExhausted,
     EvaluationOutcome,
     EvaluationRequest,
     IntegerSpace,
@@ -94,8 +95,7 @@ class RepeatingSubqueryKernel(
                     direction=query.problem.direction,
                 ),
                 evaluation_count=(
-                    first_outcome.evaluation_count
-                    + second_outcome.evaluation_count
+                    first_outcome.evaluation_count + second_outcome.evaluation_count
                 ),
             ),
         )
@@ -260,7 +260,9 @@ class StudyTests:
         contexts = kernel.queries[0].proposal_kernel_hints
         assert contexts is not None
         assert contexts is not None
-        assert all(isinstance(context, ProposalLocalSearchContext) for context in contexts)
+        assert all(
+            isinstance(context, ProposalLocalSearchContext) for context in contexts
+        )
         typed_contexts = cast(tuple[ProposalLocalSearchContext, ...], contexts)
         assert tuple(context.local_budget for context in typed_contexts) == (1, 2)
 
@@ -513,7 +515,9 @@ class StudyTests:
         with pytest.raises(TypeError):
             _ = study.optimize(max_evaluations=1)
 
-    def test_run_returns_terminal_report_for_non_scalar_evaluation_records(self) -> None:
+    def test_run_returns_terminal_report_for_non_scalar_evaluation_records(
+        self,
+    ) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             evaluation_protocol=LabelProtocol(),
@@ -532,10 +536,16 @@ class StudyTests:
         assert isinstance(report, RunReport)
         assert report.evaluation_count == 2
         assert len(report.records) == 2
-        assert tuple(record.label for record in report.records) == ("parity:1", "parity:0")
+        assert tuple(record.label for record in report.records) == (
+            "parity:1",
+            "parity:0",
+        )
         assert len(report.trace.events) == 2
         assert all(event.value is None for event in report.trace.events)
-        assert final_state.tell_history == (tuple(report.records[:1]), tuple(report.records[1:]))
+        assert final_state.tell_history == (
+            tuple(report.records[:1]),
+            tuple(report.records[1:]),
+        )
 
     def test_optimize_returns_terminal_run_result(self) -> None:
         problem = Problem(
@@ -596,7 +606,9 @@ class StudyTests:
 
         result, final_state = study.optimize(max_evaluations=3, batch_size=2)
 
-        assert tuple(observation.proposal.proposal_id for observation in result.observations) == (
+        assert tuple(
+            observation.proposal.proposal_id for observation in result.observations
+        ) == (
             "p-1",
             "p-2",
             "p-3",
@@ -634,7 +646,10 @@ class StudyTests:
 
         result, _ = study.optimize(max_evaluations=2, batch_size=2)
 
-        assert tuple(observation.candidate for observation in result.observations) == (4, 2)
+        assert tuple(observation.candidate for observation in result.observations) == (
+            4,
+            2,
+        )
         assert optimizer.seen_changed_leaf_paths == (None, None)
 
     def test_optimize_fast_path_carries_result_candidate_equality(self) -> None:
@@ -900,7 +915,7 @@ class StudyTests:
         assert late_refinement.source_candidate == 3
         assert late_refinement.refined_candidate == report.records[1].candidate
 
-    def test_run_preserves_refinement_when_evaluation_cost_overshoots_budget(
+    def test_run_rejects_refinement_when_evaluation_cost_overshoots_budget(
         self,
     ) -> None:
         problem = Problem(
@@ -918,18 +933,11 @@ class StudyTests:
             kernel=ScoringKernel(),
         )
 
-        report, _ = study.run(
-            max_evaluations=3,
-            count_evaluation_cost=True,
-        )
-
-        assert report.evaluation_count == 7
-        assert len(report.records) == 1
-        assert len(report.refinements) == 1
-        refinement = report.refinements[0]
-        assert refinement is not None
-        assert refinement.source_candidate == 4
-        assert refinement.refined_candidate == report.records[0].candidate
+        with pytest.raises(EvaluationBudgetExhausted):
+            _ = study.run(
+                max_evaluations=3,
+                count_evaluation_cost=True,
+            )
 
     def test_run_uses_space_candidate_equality_for_report_refinements(self) -> None:
         problem = Problem(
@@ -953,7 +961,10 @@ class StudyTests:
         assert len(report.refinements) == 1
         refinement = report.refinements[0]
         assert refinement is not None
-        assert refinement.refined_candidate.stable_id == report.records[0].candidate.stable_id
+        assert (
+            refinement.refined_candidate.stable_id
+            == report.records[0].candidate.stable_id
+        )
 
     def test_study_kernel_makes_local_optimization_visible(self) -> None:
         problem = Problem(
@@ -998,7 +1009,6 @@ class StudyTests:
 
         result, final_state = study.optimize(
             max_evaluations=7,
-            count_evaluation_cost=True,
         )
 
         assert objective.evaluation_count == 0
@@ -1015,7 +1025,9 @@ class StudyTests:
         assert refinement.refined_candidate == 2
         assert len(final_state.tell_history) == 1
 
-    def test_optimize_uses_space_candidate_equality_for_result_refinements(self) -> None:
+    def test_optimize_uses_space_candidate_equality_for_result_refinements(
+        self,
+    ) -> None:
         problem = Problem(
             space=SpaceOwnedEqualitySpace(),
             objective=SpaceOwnedEqualityObjective(),
@@ -1037,7 +1049,10 @@ class StudyTests:
         assert len(result.refinements) == 1
         refinement = result.refinements[0]
         assert refinement is not None
-        assert refinement.refined_candidate.stable_id == result.observations[0].candidate.stable_id
+        assert (
+            refinement.refined_candidate.stable_id
+            == result.observations[0].candidate.stable_id
+        )
 
     def test_optimize_backfills_unrefined_history_when_late_refinement_appears(
         self,
@@ -1119,7 +1134,10 @@ class StudyTests:
 
         assert kernel.last_execution_resources is not None
         assert kernel.last_execution_resources.parallel_owner == "evaluator"
-        assert kernel.last_execution_resources.nested_parallelism_policy == NestedParallelismPolicy.FORBID
+        assert (
+            kernel.last_execution_resources.nested_parallelism_policy
+            == NestedParallelismPolicy.FORBID
+        )
         assert kernel.last_execution_resources.owner_worker_count == 1
         assert kernel.last_execution_resources.owner_backend == "sequential"
 
@@ -1138,7 +1156,9 @@ class StudyTests:
         with pytest.raises(ValueError):
             _ = study.step(state, batch_size=0)
 
-    def test_step_rejects_sequential_model_with_batch_size_greater_than_one(self) -> None:
+    def test_step_rejects_sequential_model_with_batch_size_greater_than_one(
+        self,
+    ) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             objective=SquareObjective(),
@@ -1155,7 +1175,9 @@ class StudyTests:
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
         state = optimizer.create_initial_state()
 
-        with pytest.raises(ValueError, match="sequential execution model requires batch_size == 1"):
+        with pytest.raises(
+            ValueError, match="sequential execution model requires batch_size == 1"
+        ):
             _ = study.step(
                 state,
                 batch_size=2,
@@ -1174,7 +1196,10 @@ class StudyTests:
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
         state = optimizer.create_initial_state()
 
-        with pytest.raises(ValueError, match="run_method does not support the requested execution model: exact_async"):
+        with pytest.raises(
+            ValueError,
+            match="run_method does not support the requested execution model: exact_async",
+        ):
             _ = study.step(
                 state,
                 execution_model=EXACT_ASYNC_EXECUTION_MODEL,
@@ -1200,7 +1225,9 @@ class StudyTests:
         )
         state = optimizer.create_initial_state()
 
-        with pytest.raises(ValueError, match="evaluator outcomes must align with input request order"):
+        with pytest.raises(
+            ValueError, match="evaluator outcomes must align with input request order"
+        ):
             _ = study.step(state, batch_size=2)
 
     def test_optimize_allows_zero_evaluations(self) -> None:
@@ -1273,7 +1300,7 @@ class StudyTests:
         assert result.best_observation.value == 16.0
         assert result.best_observation.score == -16.0
 
-    def test_optimize_can_budget_by_local_optimization_cost(self) -> None:
+    def test_optimize_budgets_by_local_optimization_cost_by_default(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             objective=SquareObjective(),
@@ -1294,7 +1321,6 @@ class StudyTests:
 
         result, final_state = study.optimize(
             max_evaluations=7,
-            count_evaluation_cost=True,
         )
 
         assert len(result.observations) == 1

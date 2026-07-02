@@ -12,7 +12,8 @@ from ..neighborhood import StructuredCandidateT
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredVariableNeighborhoodStageAttempt(FrozenGenericSlotsCompat,
+class StructuredVariableNeighborhoodStageAttempt(
+    FrozenGenericSlotsCompat,
     Generic[StructuredCandidateT],
 ):
     """One attempted neighborhood stage inside a variable-neighborhood episode.
@@ -27,16 +28,21 @@ class StructuredVariableNeighborhoodStageAttempt(FrozenGenericSlotsCompat,
         Terminal kernel status after the stage.
     terminal_message : str
         Human-readable terminal status message.
+    budget_exhausted : bool, default=False
+        Whether the stage stopped because no evaluation budget remained.
     """
 
     improved_outcome: EvaluationOutcome[StructuredCandidateT] | None
     evaluation_count: int
     terminal_status: KernelStatus
     terminal_message: str
+    budget_exhausted: bool = False
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredLocalImprovementResult(FrozenGenericSlotsCompat, Generic[StructuredCandidateT]):
+class StructuredLocalImprovementResult(
+    FrozenGenericSlotsCompat, Generic[StructuredCandidateT]
+):
     """One completed inner local-improvement episode over a fixed incumbent.
 
     Parameters
@@ -49,9 +55,12 @@ class StructuredLocalImprovementResult(FrozenGenericSlotsCompat, Generic[Structu
         Number of completed neighborhood steps.
     converged : bool
         Whether the episode converged without finding further improvements.
+    budget_exhausted : bool, default=False
+        Whether the episode stopped because no evaluation budget remained.
     """
 
     record: Observation[StructuredCandidateT]
     evaluation_count: int
     completed_steps: int
     converged: bool
+    budget_exhausted: bool = False

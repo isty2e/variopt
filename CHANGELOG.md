@@ -8,7 +8,22 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Breaking
+
+- `Study.run(...)` and `Study.optimize(...)` now default
+  `count_evaluation_cost=True`. Evaluation budgets are charged against reported
+  logical evaluation cost, including inner local-search evaluations, rather than
+  only the number of returned records. Code that intentionally wants outer-record
+  counting must pass `count_evaluation_cost=False`.
+- Study execution now raises `EvaluationBudgetExhausted` instead of silently
+  assimilating a step whose reported evaluation cost exceeds the remaining hard
+  budget.
+
+### Added
+
+- Added `stop_at_checkpoint_boundary=True` for `Study.run(...)` and
+  `Study.optimize(...)` so CSA runs can return the latest checkpoint-safe state
+  when the budget ends inside an unsafe generation segment.
 
 ## [0.1.0] - 2026-06-15
 

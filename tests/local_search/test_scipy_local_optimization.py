@@ -10,6 +10,7 @@ from typing_extensions import override
 
 from tests.numeric_support import approx_equal
 from variopt import (
+    EvaluationBudget,
     EvaluationOutcome,
     Objective,
     Observation,
@@ -49,6 +50,9 @@ def evaluate_query_directly(
     query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
 ) -> tuple[EvaluationOutcome[CandidateRunnerT], ...]:
     """Evaluate one proposal batch directly through the problem objective."""
+    if query.evaluation_budget is not None:
+        query.evaluation_budget.consume(len(query.proposals))
+
     return tuple(
         EvaluationOutcome(
             observation=Observation.from_objective_value(
@@ -315,6 +319,78 @@ class ScipyMinimizeKernelTests:
         assert outcome.observation.value == 10.0
         assert outcome.evaluation_count == 2
 
+    def test_scipy_reserves_budget_for_later_batch_proposals(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        evaluation_budget = EvaluationBudget(2)
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            objective_score = objective_in_coordinate_space(initial_coordinates)
+            _ = objective_in_coordinate_space((1.5,))
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=objective_score,
+                nfev=2,
+                success=True,
+                message="ok",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=4.0, proposal_id="p-1"),
+                Proposal(candidate=-2.0, proposal_id="p-2"),
+            ),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+            evaluation_budget=evaluation_budget,
+        )
+
+        outcomes = kernel.run(query, evaluate_query_directly)
+
+        assert evaluation_budget.remaining == 0
+        assert tuple(outcome.evaluation_count for outcome in outcomes) == (1, 1)
+        assert tuple(outcome.observation.candidate for outcome in outcomes) == (
+            4.0,
+            -2.0,
+        )
+        assert all(
+            outcome.kernel_diagnostics is not None
+            and outcome.kernel_diagnostics.status == KernelStatus.STOPPED
+            and outcome.kernel_diagnostics.message
+            == "evaluation budget exhausted before local convergence"
+            for outcome in outcomes
+        )
+
     def test_sequence_coordinate_cache_preserves_elapsed_seconds(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -363,7 +439,9 @@ class ScipyMinimizeKernelTests:
                     observation=Observation.from_objective_value(
                         proposal=proposal,
                         candidate=proposal.candidate,
-                        value=local_query.problem.objective.evaluate(proposal.candidate),
+                        value=local_query.problem.objective.evaluate(
+                            proposal.candidate
+                        ),
                         direction=local_query.problem.direction,
                         elapsed_seconds=0.25,
                     ),
@@ -792,9 +870,7 @@ class ScipyMinimizeKernelTests:
                 owner_worker_count=1,
                 owner_backend="sequential",
             ),
-            proposal_kernel_hints=(
-                ProposalLocalSearchContext(enabled=False),
-            ),
+            proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
         )
 
         outcomes = kernel.run(query, evaluate_query_directly)
@@ -805,7 +881,10 @@ class ScipyMinimizeKernelTests:
         assert outcome.evaluation_count == 1
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "local search disabled by run-method context"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "local search disabled by run-method context"
+        )
         assert outcome.refinement is None
 
     def test_disabled_local_search_forwards_proposal_evaluation_spec(self) -> None:
@@ -828,9 +907,7 @@ class ScipyMinimizeKernelTests:
                 owner_backend="sequential",
             ),
             proposal_evaluation_specs=(spec,),
-            proposal_kernel_hints=(
-                ProposalLocalSearchContext(enabled=False),
-            ),
+            proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
         )
 
         def assert_spec_forwarded(
@@ -844,7 +921,9 @@ class ScipyMinimizeKernelTests:
                         proposal=proposal,
                         proposal_evaluation_spec=spec,
                         candidate=proposal.candidate,
-                        value=local_query.problem.objective.evaluate(proposal.candidate),
+                        value=local_query.problem.objective.evaluate(
+                            proposal.candidate
+                        ),
                         direction=local_query.problem.direction,
                     ),
                     evaluation_count=1,
@@ -917,7 +996,9 @@ class ScipyMinimizeKernelTests:
                         proposal=proposal,
                         proposal_evaluation_spec=spec,
                         candidate=proposal.candidate,
-                        value=local_query.problem.objective.evaluate(proposal.candidate),
+                        value=local_query.problem.objective.evaluate(
+                            proposal.candidate
+                        ),
                         direction=local_query.problem.direction,
                     ),
                     evaluation_count=1,
@@ -957,9 +1038,7 @@ class ScipyMinimizeKernelTests:
                 owner_worker_count=1,
                 owner_backend="sequential",
             ),
-            proposal_kernel_hints=(
-                ProposalLocalSearchContext(local_budget=3),
-            ),
+            proposal_kernel_hints=(ProposalLocalSearchContext(local_budget=3),),
         )
         captured_options: list[dict[str, int]] = []
 
@@ -1158,7 +1237,10 @@ class ScipyMinimizeKernelTests:
 
         outcomes = kernel.run(query, evaluate_query_directly)
 
-        assert tuple(outcome.observation.candidate for outcome in outcomes) == (4.0, -2.0)
+        assert tuple(outcome.observation.candidate for outcome in outcomes) == (
+            4.0,
+            -2.0,
+        )
 
     def test_empty_local_search_batch_does_not_prepare_structured_codec(
         self,
@@ -1203,7 +1285,9 @@ class ScipyMinimizeKernelTests:
 
         assert outcomes == ()
 
-    def test_empty_local_search_batch_allows_incompatible_space_without_codec(self) -> None:
+    def test_empty_local_search_batch_allows_incompatible_space_without_codec(
+        self,
+    ) -> None:
         problem = Problem(
             space=IntegerSpace(0, 10),
             objective=IntegerObjective(),
@@ -1306,7 +1390,10 @@ class ScipyMinimizeKernelTests:
 
         outcomes = kernel.run(query, evaluate_query_directly)
 
-        assert tuple(outcome.observation.candidate for outcome in outcomes) == (4.0, 1.5)
+        assert tuple(outcome.observation.candidate for outcome in outcomes) == (
+            4.0,
+            1.5,
+        )
         assert codec_call_count == 1
 
     def test_structured_codec_cache_is_query_local(
