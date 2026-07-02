@@ -182,7 +182,7 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         minimum_distance_cutoff: float | None,
         masked_entry_indices: frozenset[int],
         distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
-    ) -> tuple[ScoredBank[CandidateT], Self]:
+    ) -> tuple[ScoredBank[CandidateT], "CSAScoreModelState[CandidateT]"]:
         """Return shaped bank scores and the updated score-model state.
 
         Parameters
@@ -203,7 +203,7 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
         Returns
         -------
-        tuple[ScoredBank[CandidateT], Self]
+        tuple[ScoredBank[CandidateT], CSAScoreModelState[CandidateT]]
             Scored bank snapshot and the resolved score-model state.
 
         Raises
@@ -213,9 +213,9 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         real_scores = tuple(entry.value for entry in entries)
         resolved_bias_max = self._resolve_biased_potential_max(real_scores)
-        next_state = self
+        next_state: CSAScoreModelState[CandidateT] = self
         if resolved_bias_max != self.biased_potential_max:
-            next_state = type(self)(
+            next_state = CSAScoreModelState(
                 score_model=self.score_model,
                 biased_potential_max=resolved_bias_max,
                 adaptive_potential_state=self.adaptive_potential_state,

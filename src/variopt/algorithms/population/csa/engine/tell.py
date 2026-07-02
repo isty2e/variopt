@@ -403,15 +403,15 @@ def apply_refresh_tell(
             infer_numeric_subspace_displacement=infer_numeric_subspace_displacement,
         ),
     )
-    refresh_state = engine_state.banking_state.refresh_state
+    final_refresh_state = engine_state.banking_state.refresh_state
     if (
-        refresh_state is not None
-        and refresh_state.has_enough_entries
+        final_refresh_state is not None
+        and final_refresh_state.has_enough_entries
         and engine_state.pending_proposals.is_empty
     ):
         return complete_refresh(
             engine_state,
-            refresh_state,
+            final_refresh_state,
             refresh_policy=refresh_policy,
             diversity_metric=diversity_metric,
             cutoff_schedule=cutoff_schedule,

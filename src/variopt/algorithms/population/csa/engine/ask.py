@@ -38,7 +38,7 @@ from ..profile import CSAResolvedProfile
 from ..selection.policy import prepare_seed_batch, select_partner_indices
 from ..selection.routing import should_use_reference_primary
 from ..selection.state import SeedSelectionState
-from ..trace.events.artifacts import CSAProposalFamilyTrace
+from ..trace.events.artifacts import CSAPrimarySource, CSAProposalFamilyTrace
 from ..trace.events.state import CSAEventTraceState
 from .state import CSAEngineState
 
@@ -377,11 +377,12 @@ def materialize_generation(
 
             for spec in resolved_profile.perturbation_schedule.initial_family:
                 for _ in range(spec.count):
-                    primary_source = "bank"
-                    primary_bank = bank
                     if use_reference_primary:
-                        primary_source = "reference"
-                        primary_bank = reference_bank
+                        primary_source: CSAPrimarySource = "reference"
+                        primary_entries = reference_bank.entries
+                    else:
+                        primary_source = "bank"
+                        primary_entries = bank.entries
 
                     partner_indices = select_partner_indices_from_entries(
                         entries=reference_bank.entries,
@@ -390,7 +391,7 @@ def materialize_generation(
                         partner_mask=progression_state.partner_mask,
                         weighted_partner_selection=False,
                     )
-                    parents = (primary_bank.entries[seed_index].candidate,) + tuple(
+                    parents = (primary_entries[seed_index].candidate,) + tuple(
                         reference_bank.entries[index].candidate
                         for index in partner_indices
                     )
