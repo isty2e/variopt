@@ -11,6 +11,7 @@ from typing_extensions import override
 from variopt import (
     ArraySpace,
     CategoricalSpace,
+    EvaluationBudget,
     EvaluationOutcome,
     IntegerSpace,
     Objective,
@@ -63,6 +64,9 @@ def evaluate_query_directly(
     query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
 ) -> tuple[EvaluationOutcome[CandidateRunnerT], ...]:
     """Evaluate one proposal batch directly through the problem objective."""
+    if query.evaluation_budget is not None:
+        query.evaluation_budget.consume(len(query.proposals))
+
     return tuple(
         EvaluationOutcome(
             observation=Observation.from_objective_value(
@@ -236,7 +240,9 @@ class ConditionalDiscretePairSpace(
         self.tail_space.validate(candidate[1])
 
     @override
-    def sample(self, random_state: np.random.RandomState) -> ConditionalDiscreteCandidate:
+    def sample(
+        self, random_state: np.random.RandomState
+    ) -> ConditionalDiscreteCandidate:
         return (
             self.head_space.sample(random_state),
             self.tail_space.sample(random_state),
@@ -295,13 +301,17 @@ class ConditionalDiscretePairSpace(
         if ("head",) in replacements:
             replacement = replacements[("head",)]
             if type(replacement) is not int:
-                msg = "conditional discrete head replacement must be a canonical integer"
+                msg = (
+                    "conditional discrete head replacement must be a canonical integer"
+                )
                 raise TypeError(msg)
             head_value = self.head_space.normalize(replacement)
         if ("tail",) in replacements:
             replacement = replacements[("tail",)]
             if type(replacement) is not int:
-                msg = "conditional discrete tail replacement must be a canonical integer"
+                msg = (
+                    "conditional discrete tail replacement must be a canonical integer"
+                )
                 raise TypeError(msg)
             tail_value = self.tail_space.normalize(replacement)
         return (head_value, tail_value)
@@ -346,18 +356,54 @@ class StructuredHillClimbKernelTests:
         assert outcome.refinement.refined_candidate == 2
         assert outcome.refinement.changed_leaf_paths == ((),)
 
+    def test_hill_climber_reserves_budget_for_later_batch_proposals(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=IntegerObjective(),
+        )
+        kernel = StructuredHillClimbKernel[int, int](max_steps=8)
+        evaluation_budget = EvaluationBudget(2)
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=5, proposal_id="p-1"),
+                Proposal(candidate=5, proposal_id="p-2"),
+            ),
+            execution_resources=self.make_execution_resources(),
+            evaluation_budget=evaluation_budget,
+        )
+
+        outcomes = kernel.run(query, evaluate_query_directly)
+
+        assert evaluation_budget.remaining == 0
+        assert tuple(outcome.evaluation_count for outcome in outcomes) == (1, 1)
+        assert tuple(outcome.observation.candidate for outcome in outcomes) == (5, 5)
+        assert all(
+            outcome.kernel_diagnostics is not None
+            and outcome.kernel_diagnostics.status == KernelStatus.STOPPED
+            and outcome.kernel_diagnostics.message
+            == "evaluation budget exhausted before local convergence"
+            for outcome in outcomes
+        )
+
     def test_categorical_hill_climber_moves_through_declared_alternatives(self) -> None:
-        color_space: CategoricalSpace[Color] = CategoricalSpace(("red", "green", "blue"))
+        color_space: CategoricalSpace[Color] = CategoricalSpace(
+            ("red", "green", "blue")
+        )
         initial_candidate: Color = "red"
         problem: Problem[Color, Color, Observation[Color]] = Problem(
             space=color_space,
             objective=CategoricalObjective(),
         )
         kernel = StructuredHillClimbKernel[Color, Color](max_steps=4)
-        query: ProposalBatchQuery[Color, Color, Observation[Color]] = ProposalBatchQuery(
-            problem=problem,
-            proposals=(Proposal[Color](candidate=initial_candidate, proposal_id="p-1"),),
-            execution_resources=self.make_execution_resources(),
+        query: ProposalBatchQuery[Color, Color, Observation[Color]] = (
+            ProposalBatchQuery(
+                problem=problem,
+                proposals=(
+                    Proposal[Color](candidate=initial_candidate, proposal_id="p-1"),
+                ),
+                execution_resources=self.make_execution_resources(),
+            )
         )
 
         outcomes = kernel.run(query, evaluate_query_directly)
@@ -434,9 +480,7 @@ class StructuredHillClimbKernelTests:
             problem=problem,
             proposals=(Proposal(candidate=5, proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),
-            proposal_kernel_hints=(
-                ProposalLocalSearchContext(enabled=False),
-            ),
+            proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
         )
 
         outcomes = kernel.run(query, evaluate_query_directly)
@@ -447,7 +491,10 @@ class StructuredHillClimbKernelTests:
         assert outcome.evaluation_count == 1
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "local search disabled by run-method context"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "local search disabled by run-method context"
+        )
         assert outcome.refinement is None
 
     def test_context_can_override_step_budget(self) -> None:
@@ -468,9 +515,7 @@ class StructuredHillClimbKernelTests:
             problem=problem,
             proposals=(Proposal(candidate=initial_candidate, proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),
-            proposal_kernel_hints=(
-                ProposalLocalSearchContext(local_budget=1),
-            ),
+            proposal_kernel_hints=(ProposalLocalSearchContext(local_budget=1),),
         )
 
         outcomes = kernel.run(query, evaluate_query_directly)
@@ -682,7 +727,10 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.method == "sampled_leafwise_first_improvement"
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "no improving move found in the sampled discrete neighborhood"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "no improving move found in the sampled discrete neighborhood"
+        )
         assert outcome.refinement is None
 
     def test_stochastic_kernel_converges_when_sampling_covers_full_neighborhood(
@@ -709,7 +757,10 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.evaluation_count == 3
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
-        assert outcome.kernel_diagnostics.message == "no improving move found in the full discrete neighborhood"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "no improving move found in the full discrete neighborhood"
+        )
         assert outcome.refinement is None
 
     def test_stochastic_kernel_can_cap_categorical_neighbors_per_leaf(self) -> None:
@@ -735,7 +786,10 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.evaluation_count == 4
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "no improving move found in the sampled discrete neighborhood"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "no improving move found in the sampled discrete neighborhood"
+        )
 
     def test_stochastic_kernel_can_take_one_sampled_improving_move(self) -> None:
         problem = Problem(
@@ -761,7 +815,10 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.evaluation_count == 2
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "max_steps reached before stochastic local-search termination"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "max_steps reached before stochastic local-search termination"
+        )
         assert outcome.refinement is not None
         assert outcome.refinement.source_candidate == 0
         assert outcome.refinement.refined_candidate == outcome.observation.candidate
@@ -850,7 +907,10 @@ class StructuredVariableNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.method == "variable_neighborhood_search"
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "max_steps reached before variable-neighborhood termination"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "max_steps reached before variable-neighborhood termination"
+        )
         assert outcome.refinement is not None
         assert outcome.refinement.source_candidate == (0, 0, 0)
         assert outcome.refinement.refined_candidate == (1, 1, 1)
@@ -886,9 +946,9 @@ class StructuredVariableNeighborhoodKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
         assert outcome.kernel_diagnostics.message == (
-                "no improving move found in the sampled variable neighborhood "
-                "after exhausting the configured variable-neighborhood stages"
-            )
+            "no improving move found in the sampled variable neighborhood "
+            "after exhausting the configured variable-neighborhood stages"
+        )
         assert outcome.refinement is None
 
     def test_variable_neighborhood_kernel_rejects_invalid_stage_metadata(
@@ -952,7 +1012,10 @@ class StructuredIteratedLocalSearchKernelTests:
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.method == "iterated_local_search"
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "max_kicks reached before iterated local-search termination"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "max_kicks reached before iterated local-search termination"
+        )
         assert outcome.refinement is not None
         assert outcome.refinement.source_candidate == (0, 0)
         assert outcome.refinement.refined_candidate == (1, 1)
@@ -989,7 +1052,10 @@ class StructuredIteratedLocalSearchKernelTests:
         assert outcome.refinement is None
         assert outcome.kernel_diagnostics is not None
         assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
-        assert outcome.kernel_diagnostics.message == "max_kicks reached before iterated local-search termination"
+        assert (
+            outcome.kernel_diagnostics.message
+            == "max_kicks reached before iterated local-search termination"
+        )
 
     def test_iterated_local_search_kernel_rejects_invalid_kick_metadata(self) -> None:
         with pytest.raises(ValueError, match="max_kicks must be positive"):
@@ -998,7 +1064,9 @@ class StructuredIteratedLocalSearchKernelTests:
         with pytest.raises(ValueError, match="kick_leaf_count must be positive"):
             _ = StructuredKickPolicy(kick_leaf_count=0)
 
-        with pytest.raises(ValueError, match="max_categorical_alternatives_per_leaf must be positive"):
+        with pytest.raises(
+            ValueError, match="max_categorical_alternatives_per_leaf must be positive"
+        ):
             _ = StructuredKickPolicy(max_categorical_alternatives_per_leaf=0)
 
 

@@ -38,7 +38,8 @@ from .runtime.search import run_leafwise_local_search_episode
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
+class StructuredIteratedLocalSearchKernel(
+    FrozenGenericSlotsCompat,
     Kernel[
         ProposalBatchQuery[
             BoundaryT,
@@ -147,6 +148,7 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
         random_state: np.random.RandomState,
+        reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one iterated local-search episode for one original proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
@@ -173,6 +175,7 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
             proposal_evaluation_spec=proposal_evaluation_spec,
             leaf_schedule=leaf_schedule,
             max_steps=episode_max_steps,
+            reserved_count=reserved_count,
         )
         incumbent_record = incumbent_result.record
         incumbent_candidate = incumbent_record.candidate
@@ -183,8 +186,13 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
         accepted_refinement = completed_steps > 0
         kick_count = 0
         terminal_message = "max_kicks reached before iterated local-search termination"
+        budget_exhausted = incumbent_result.budget_exhausted
 
-        while completed_steps < episode_max_steps and kick_count < self.max_kicks:
+        while (
+            not budget_exhausted
+            and completed_steps < episode_max_steps
+            and kick_count < self.max_kicks
+        ):
             kicked_candidate = sample_structured_kick_candidate(
                 runtime=runtime,
                 candidate=incumbent_candidate,
@@ -193,7 +201,13 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 random_state=random_state,
             )
             if kicked_candidate is None:
-                terminal_message = "no admissible kick found for the configured kick policy"
+                terminal_message = (
+                    "no admissible kick found for the configured kick policy"
+                )
+                break
+
+            if not runtime.can_evaluate(reserved_count=reserved_count):
+                budget_exhausted = True
                 break
 
             kick_count += 1
@@ -204,9 +218,11 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 leaf_schedule=leaf_schedule,
                 max_steps=episode_max_steps - completed_steps,
+                reserved_count=reserved_count,
             )
             evaluation_count += kicked_result.evaluation_count
             completed_steps += kicked_result.completed_steps
+            budget_exhausted = kicked_result.budget_exhausted
             kicked_record = kicked_result.record
             if accepts_strict_improvement(
                 incumbent_score=incumbent_score,
@@ -218,8 +234,12 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 accepted_refinement = True
 
         status = KernelStatus.STOPPED
+        if budget_exhausted:
+            terminal_message = "evaluation budget exhausted before local convergence"
         if completed_steps >= episode_max_steps:
-            terminal_message = "max_steps reached before iterated local-search termination"
+            terminal_message = (
+                "max_steps reached before iterated local-search termination"
+            )
 
         refinement = None
         if accepted_refinement:
@@ -284,6 +304,7 @@ class StructuredIteratedLocalSearchKernel(FrozenGenericSlotsCompat,
                 proposal_index=proposal_index,
                 proposal=proposal,
                 random_state=random_state,
+                reserved_count=len(query.proposals) - proposal_index - 1,
             )
             for proposal_index, proposal in enumerate(query.proposals)
         )

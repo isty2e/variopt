@@ -14,6 +14,7 @@ from ....artifacts import (
     Proposal,
     ProposalEvaluationSpec,
 )
+from ....execution import EvaluationBudgetExhausted
 from ....kernel import (
     Kernel,
     KernelDiagnostics,
@@ -89,7 +90,8 @@ def _as_local_search_context(
 
 
 @dataclass(frozen=True, slots=True)
-class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
+class ScipyMinimizeKernel(
+    FrozenGenericSlotsCompat,
     Kernel[
         ProposalBatchQuery[
             BoundaryT,
@@ -228,6 +230,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                     if proposal_evaluation_spec is None
                     else (proposal_evaluation_spec,)
                 ),
+                evaluation_budget=query.evaluation_budget,
             ),
         )
         if len(local_outcomes) != 1:
@@ -272,6 +275,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                     if proposal_evaluation_spec is None
                     else (proposal_evaluation_spec,)
                 ),
+                evaluation_budget=query.evaluation_budget,
             ),
         )
         if len(local_outcomes) != 1:
@@ -293,6 +297,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
             tuple[EvaluationOutcome[ContinuousCandidateT], ...],
         ],
+        reserved_count: int,
     ) -> EvaluationOutcome[ContinuousCandidateT]:
         """Run one local descent episode for one original proposal."""
         context = self._proposal_context(query=query, proposal_index=proposal_index)
@@ -317,10 +322,46 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             EvaluationOutcome[ContinuousCandidateT],
         ] = {}
 
+        def can_evaluate_local_candidate() -> bool:
+            budget = query.evaluation_budget
+            return budget is None or budget.can_consume(1 + reserved_count)
+
+        def budget_exhausted_outcome(
+            optimized_outcome: EvaluationOutcome[ContinuousCandidateT],
+        ) -> EvaluationOutcome[ContinuousCandidateT]:
+            optimized_candidate = optimized_outcome.record.candidate
+            refinement = _candidate_refinement_from_codec(
+                codec=codec,
+                source_candidate=proposal.candidate,
+                refined_candidate=optimized_candidate,
+            )
+            return EvaluationOutcome(
+                record=Observation(
+                    proposal=proposal,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    candidate=optimized_candidate,
+                    value=optimized_outcome.record.value,
+                    score=optimized_outcome.record.score,
+                    elapsed_seconds=optimized_outcome.record.elapsed_seconds,
+                ),
+                evaluation_count=evaluation_count,
+                kernel_diagnostics=KernelDiagnostics(
+                    backend="scipy.optimize.minimize",
+                    method=self.method,
+                    status=KernelStatus.STOPPED,
+                    message="evaluation budget exhausted before local convergence",
+                ),
+                refinement=refinement,
+                candidate_equal=query.problem.space.candidates_equal,
+            )
+
         def objective_in_coordinate_space(
             coordinates: Sequence[float],
         ) -> float:
             nonlocal evaluation_count
+            if not can_evaluate_local_candidate():
+                msg = "evaluation budget exhausted"
+                raise EvaluationBudgetExhausted(msg)
             coordinate_key = tuple(float(coordinate) for coordinate in coordinates)
             local_candidate = codec.candidate_from_coordinates(
                 proposal.candidate,
@@ -339,41 +380,71 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
             evaluated_outcomes_by_coordinates[coordinate_key] = local_outcome
             return local_outcome.record.score
 
-        scipy_result = ScipyMinimizeResult.from_optimize_result(
-            run_scipy_minimize(
-                objective_in_coordinate_space=objective_in_coordinate_space,
-                initial_coordinates=initial_coordinates,
-                method=self.method,
-                coordinate_bounds=codec.coordinate_bounds,
-                tolerance=self.tolerance,
-                options=self._scipy_options(context=context),
+        try:
+            scipy_result = ScipyMinimizeResult.from_optimize_result(
+                run_scipy_minimize(
+                    objective_in_coordinate_space=objective_in_coordinate_space,
+                    initial_coordinates=initial_coordinates,
+                    method=self.method,
+                    coordinate_bounds=codec.coordinate_bounds,
+                    tolerance=self.tolerance,
+                    options=self._scipy_options(context=context),
+                )
             )
-        )
+        except EvaluationBudgetExhausted:
+            if len(evaluated_outcomes_by_coordinates) == 0:
+                raise
+            optimized_outcome = min(
+                evaluated_outcomes_by_coordinates.values(),
+                key=lambda outcome: outcome.record.score,
+            )
+            return budget_exhausted_outcome(optimized_outcome)
         if not scipy_result.has_finite_solution:
             original_outcome = evaluated_outcomes_by_coordinates.get(
                 initial_coordinates,
             )
             if original_outcome is None:
-                original_outcome = self._evaluate_proposal(
-                    query=query,
-                    proposal=proposal,
-                    proposal_evaluation_spec=proposal_evaluation_spec,
-                    runner=runner,
-                )
-                evaluation_count += original_outcome.evaluation_count
+                if (
+                    query.evaluation_budget is not None
+                    and not can_evaluate_local_candidate()
+                    and len(evaluated_outcomes_by_coordinates) > 0
+                ):
+                    original_outcome = min(
+                        evaluated_outcomes_by_coordinates.values(),
+                        key=lambda outcome: outcome.record.score,
+                    )
+                else:
+                    original_outcome = self._evaluate_proposal(
+                        query=query,
+                        proposal=proposal,
+                        proposal_evaluation_spec=proposal_evaluation_spec,
+                        runner=runner,
+                    )
+                    evaluation_count += original_outcome.evaluation_count
 
+            fallback_candidate = original_outcome.record.candidate
+            refinement = None
+            if not query.problem.space.candidates_equal(
+                proposal.candidate,
+                fallback_candidate,
+            ):
+                refinement = _candidate_refinement_from_codec(
+                    codec=codec,
+                    source_candidate=proposal.candidate,
+                    refined_candidate=fallback_candidate,
+                )
             return EvaluationOutcome(
                 record=Observation(
                     proposal=proposal,
                     proposal_evaluation_spec=proposal_evaluation_spec,
-                    candidate=proposal.candidate,
+                    candidate=fallback_candidate,
                     value=original_outcome.record.value,
                     score=original_outcome.record.score,
                     elapsed_seconds=original_outcome.record.elapsed_seconds,
                 ),
                 evaluation_count=evaluation_count,
                 kernel_diagnostics=scipy_result.diagnostics(method=self.method),
-                refinement=None,
+                refinement=refinement,
                 candidate_equal=query.problem.space.candidates_equal,
             )
 
@@ -384,6 +455,17 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
         )
         optimized_outcome = evaluated_outcomes_by_coordinates.get(optimized_coordinates)
         if optimized_outcome is None:
+            if (
+                query.evaluation_budget is not None
+                and not can_evaluate_local_candidate()
+                and len(evaluated_outcomes_by_coordinates) > 0
+            ):
+                optimized_outcome = min(
+                    evaluated_outcomes_by_coordinates.values(),
+                    key=lambda outcome: outcome.record.score,
+                )
+                return budget_exhausted_outcome(optimized_outcome)
+
             optimized_outcome = self._evaluate_candidate(
                 query=query,
                 candidate=optimized_candidate,
@@ -434,10 +516,13 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
         tuple[EvaluationOutcome[ContinuousCandidateT], ...]
             Locally improved outcomes aligned to ``query.proposals``.
         """
-        prepared_codec: ContinuousStructuredSpaceCodec[
-            BoundaryT,
-            ContinuousCandidateT,
-        ] | None = None
+        prepared_codec: (
+            ContinuousStructuredSpaceCodec[
+                BoundaryT,
+                ContinuousCandidateT,
+            ]
+            | None
+        ) = None
 
         def codec_provider() -> ContinuousStructuredSpaceCodec[
             BoundaryT,
@@ -458,6 +543,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 proposal=proposal,
                 codec_provider=codec_provider,
                 runner=runner,
+                reserved_count=len(query.proposals) - proposal_index - 1,
             )
             for proposal_index, proposal in enumerate(query.proposals)
         )

@@ -39,7 +39,8 @@ def _as_local_search_context(
 
 
 @dataclass(frozen=True, slots=True)
-class PreparedStructuredLocalSearchRuntime(FrozenGenericSlotsCompat,
+class PreparedStructuredLocalSearchRuntime(
+    FrozenGenericSlotsCompat,
     Generic[BoundaryT, StructuredCandidateT],
 ):
     """Prepared per-run helpers shared by structured local-search kernels.
@@ -66,6 +67,18 @@ class PreparedStructuredLocalSearchRuntime(FrozenGenericSlotsCompat,
     neighborhood: StructuredDiscreteNeighborhood[BoundaryT, StructuredCandidateT]
     default_schedule: tuple[tuple[LeafPath, DiscreteLeafSpace], ...]
     leaf_space_by_path: dict[LeafPath, DiscreteLeafSpace]
+
+    def can_evaluate(self, *, reserved_count: int = 0) -> bool:
+        """Return whether another evaluator call is allowed by the budget.
+
+        Parameters
+        ----------
+        reserved_count : int, default=0
+            Evaluation units that must remain available for later proposals in
+            the same top-level batch.
+        """
+        budget = self.query.evaluation_budget
+        return budget is None or budget.can_consume(1 + reserved_count)
 
     def evaluate_candidate(
         self,
@@ -102,6 +115,7 @@ class PreparedStructuredLocalSearchRuntime(FrozenGenericSlotsCompat,
                     if proposal_evaluation_spec is None
                     else (proposal_evaluation_spec,)
                 ),
+                evaluation_budget=self.query.evaluation_budget,
             ),
         )
         if len(local_outcomes) != 1:
@@ -148,6 +162,7 @@ class PreparedStructuredLocalSearchRuntime(FrozenGenericSlotsCompat,
                     if proposal_evaluation_spec is None
                     else (proposal_evaluation_spec,)
                 ),
+                evaluation_budget=self.query.evaluation_budget,
             ),
         )
         if len(local_outcomes) != 1:
