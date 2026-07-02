@@ -296,11 +296,7 @@ def sync_reference_bank_if_uninitialized(
     if not engine_state.banking_state.bank.is_full:
         return engine_state
 
-    if (
-        engine_state.banking_state.reference_bank.is_full
-        and len(engine_state.banking_state.reference_bank.entries)
-        == len(engine_state.banking_state.bank.entries)
-    ):
+    if engine_state.banking_state.reference_bank.initialized:
         return engine_state
 
     bank = build_sorted_bank_from_bank(engine_state.banking_state.bank)
