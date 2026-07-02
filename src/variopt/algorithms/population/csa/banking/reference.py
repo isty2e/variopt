@@ -9,7 +9,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Observation
-from .....json_types import JSONDict, JSONValue
+from .....json_types import JSONDict, JSONValue, require_json_bool
 from .....typevars import CandidateT
 from .bank import Bank, BankEntry
 
@@ -24,10 +24,13 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Maximum number of entries the reference bank may store.
     entries : tuple[BankEntry[CandidateT], ...], optional
         Entries currently stored in the reference bank.
+    initialized : bool, default=False
+        Whether the entries represent a completed reference snapshot.
     """
 
     capacity: int
     entries: tuple[BankEntry[CandidateT], ...] = ()
+    initialized: bool = False
 
     def __post_init__(self) -> None:
         """Validate reference-bank state.
@@ -44,6 +47,13 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if len(self.entries) > self.capacity:
             msg = "entries must not exceed capacity"
             raise ValueError(msg)
+
+        if self.initialized and not self.is_full:
+            msg = "initialized reference banks must be full"
+            raise ValueError(msg)
+
+        if not self.initialized and self.is_full:
+            object.__setattr__(self, "initialized", True)
 
     @property
     def is_full(self) -> bool:
@@ -79,6 +89,7 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 entry.to_dict(candidate_to_dict=candidate_to_dict)
                 for entry in self.entries
             ],
+            "initialized": self.initialized,
         }
 
     @classmethod
@@ -110,12 +121,21 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         capacity = data.get("capacity")
         raw_entries = data.get("entries")
+        raw_initialized = data.get("initialized")
         if not isinstance(capacity, int):
             msg = "reference bank snapshot requires integer capacity"
             raise TypeError(msg)
         if not isinstance(raw_entries, list):
             msg = "reference bank snapshot requires entry list"
             raise TypeError(msg)
+        initialized = (
+            None
+            if raw_initialized is None
+            else require_json_bool(
+                raw_initialized,
+                field_name="reference bank initialized",
+            )
+        )
 
         entries: list[BankEntry[CandidateT]] = []
         for raw_entry in raw_entries:
@@ -132,6 +152,11 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return cls(
             capacity=capacity,
             entries=tuple(entries),
+            initialized=(
+                len(entries) >= capacity
+                if initialized is None
+                else initialized
+            ),
         )
 
 
@@ -287,6 +312,7 @@ def build_reference_bank_from_bank(
     return ReferenceBank(
         capacity=bank.capacity,
         entries=sorted_entries,
+        initialized=True,
     )
 
 
@@ -351,6 +377,7 @@ def build_reference_bank_from_refresh_pool(
     return ReferenceBank(
         capacity=capacity,
         entries=preserved_entry_tuple + selected_entries,
+        initialized=True,
     )
 
 

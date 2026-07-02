@@ -1,5 +1,6 @@
 """Tests for CSA banking, score-model, and admission semantics."""
 
+from dataclasses import replace
 from typing import Literal, cast
 
 import pytest
@@ -36,12 +37,18 @@ from tests.csa_support import (
     make_optimizer,
     significant_update_indices,
 )
+from variopt.algorithms.population.csa.banking.clustering import (
+    CSAClusteringPolicy,
+    CSAClusteringState,
+)
 from variopt.algorithms.population.csa.banking.queries import (
     BankDistanceWorkspace,
     best_mean_niche_scores,
     crowding_aware_scores,
 )
 from variopt.algorithms.population.csa.scoring.model_state import CSAScoreModelState
+from variopt.algorithms.population.csa.selection.state import SeedSelectionState
+from variopt.json_types import JSONValue
 
 
 class CountingDistance(DiversityMetric[int]):
@@ -730,6 +737,36 @@ class BankUpdatePolicyTests:
 class CSABankingTests(CSAOptimizerTestCase):
     """White-box tests for CSA banking and score-model state transitions."""
 
+    def test_reference_bank_legacy_snapshot_derives_initialized_state(self) -> None:
+        def candidate_from_dict(value: JSONValue) -> int:
+            if type(value) is not int:
+                msg = "candidate must be an integer"
+                raise TypeError(msg)
+            return value
+
+        full_reference = ReferenceBank[int].from_dict(
+            {
+                "capacity": 2,
+                "entries": [
+                    {"candidate": 0, "value": 0.0, "proposal_id": "b-0"},
+                    {"candidate": 1, "value": 1.0, "proposal_id": "b-1"},
+                ],
+            },
+            candidate_from_dict=candidate_from_dict,
+        )
+        partial_reference = ReferenceBank[int].from_dict(
+            {
+                "capacity": 2,
+                "entries": [
+                    {"candidate": 0, "value": 0.0, "proposal_id": "b-0"},
+                ],
+            },
+            candidate_from_dict=candidate_from_dict,
+        )
+
+        assert full_reference.initialized
+        assert not partial_reference.initialized
+
     def test_significant_update_threshold_ignores_small_score_changes(self) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
@@ -1052,6 +1089,29 @@ class CSABankingTests(CSAOptimizerTestCase):
             ),
             distance_cutoff=2.0,
         )
+        optimizer.engine_state = replace(
+            optimizer.engine_state,
+            banking_state=replace(
+                optimizer.engine_state.banking_state,
+                clustering_state=CSAClusteringState[int](
+                    policy=CSAClusteringPolicy(enabled=True),
+                    cluster_distance=2.0,
+                    cluster_labels=(1, 2),
+                ),
+            ),
+            selection_state=SeedSelectionState(
+                used_entry_indices=frozenset({1}),
+                bank_status=(False, True),
+            ),
+            progression_state=replace(
+                optimizer.engine_state.progression_state,
+                stage_state=optimizer.engine_state.progression_state.stage_state.with_masks(
+                    seed_mask=frozenset({1}),
+                    partner_mask=frozenset({0}),
+                ),
+            ).with_refresh_mask(frozenset({1})),
+        )
+        reference_entries = optimizer.reference_bank.entries
         proposal = Proposal(candidate=20, proposal_id="p-1")
         optimizer.pending_by_id = {"p-1": proposal}
 
@@ -1068,8 +1128,23 @@ class CSABankingTests(CSAOptimizerTestCase):
 
         assert optimizer.bank.capacity == 3
         assert (
-            tuple(entry.value for entry in optimizer.bank.entries) == (0.0, 5.0, 10.0)
+            tuple(entry.candidate for entry in optimizer.bank.entries) == (0, 10, 20)
         )
+        assert optimizer.reference_bank.entries == reference_entries
+        assert (
+            tuple(
+                zip(
+                    (entry.candidate for entry in optimizer.bank.entries),
+                    optimizer.engine_state.banking_state.clustering_state.cluster_labels,
+                    strict=True,
+                )
+            )
+            == ((0, 1), (10, 2), (20, 3))
+        )
+        assert optimizer.selection_state.used_entry_indices == frozenset({1})
+        assert optimizer.selection_state.bank_status == (False, True, False)
+        assert optimizer.engine_state.progression_state.seed_mask == frozenset({1})
+        assert optimizer.engine_state.progression_state.partner_mask == frozenset({0, 1})
 
     def test_growth_policy_reduces_oversized_bank_after_batch(self) -> None:
         optimizer = make_optimizer(
@@ -1149,3 +1224,4 @@ class CSABankingTests(CSAOptimizerTestCase):
             tuple(entry.candidate for entry in optimizer.reference_bank.entries)
             == (1, 5, 9)
         )
+        assert optimizer.reference_bank.initialized
