@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 
 from ..json_types import JSONValue
+from .composites.records import RecordCandidate
 from .types import SpaceCandidateValue
 
 _BYTES_MARKER = "__variopt_bytes__"
@@ -45,18 +46,27 @@ def space_candidate_to_dict(candidate: SpaceCandidateValue) -> JSONValue:
     return candidate
 
 
-def space_candidate_from_dict(data: JSONValue) -> SpaceCandidateValue:
-    """Return one canonical structured candidate from a JSON-safe payload.
+def space_candidate_from_dict(
+    data: JSONValue,
+    *,
+    record_candidates: bool = False,
+) -> SpaceCandidateValue:
+    """Return one structured candidate payload from a JSON-safe payload.
 
     Parameters
     ----------
     data : JSONValue
         JSON-safe structured candidate payload.
+    record_candidates : bool, default=False
+        When ``True``, JSON object payloads are rebuilt as
+        :class:`~variopt.spaces.RecordCandidate` values instead of plain
+        mappings. Use this for built-in structured spaces that contain
+        ``RecordSpace`` nodes.
 
     Returns
     -------
     SpaceCandidateValue
-        Decoded canonical structured candidate.
+        Decoded structured candidate payload.
 
     Raises
     ------
@@ -66,7 +76,10 @@ def space_candidate_from_dict(data: JSONValue) -> SpaceCandidateValue:
         If a bytes payload carries invalid hexadecimal content.
     """
     if isinstance(data, list):
-        return tuple(space_candidate_from_dict(value) for value in data)
+        return tuple(
+            space_candidate_from_dict(value, record_candidates=record_candidates)
+            for value in data
+        )
 
     if isinstance(data, dict):
         if set(data.keys()) == {_BYTES_MARKER}:
@@ -85,7 +98,12 @@ def space_candidate_from_dict(data: JSONValue) -> SpaceCandidateValue:
 
         decoded_mapping: dict[str, SpaceCandidateValue] = {}
         for key, value in data.items():
-            decoded_mapping[key] = space_candidate_from_dict(value)
+            decoded_mapping[key] = space_candidate_from_dict(
+                value,
+                record_candidates=record_candidates,
+            )
+        if record_candidates:
+            return RecordCandidate(entries=tuple(decoded_mapping.items()))
         return decoded_mapping
 
     if data is None:

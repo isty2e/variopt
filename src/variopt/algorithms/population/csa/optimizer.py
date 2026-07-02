@@ -473,7 +473,10 @@ class CSAOptimizer(FrozenGenericSlotsCompat,
             )
             raise TypeError(msg)
 
-        candidate = space_candidate_from_dict(data)
+        candidate = space_candidate_from_dict(
+            data,
+            record_candidates=True,
+        )
         self.space.validate(candidate)
         return cast(CandidateT, candidate)
 
