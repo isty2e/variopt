@@ -293,14 +293,19 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
         codec = codec_provider()
         initial_coordinates = codec.coordinates_from_candidate(proposal.candidate)
         evaluation_count = 0
+        evaluated_outcomes_by_coordinates: dict[
+            tuple[float, ...],
+            EvaluationOutcome[ContinuousCandidateT],
+        ] = {}
 
         def objective_in_coordinate_space(
             coordinates: Sequence[float],
         ) -> float:
             nonlocal evaluation_count
+            coordinate_key = tuple(float(coordinate) for coordinate in coordinates)
             local_candidate = codec.candidate_from_coordinates(
                 proposal.candidate,
-                coordinates,
+                coordinate_key,
             )
             local_outcome = self._evaluate_candidate(
                 query=query,
@@ -309,7 +314,11 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 runner=runner,
             )
             evaluation_count += local_outcome.evaluation_count
-            return local_outcome.record.value
+            # Local search assumes deterministic evaluations; if SciPy probes
+            # the same coordinates more than once, keep the latest outcome seen
+            # by the minimized function.
+            evaluated_outcomes_by_coordinates[coordinate_key] = local_outcome
+            return local_outcome.record.score
 
         scipy_result = ScipyMinimizeResult.from_optimize_result(
             run_scipy_minimize(
@@ -321,22 +330,33 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 options=self._scipy_options(context=context),
             )
         )
+        optimized_coordinates = scipy_result.coordinates
         optimized_candidate = codec.candidate_from_coordinates(
             proposal.candidate,
-            scipy_result.coordinates,
+            optimized_coordinates,
         )
+        optimized_outcome = evaluated_outcomes_by_coordinates.get(optimized_coordinates)
+        if optimized_outcome is None:
+            optimized_outcome = self._evaluate_candidate(
+                query=query,
+                candidate=optimized_candidate,
+                proposal_evaluation_spec=proposal_evaluation_spec,
+                runner=runner,
+            )
+            evaluation_count += optimized_outcome.evaluation_count
         refinement = _candidate_refinement_from_codec(
             codec=codec,
             source_candidate=proposal.candidate,
             refined_candidate=optimized_candidate,
         )
         return EvaluationOutcome(
-            record=Observation.from_objective_value(
+            record=Observation(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 candidate=optimized_candidate,
-                value=scipy_result.objective_value,
-                direction=query.problem.direction,
+                value=optimized_outcome.record.value,
+                score=optimized_outcome.record.score,
+                elapsed_seconds=optimized_outcome.record.elapsed_seconds,
             ),
             evaluation_count=evaluation_count,
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),

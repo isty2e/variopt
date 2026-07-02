@@ -1,6 +1,6 @@
 """Tests for SciPy-backed local-search kernels."""
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from math import log10
 from typing import TypeVar
@@ -13,10 +13,12 @@ from variopt import (
     EvaluationOutcome,
     Objective,
     Observation,
+    OptimizationDirection,
     Problem,
     Proposal,
 )
 from variopt.algorithms.local_search import ScipyMinimizeKernel
+from variopt.algorithms.local_search.scipy import ScipyMinimizeResult
 from variopt.algorithms.local_search.scipy import kernel as scipy_kernel_module
 from variopt.artifacts import ProposalEvaluationSpec
 from variopt.execution import (
@@ -69,6 +71,14 @@ class ShiftedSquareObjective(Objective[float]):
         return (candidate - 1.5) ** 2
 
 
+class ShiftedPeakObjective(Objective[float]):
+    """One-dimensional maximization objective with a known peak."""
+
+    @override
+    def evaluate(self, candidate: float) -> float:
+        return 10.0 - ((candidate - 1.5) ** 2)
+
+
 class MixedRecordObjective(Objective[RecordCandidate]):
     """Continuous structured objective with one log-scaled coordinate."""
 
@@ -87,11 +97,11 @@ class IntegerObjective(Objective[int]):
         return float(candidate * candidate)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class FakeScipyOptimizeResult:
     """Typed stand-in for one SciPy optimize result in tests."""
 
-    x: tuple[float, ...]
+    x: Sequence[float]
     fun: float
     nfev: int
     success: bool
@@ -123,6 +133,19 @@ class ScipyMinimizeKernelTests:
                 owner_backend="sequential",
             ),
         )
+
+    def test_scipy_minimize_result_names_backend_function_value(self) -> None:
+        result = ScipyMinimizeResult.from_optimize_result(
+            FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=-10.0,
+                nfev=3,
+                success=True,
+                message="ok",
+            ),
+        )
+
+        assert result.function_value == -10.0
 
     def test_lbfgsb_improves_one_dimensional_real_problem(self) -> None:
         problem = Problem(
@@ -158,6 +181,265 @@ class ScipyMinimizeKernelTests:
             abs=10 ** (-(5)),
         )
         assert outcome.refinement.changed_leaf_paths == ((),)
+
+    def test_lbfgsb_respects_maximize_direction(self) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedPeakObjective(),
+            direction=OptimizationDirection.MAXIMIZE,
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        initial_value = problem.objective.evaluate(4.0)
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            evaluate_query_directly,
+        )
+
+        outcome = outcomes[0]
+        assert approx_equal(
+            outcome.observation.candidate,
+            1.5,
+            rel=0.0,
+            abs=10 ** (-(5)),
+        )
+        assert outcome.observation.value > initial_value
+        assert outcome.observation.score < -initial_value
+        assert outcome.kernel_diagnostics is not None
+        assert outcome.kernel_diagnostics.status == KernelStatus.CONVERGED
+
+    def test_scipy_fun_is_treated_as_score_not_raw_value(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedPeakObjective(),
+            direction=OptimizationDirection.MAXIMIZE,
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        objective_values_seen: list[float] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            objective_score = objective_in_coordinate_space((1.5,))
+            objective_values_seen.append(objective_score)
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=objective_score,
+                nfev=1,
+                success=True,
+                message="ok",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            evaluate_query_directly,
+        )
+
+        outcome = outcomes[0]
+        assert objective_values_seen == [-10.0]
+        assert outcome.observation.value == 10.0
+        assert outcome.observation.score == -10.0
+        assert outcome.evaluation_count == 1
+
+    def test_scipy_unevaluated_final_coordinates_are_evaluated_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedPeakObjective(),
+            direction=OptimizationDirection.MAXIMIZE,
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            objective_score = objective_in_coordinate_space(initial_coordinates)
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=objective_score,
+                nfev=1,
+                success=True,
+                message="ok",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            evaluate_query_directly,
+        )
+
+        outcome = outcomes[0]
+        assert outcome.observation.proposal.proposal_id == "p-1"
+        assert outcome.observation.candidate == 1.5
+        assert outcome.observation.value == 10.0
+        assert outcome.evaluation_count == 2
+
+    def test_sequence_coordinate_cache_preserves_elapsed_seconds(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedPeakObjective(),
+            direction=OptimizationDirection.MAXIMIZE,
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        runner_call_count = 0
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            objective_score = objective_in_coordinate_space([1.5])
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=objective_score,
+                nfev=1,
+                success=True,
+                message="ok",
+            )
+
+        def elapsed_runner(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> tuple[EvaluationOutcome[float], ...]:
+            nonlocal runner_call_count
+            runner_call_count += 1
+            proposal = local_query.proposals[0]
+            return (
+                EvaluationOutcome(
+                    observation=Observation.from_objective_value(
+                        proposal=proposal,
+                        candidate=proposal.candidate,
+                        value=local_query.problem.objective.evaluate(proposal.candidate),
+                        direction=local_query.problem.direction,
+                        elapsed_seconds=0.25,
+                    ),
+                    evaluation_count=1,
+                ),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            elapsed_runner,
+        )
+
+        outcome = outcomes[0]
+        assert runner_call_count == 1
+        assert outcome.observation.elapsed_seconds == 0.25
+        assert outcome.evaluation_count == 1
+
+    def test_stopped_scipy_result_uses_final_evaluation_record(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedPeakObjective(),
+            direction=OptimizationDirection.MAXIMIZE,
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            objective_score = objective_in_coordinate_space((1.5,))
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=objective_score,
+                nfev=1,
+                success=False,
+                message="iteration limit",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            evaluate_query_directly,
+        )
+
+        outcome = outcomes[0]
+        assert outcome.observation.value == 10.0
+        assert outcome.observation.score == -10.0
+        assert outcome.kernel_diagnostics is not None
+        assert outcome.kernel_diagnostics.status == KernelStatus.STOPPED
+        assert outcome.kernel_diagnostics.message == "iteration limit"
 
     def test_powell_improves_log_scaled_record_problem(self) -> None:
         space = RecordSpace(
@@ -307,6 +589,87 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(query, assert_spec_forwarded)
 
         assert outcomes[0].observation.proposal_evaluation_spec is spec
+
+    def test_enabled_local_search_forwards_spec_to_final_evaluation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class LocalSpec(ProposalEvaluationSpec):
+            """Test-local proposal metadata marker."""
+
+        spec = LocalSpec()
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedPeakObjective(),
+            direction=OptimizationDirection.MAXIMIZE,
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=4.0, proposal_id="p-1"),),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+            proposal_evaluation_specs=(spec,),
+        )
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                objective_in_coordinate_space,
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=-10.0,
+                nfev=0,
+                success=True,
+                message="ok",
+            )
+
+        def assert_spec_forwarded(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> tuple[EvaluationOutcome[float], ...]:
+            assert local_query.proposal_evaluation_specs == (spec,)
+            proposal = local_query.proposals[0]
+            return (
+                EvaluationOutcome(
+                    observation=Observation.from_objective_value(
+                        proposal=proposal,
+                        proposal_evaluation_spec=spec,
+                        candidate=proposal.candidate,
+                        value=local_query.problem.objective.evaluate(proposal.candidate),
+                        direction=local_query.problem.direction,
+                    ),
+                    evaluation_count=1,
+                ),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(query, assert_spec_forwarded)
+
+        assert outcomes[0].observation.proposal_evaluation_spec is spec
+        assert outcomes[0].observation.proposal.proposal_id == "p-1"
+        assert outcomes[0].observation.value == 10.0
 
     def test_context_can_override_scipy_iteration_budget(
         self,

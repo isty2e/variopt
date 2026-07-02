@@ -17,8 +17,8 @@ class ScipyMinimizeResult:
     ----------
     coordinates : tuple[float, ...]
         Final coordinate vector reported by SciPy.
-    objective_value : float
-        Final objective value reported by SciPy.
+    function_value : float
+        Final minimized function value reported by SciPy.
     evaluation_count : int
         Total number of objective evaluations consumed by the SciPy run.
     converged : bool
@@ -28,7 +28,7 @@ class ScipyMinimizeResult:
     """
 
     coordinates: tuple[float, ...]
-    objective_value: float
+    function_value: float
     evaluation_count: int
     converged: bool
     message: str | None = None
@@ -43,8 +43,8 @@ class ScipyMinimizeResult:
             msg = "coordinates must be finite"
             raise ValueError(msg)
 
-        if not np.isfinite(self.objective_value):
-            msg = "objective_value must be finite"
+        if not np.isfinite(self.function_value):
+            msg = "function_value must be finite"
             raise ValueError(msg)
 
         if self.evaluation_count < 0:
@@ -70,14 +70,14 @@ class ScipyMinimizeResult:
             Canonical normalized minimize result.
         """
         coordinates = tuple(float(coordinate) for coordinate in optimize_result.x)
-        objective_value = float(optimize_result.fun)
+        function_value = float(optimize_result.fun)
         evaluation_count = int(optimize_result.nfev)
         converged = bool(optimize_result.success)
         message_object = optimize_result.message
         message = None if message_object is None else str(message_object)
         return cls(
             coordinates=coordinates,
-            objective_value=objective_value,
+            function_value=function_value,
             evaluation_count=evaluation_count,
             converged=converged,
             message=message,
