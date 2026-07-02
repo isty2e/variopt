@@ -373,6 +373,7 @@ class ScipyMinimizeKernel(FrozenGenericSlotsCompat,
                 ),
                 evaluation_count=evaluation_count,
                 kernel_diagnostics=scipy_result.diagnostics(method=self.method),
+                refinement=None,
                 candidate_equal=query.problem.space.candidates_equal,
             )
 
