@@ -1,6 +1,7 @@
 """Public CSA bank-growth policy objects."""
 
 from dataclasses import dataclass
+from math import isfinite
 from typing import Literal
 
 CSAEnergyGapUpdateMode = Literal[
@@ -8,6 +9,15 @@ CSAEnergyGapUpdateMode = Literal[
     "max_score_ratio",
     "multiplicative_decay",
 ]
+
+
+def _validate_finite_number(value: int | float, *, field_name: str) -> None:
+    if isinstance(value, bool):
+        msg = f"{field_name} must be numeric"
+        raise TypeError(msg)
+    if not isfinite(value):
+        msg = f"{field_name} must be finite"
+        raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +56,10 @@ class CSABankGrowthPolicy:
             msg = "maximum_capacity must be positive"
             raise ValueError(msg)
 
+        _validate_finite_number(
+            self.initial_energy_gap_limit,
+            field_name="initial_energy_gap_limit",
+        )
         if self.initial_energy_gap_limit < 0.0:
             msg = "initial_energy_gap_limit must be non-negative"
             raise ValueError(msg)
@@ -61,6 +75,10 @@ class CSABankGrowthPolicy:
             )
             raise ValueError(msg)
 
+        _validate_finite_number(
+            self.energy_gap_update_factor,
+            field_name="energy_gap_update_factor",
+        )
         if self.energy_gap_update_factor <= 0.0:
             msg = "energy_gap_update_factor must be positive"
             raise ValueError(msg)

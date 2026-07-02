@@ -1,6 +1,7 @@
 """Tests for CSA bank-growth policy and runtime behavior."""
 
 
+import pytest
 from typing_extensions import override
 
 from variopt.algorithms.population.csa import (
@@ -32,6 +33,68 @@ class AbsoluteDistance(DiversityMetric[int]):
 
 class CSABankGrowthRuntimeTests:
     """Runtime-level regressions for CSA adaptive growth semantics."""
+
+    def test_growth_policy_rejects_non_finite_initial_energy_gap_limit(self) -> None:
+        with pytest.raises(ValueError, match="initial_energy_gap_limit must be finite"):
+            _ = CSABankGrowthPolicy(initial_energy_gap_limit=float("inf"))
+
+        with pytest.raises(ValueError, match="initial_energy_gap_limit must be finite"):
+            _ = CSABankGrowthPolicy(initial_energy_gap_limit=float("nan"))
+
+    def test_growth_policy_rejects_non_finite_energy_gap_update_factor(self) -> None:
+        with pytest.raises(ValueError, match="energy_gap_update_factor must be finite"):
+            _ = CSABankGrowthPolicy(energy_gap_update_factor=float("inf"))
+
+        with pytest.raises(ValueError, match="energy_gap_update_factor must be finite"):
+            _ = CSABankGrowthPolicy(energy_gap_update_factor=float("nan"))
+
+    def test_growth_state_rejects_non_finite_active_energy_gap_limit(self) -> None:
+        policy = CSABankGrowthPolicy()
+
+        with pytest.raises(ValueError, match="active_energy_gap_limit must be finite"):
+            _ = CSABankGrowthState[int](
+                policy=policy,
+                active_energy_gap_limit=float("inf"),
+            )
+
+    def test_growth_state_from_dict_rejects_bool_and_non_finite_numbers(self) -> None:
+        policy = CSABankGrowthPolicy()
+
+        with pytest.raises(TypeError, match="active_energy_gap_limit must be a JSON number"):
+            _ = CSABankGrowthState[int].from_dict(
+                {
+                    "active_energy_gap_limit": True,
+                    "generation_growth_count": 0,
+                },
+                policy=policy,
+            )
+
+        with pytest.raises(ValueError, match="active_energy_gap_limit must be finite"):
+            _ = CSABankGrowthState[int].from_dict(
+                {
+                    "active_energy_gap_limit": float("nan"),
+                    "generation_growth_count": 0,
+                },
+                policy=policy,
+            )
+
+        with pytest.raises(ValueError, match="active_energy_gap_limit must be finite"):
+            _ = CSABankGrowthState[int].from_dict(
+                {
+                    "active_energy_gap_limit": float("inf"),
+                    "generation_growth_count": 0,
+                },
+                policy=policy,
+            )
+
+        with pytest.raises(TypeError, match="generation_growth_count must be a JSON integer"):
+            _ = CSABankGrowthState[int].from_dict(
+                {
+                    "active_energy_gap_limit": 1.0,
+                    "generation_growth_count": True,
+                },
+                policy=policy,
+            )
 
     def test_multiplicative_decay_updates_energy_gap_limit(self) -> None:
         score_model: CSAScoreModel[int] = CSAScoreModel()

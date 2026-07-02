@@ -290,6 +290,203 @@ class CSAEngineCheckpointTests:
 
         assert restored.to_dict(candidate_to_dict=_int_candidate_to_dict) == snapshot
 
+    def test_clustering_state_snapshot_rejects_bool_and_non_finite_numbers(self) -> None:
+        policy = CSAClusteringPolicy(enabled=True)
+
+        with pytest.raises(TypeError, match="cluster_distance must be a JSON number"):
+            _ = CSAClusteringState[int].from_dict(
+                {"cluster_distance": True, "cluster_labels": []},
+                policy=policy,
+            )
+
+        with pytest.raises(ValueError, match="cluster_distance must be finite"):
+            _ = CSAClusteringState[int].from_dict(
+                {"cluster_distance": float("inf"), "cluster_labels": []},
+                policy=policy,
+            )
+
+        with pytest.raises(TypeError, match=r"cluster_labels\[0\] must be a JSON integer"):
+            _ = CSAClusteringState[int].from_dict(
+                {"cluster_distance": 1.0, "cluster_labels": [True]},
+                policy=policy,
+            )
+
+    def test_scoring_state_snapshots_reject_bool_and_non_finite_numbers(self) -> None:
+        acceptance_policy = CSAAcceptancePolicy()
+
+        with pytest.raises(TypeError, match="temperature must be a JSON number"):
+            _ = CSAAcceptanceState.from_dict(
+                {"temperature": True},
+                policy=acceptance_policy,
+            )
+
+        with pytest.raises(ValueError, match="temperature must be finite"):
+            _ = CSAAcceptanceState.from_dict(
+                {"temperature": float("nan")},
+                policy=acceptance_policy,
+            )
+
+        score_model: CSAScoreModel[int] = CSAScoreModel()
+
+        with pytest.raises(TypeError, match="biased_potential_max must be a JSON number"):
+            _ = CSAScoreModelState[int].from_dict(
+                {
+                    "biased_potential_max": True,
+                    "adaptive_potential_state": None,
+                },
+                score_model=score_model,
+            )
+
+        with pytest.raises(ValueError, match="biased_potential_max must be finite"):
+            _ = CSAScoreModelState[int](
+                score_model=score_model,
+                biased_potential_max=float("inf"),
+            )
+
+    def test_proposal_stat_snapshots_reject_bool_and_non_finite_numbers(self) -> None:
+        with pytest.raises(TypeError, match="observation_count must be a JSON integer"):
+            _ = ProposalFamilyStat.from_dict(
+                {
+                    "family_key": "mutation",
+                    "observation_count": True,
+                    "discounted_score_credit": 0.0,
+                    "last_update_index": 0,
+                },
+            )
+
+        with pytest.raises(ValueError, match="discounted_score_credit must be finite"):
+            _ = ProposalFamilyStat.from_dict(
+                {
+                    "family_key": "mutation",
+                    "observation_count": 0,
+                    "discounted_score_credit": float("inf"),
+                    "last_update_index": 0,
+                },
+            )
+
+        with pytest.raises(TypeError, match="recent_failure_streak must be a JSON integer"):
+            _ = ProposalLeafStat.from_dict(
+                {
+                    "path": ["x"],
+                    "observation_count": 0,
+                    "discounted_score_credit": 0.0,
+                    "last_update_index": 0,
+                    "recent_failure_streak": True,
+                },
+            )
+
+        with pytest.raises(ValueError, match="discounted_score_credit must be finite"):
+            _ = ProposalLeafStat(
+                path=("x",),
+                discounted_score_credit=float("nan"),
+            )
+
+        with pytest.raises(TypeError, match="discounted_weight must be a JSON number"):
+            _ = ProposalNumericSubspaceCovarianceStat.from_dict(
+                {
+                    "leaf_paths": [["x"]],
+                    "observation_count": 0,
+                    "discounted_weight": True,
+                    "discounted_displacement_sum": [0.0],
+                    "discounted_outer_product_sum": [[0.0]],
+                    "last_update_index": 0,
+                },
+            )
+
+        with pytest.raises(ValueError, match="discounted_displacement_sum\\[0\\] must be finite"):
+            _ = ProposalNumericSubspaceCovarianceStat.from_dict(
+                {
+                    "leaf_paths": [["x"]],
+                    "observation_count": 0,
+                    "discounted_weight": 1.0,
+                    "discounted_displacement_sum": [float("inf")],
+                    "discounted_outer_product_sum": [[0.0]],
+                    "last_update_index": 0,
+                },
+            )
+
+        with pytest.raises(
+            ValueError,
+            match=r"discounted_outer_product_sum\[0\]\[0\] must be finite",
+        ):
+            _ = ProposalNumericSubspaceCovarianceStat.from_dict(
+                {
+                    "leaf_paths": [["x"]],
+                    "observation_count": 0,
+                    "discounted_weight": 1.0,
+                    "discounted_displacement_sum": [0.0],
+                    "discounted_outer_product_sum": [[float("nan")]],
+                    "last_update_index": 0,
+                },
+            )
+
+    def test_checkpoint_snapshots_reject_bool_integer_fields(self) -> None:
+        with pytest.raises(TypeError, match="capacity must be a JSON integer"):
+            _ = Bank[int].from_dict(
+                {"capacity": True, "entries": []},
+                candidate_from_dict=_int_candidate_from_dict,
+            )
+
+        with pytest.raises(TypeError, match="capacity must be a JSON integer"):
+            _ = ReferenceBank[int].from_dict(
+                {"capacity": True, "entries": [], "initialized": False},
+                candidate_from_dict=_int_candidate_from_dict,
+            )
+
+        with pytest.raises(TypeError, match=r"seed_mask\[0\] must be a JSON integer"):
+            _ = CSAStageState.from_dict(
+                {
+                    "base_capacity": 1,
+                    "max_capacity": 2,
+                    "stage_index": 0,
+                    "stage_round": 0,
+                    "seed_mask": [True],
+                    "partner_mask": [],
+                },
+            )
+
+        progression_snapshot = build_populated_engine_state().progression_state.to_dict()
+        progression_snapshot["refresh_mask"] = [True]
+        with pytest.raises(TypeError, match=r"refresh_mask\[0\] must be a JSON integer"):
+            _ = CSAProgressionState.from_dict(progression_snapshot)
+
+        with pytest.raises(TypeError, match=r"used_entry_indices\[0\] must be a JSON integer"):
+            _ = SeedSelectionState.from_dict(
+                {
+                    "used_entry_indices": [True],
+                    "bank_status": [],
+                    "active_seed_indices": [],
+                    "next_seed_offset": 0,
+                },
+            )
+
+        with pytest.raises(TypeError, match="update_index must be a JSON integer"):
+            _ = CSAProposalState.from_dict(
+                {
+                    "pending_attributions": [],
+                    "family_stats": [],
+                    "leaf_stats": [],
+                    "local_displacement_leaf_stats": [],
+                    "numeric_covariance_stats": [],
+                    "update_index": True,
+                },
+                policy=CSAProposalPolicy(),
+            )
+
+        state = build_populated_engine_state()
+        engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        engine_snapshot["proposal_index"] = True
+        with pytest.raises(TypeError, match="proposal_index must be a JSON integer"):
+            _ = CSAEngineState[int].from_dict(
+                engine_snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
+
     def test_checkpoint_serializes_adaptation_state_not_refinement_payload(
         self,
     ) -> None:

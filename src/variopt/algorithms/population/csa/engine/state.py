@@ -10,7 +10,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Proposal
-from .....json_types import JSONDict, JSONValue
+from .....json_types import JSONDict, JSONValue, require_json_int
 from .....randomness import RandomStateSnapshot
 from .....typevars import CandidateT
 from ..banking.clustering.policy import CSAClusteringPolicy
@@ -276,7 +276,10 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         raw_selection_state = data.get("selection_state")
         raw_proposal_state = data.get("proposal_state")
         raw_scoring_state = data.get("scoring_state")
-        proposal_index = data.get("proposal_index")
+        proposal_index = require_json_int(
+            data.get("proposal_index"),
+            field_name="proposal_index",
+        )
         if format_name != _CSA_ENGINE_STATE_FORMAT:
             msg = "unsupported CSA checkpoint format"
             raise ValueError(msg)
@@ -301,10 +304,6 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if not isinstance(raw_scoring_state, dict):
             msg = "CSA checkpoint snapshot requires scoring_state mapping"
             raise TypeError(msg)
-        if not isinstance(proposal_index, int):
-            msg = "CSA checkpoint snapshot requires integer proposal_index"
-            raise TypeError(msg)
-
         return cls(
             random_state=RandomStateSnapshot.from_dict(raw_random_state),
             banking_state=CSABankingState[CandidateT].from_dict(

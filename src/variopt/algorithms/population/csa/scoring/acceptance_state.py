@@ -7,7 +7,7 @@ from math import exp, isfinite
 import numpy as np
 from typing_extensions import Self
 
-from .....json_types import JSONDict, JSONValue
+from .....json_types import JSONDict, JSONValue, require_json_finite_float
 from .acceptance import CSAAcceptancePolicy
 
 
@@ -100,13 +100,12 @@ class CSAAcceptanceState:
         TypeError
             If the snapshot carries invalid field types.
         """
-        temperature = data.get("temperature")
-        if not isinstance(temperature, (int, float)):
-            msg = "acceptance-state snapshot requires numeric temperature"
-            raise TypeError(msg)
         return cls(
             policy=policy,
-            temperature=float(temperature),
+            temperature=require_json_finite_float(
+                data.get("temperature"),
+                field_name="temperature",
+            ),
         )
 
     def should_accept(

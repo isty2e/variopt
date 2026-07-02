@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from math import isfinite
 from typing import Generic
 
 import numpy as np
@@ -9,7 +10,13 @@ import numpy as np
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ......diversity import DiversityMetric
-from ......json_types import JSONDict, JSONValue
+from ......json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_int,
+    require_json_list,
+    require_json_optional_finite_float,
+)
 from ......typevars import CandidateT
 from ..bank import BankEntry
 from .linkage import cluster_labels_for_entries
@@ -67,6 +74,10 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 raise ValueError(msg)
             return
 
+        if not isfinite(self.cluster_distance):
+            msg = "cluster_distance must be finite"
+            raise ValueError(msg)
+
         if self.cluster_distance < 0.0:
             msg = "cluster_distance must be non-negative"
             raise ValueError(msg)
@@ -119,29 +130,27 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        cluster_distance = data.get("cluster_distance")
-        raw_cluster_labels = data.get("cluster_labels")
-        if cluster_distance is not None and not isinstance(cluster_distance, (int, float)):
-            msg = "clustering-state snapshot requires numeric cluster_distance or null"
-            raise TypeError(msg)
-        if not isinstance(raw_cluster_labels, list):
-            msg = "clustering-state snapshot requires cluster_labels list"
-            raise TypeError(msg)
+        cluster_distance = require_json_optional_finite_float(
+            data.get("cluster_distance"),
+            field_name="cluster_distance",
+        )
+        raw_cluster_labels = require_json_list(
+            data.get("cluster_labels"),
+            field_name="cluster_labels",
+        )
 
         cluster_labels: list[int] = []
-        for raw_label in raw_cluster_labels:
-            if not isinstance(raw_label, int):
-                msg = "clustering-state snapshot cluster labels must be integers"
-                raise TypeError(msg)
-            cluster_labels.append(raw_label)
+        for raw_index, raw_label in enumerate(raw_cluster_labels):
+            cluster_labels.append(
+                require_json_int(
+                    raw_label,
+                    field_name=f"cluster_labels[{raw_index}]",
+                ),
+            )
 
         return cls(
             policy=policy,
-            cluster_distance=(
-                None
-                if cluster_distance is None
-                else float(cluster_distance)
-            ),
+            cluster_distance=cluster_distance,
             cluster_labels=tuple(cluster_labels),
         )
 

@@ -2,10 +2,18 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from math import isfinite
 
 from typing_extensions import Self
 
-from .......json_types import JSONDict, JSONValue
+from .......json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_finite_float,
+    require_json_int,
+    require_json_list,
+    require_json_str,
+)
 from .......spaces import LeafPath
 from .attribution import NumericSubspaceDisplacement
 
@@ -90,6 +98,9 @@ class ProposalNumericSubspaceCovarianceStat:
         if self.observation_count < 0:
             msg = "observation_count must be non-negative"
             raise ValueError(msg)
+        if not isfinite(self.discounted_weight):
+            msg = "discounted_weight must be finite"
+            raise ValueError(msg)
         if self.discounted_weight < 0.0:
             msg = "discounted_weight must be non-negative"
             raise ValueError(msg)
@@ -102,12 +113,18 @@ class ProposalNumericSubspaceCovarianceStat:
         if len(self.discounted_displacement_sum) not in {0, len(normalized_leaf_paths)}:
             msg = "discounted_displacement_sum dimensions must match leaf_paths"
             raise ValueError(msg)
+        if any(not isfinite(value) for value in self.discounted_displacement_sum):
+            msg = "discounted_displacement_sum values must be finite"
+            raise ValueError(msg)
         if len(self.discounted_outer_product_sum) not in {0, len(normalized_leaf_paths)}:
             msg = "discounted_outer_product_sum dimensions must match leaf_paths"
             raise ValueError(msg)
         for row in self.discounted_outer_product_sum:
             if len(row) != len(normalized_leaf_paths):
                 msg = "discounted_outer_product_sum must be square"
+                raise ValueError(msg)
+            if any(not isfinite(value) for value in row):
+                msg = "discounted_outer_product_sum values must be finite"
                 raise ValueError(msg)
 
     @property
@@ -158,51 +175,59 @@ class ProposalNumericSubspaceCovarianceStat:
             If the snapshot carries invalid field types.
         """
         raw_leaf_paths = data.get("leaf_paths")
-        observation_count = data.get("observation_count")
-        discounted_weight = data.get("discounted_weight")
-        raw_displacement_sum = data.get("discounted_displacement_sum")
-        raw_outer_product_sum = data.get("discounted_outer_product_sum")
-        last_update_index = data.get("last_update_index")
-        if not isinstance(observation_count, int):
-            msg = "proposal covariance-stat snapshot requires integer observation_count"
-            raise TypeError(msg)
-        if not isinstance(discounted_weight, (int, float)):
-            msg = "proposal covariance-stat snapshot requires numeric discounted_weight"
-            raise TypeError(msg)
-        if not isinstance(raw_displacement_sum, list):
-            msg = "proposal covariance-stat snapshot requires displacement sum list"
-            raise TypeError(msg)
-        if not isinstance(raw_outer_product_sum, list):
-            msg = "proposal covariance-stat snapshot requires outer-product list"
-            raise TypeError(msg)
-        if not isinstance(last_update_index, int):
-            msg = "proposal covariance-stat snapshot requires integer last_update_index"
-            raise TypeError(msg)
+        observation_count = require_json_int(
+            data.get("observation_count"),
+            field_name="observation_count",
+        )
+        discounted_weight = require_json_finite_float(
+            data.get("discounted_weight"),
+            field_name="discounted_weight",
+        )
+        raw_displacement_sum = require_json_list(
+            data.get("discounted_displacement_sum"),
+            field_name="discounted_displacement_sum",
+        )
+        raw_outer_product_sum = require_json_list(
+            data.get("discounted_outer_product_sum"),
+            field_name="discounted_outer_product_sum",
+        )
+        last_update_index = require_json_int(
+            data.get("last_update_index"),
+            field_name="last_update_index",
+        )
 
         displacement_sum: list[float] = []
-        for raw_value in raw_displacement_sum:
-            if not isinstance(raw_value, (int, float)):
-                msg = "proposal covariance-stat displacement sum values must be numeric"
-                raise TypeError(msg)
-            displacement_sum.append(float(raw_value))
+        for raw_index, raw_value in enumerate(raw_displacement_sum):
+            displacement_sum.append(
+                require_json_finite_float(
+                    raw_value,
+                    field_name=f"discounted_displacement_sum[{raw_index}]",
+                ),
+            )
 
         outer_product_sum: list[tuple[float, ...]] = []
-        for raw_row in raw_outer_product_sum:
-            if not isinstance(raw_row, list):
-                msg = "proposal covariance-stat outer-product rows must be lists"
-                raise TypeError(msg)
+        for raw_row_index, raw_row in enumerate(raw_outer_product_sum):
+            row_values = require_json_list(
+                raw_row,
+                field_name=f"discounted_outer_product_sum[{raw_row_index}]",
+            )
             row: list[float] = []
-            for raw_value in raw_row:
-                if not isinstance(raw_value, (int, float)):
-                    msg = "proposal covariance-stat outer-product values must be numeric"
-                    raise TypeError(msg)
-                row.append(float(raw_value))
+            for raw_column_index, raw_value in enumerate(row_values):
+                row.append(
+                    require_json_finite_float(
+                        raw_value,
+                        field_name=(
+                            "discounted_outer_product_sum"
+                            f"[{raw_row_index}][{raw_column_index}]"
+                        ),
+                    ),
+                )
             outer_product_sum.append(tuple(row))
 
         return cls(
             leaf_paths=_leaf_paths_from_json(raw_leaf_paths),
             observation_count=observation_count,
-            discounted_weight=float(discounted_weight),
+            discounted_weight=discounted_weight,
             discounted_displacement_sum=tuple(displacement_sum),
             discounted_outer_product_sum=tuple(outer_product_sum),
             last_update_index=last_update_index,
@@ -478,6 +503,10 @@ class ProposalFamilyStat:
             msg = "observation_count must be non-negative"
             raise ValueError(msg)
 
+        if not isfinite(self.discounted_score_credit):
+            msg = "discounted_score_credit must be finite"
+            raise ValueError(msg)
+
         if self.last_update_index < 0:
             msg = "last_update_index must be non-negative"
             raise ValueError(msg)
@@ -519,26 +548,23 @@ class ProposalFamilyStat:
         TypeError
             If the snapshot carries invalid field types.
         """
-        family_key = data.get("family_key")
-        observation_count = data.get("observation_count")
-        discounted_score_credit = data.get("discounted_score_credit")
-        last_update_index = data.get("last_update_index")
-        if not isinstance(family_key, str):
-            msg = "proposal family-stat snapshot requires string family_key"
-            raise TypeError(msg)
-        if not isinstance(observation_count, int):
-            msg = "proposal family-stat snapshot requires integer observation_count"
-            raise TypeError(msg)
-        if not isinstance(discounted_score_credit, (int, float)):
-            msg = "proposal family-stat snapshot requires numeric discounted_score_credit"
-            raise TypeError(msg)
-        if not isinstance(last_update_index, int):
-            msg = "proposal family-stat snapshot requires integer last_update_index"
-            raise TypeError(msg)
+        family_key = require_json_str(data.get("family_key"), field_name="family_key")
+        observation_count = require_json_int(
+            data.get("observation_count"),
+            field_name="observation_count",
+        )
+        discounted_score_credit = require_json_finite_float(
+            data.get("discounted_score_credit"),
+            field_name="discounted_score_credit",
+        )
+        last_update_index = require_json_int(
+            data.get("last_update_index"),
+            field_name="last_update_index",
+        )
         return cls(
             family_key=family_key,
             observation_count=observation_count,
-            discounted_score_credit=float(discounted_score_credit),
+            discounted_score_credit=discounted_score_credit,
             last_update_index=last_update_index,
         )
 
@@ -643,6 +669,10 @@ class ProposalLeafStat:
             msg = "observation_count must be non-negative"
             raise ValueError(msg)
 
+        if not isfinite(self.discounted_score_credit):
+            msg = "discounted_score_credit must be finite"
+            raise ValueError(msg)
+
         if self.last_update_index < 0:
             msg = "last_update_index must be non-negative"
             raise ValueError(msg)
@@ -689,26 +719,26 @@ class ProposalLeafStat:
         TypeError
             If the snapshot carries invalid field types.
         """
-        observation_count = data.get("observation_count")
-        discounted_score_credit = data.get("discounted_score_credit")
-        last_update_index = data.get("last_update_index")
-        recent_failure_streak = data.get("recent_failure_streak")
-        if not isinstance(observation_count, int):
-            msg = "proposal leaf-stat snapshot requires integer observation_count"
-            raise TypeError(msg)
-        if not isinstance(discounted_score_credit, (int, float)):
-            msg = "proposal leaf-stat snapshot requires numeric discounted_score_credit"
-            raise TypeError(msg)
-        if not isinstance(last_update_index, int):
-            msg = "proposal leaf-stat snapshot requires integer last_update_index"
-            raise TypeError(msg)
-        if not isinstance(recent_failure_streak, int):
-            msg = "proposal leaf-stat snapshot requires integer recent_failure_streak"
-            raise TypeError(msg)
+        observation_count = require_json_int(
+            data.get("observation_count"),
+            field_name="observation_count",
+        )
+        discounted_score_credit = require_json_finite_float(
+            data.get("discounted_score_credit"),
+            field_name="discounted_score_credit",
+        )
+        last_update_index = require_json_int(
+            data.get("last_update_index"),
+            field_name="last_update_index",
+        )
+        recent_failure_streak = require_json_int(
+            data.get("recent_failure_streak"),
+            field_name="recent_failure_streak",
+        )
         return cls(
             path=_leaf_path_from_json(data.get("path")),
             observation_count=observation_count,
-            discounted_score_credit=float(discounted_score_credit),
+            discounted_score_credit=discounted_score_credit,
             last_update_index=last_update_index,
             recent_failure_streak=recent_failure_streak,
         )

@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from math import exp
+from math import exp, isfinite
 from typing import Generic
 
 from typing_extensions import Self
@@ -12,7 +12,12 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .....artifacts import Observation
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
-from .....json_types import JSONDict, JSONValue
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_mapping,
+    require_json_optional_finite_float,
+)
 from .....typevars import CandidateT
 from ..banking.bank import BankEntry
 from ..banking.queries import BankDistanceWorkspace
@@ -89,6 +94,10 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
     def __post_init__(self) -> None:
         """Normalize the optional adaptive-potential state at ingress."""
+        if self.biased_potential_max is not None and not isfinite(self.biased_potential_max):
+            msg = "biased_potential_max must be finite"
+            raise ValueError(msg)
+
         if self.adaptive_potential_state is not None:
             return
 
@@ -143,33 +152,30 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        biased_potential_max = data.get("biased_potential_max")
+        biased_potential_max = require_json_optional_finite_float(
+            data.get("biased_potential_max"),
+            field_name="biased_potential_max",
+        )
         raw_adaptive_potential_state = data.get("adaptive_potential_state")
-        if biased_potential_max is not None and not isinstance(biased_potential_max, (int, float)):
-            msg = "score-model-state snapshot requires numeric biased_potential_max or null"
-            raise TypeError(msg)
-        if raw_adaptive_potential_state is not None and not isinstance(raw_adaptive_potential_state, dict):
-            msg = "score-model-state snapshot requires adaptive_potential_state mapping or null"
-            raise TypeError(msg)
 
         adaptive_potential_state = None
         if raw_adaptive_potential_state is not None:
+            adaptive_potential_state_data = require_json_mapping(
+                raw_adaptive_potential_state,
+                field_name="adaptive_potential_state",
+            )
             adaptive_model = score_model.adaptive_potential
             if adaptive_model is None:
                 msg = "score-model-state snapshot cannot restore adaptive potential without an adaptive score model"
                 raise ValueError(msg)
             adaptive_potential_state = AdaptivePotentialState[CandidateT].from_dict(
-                raw_adaptive_potential_state,
+                adaptive_potential_state_data,
                 model=adaptive_model,
             )
 
         return cls(
             score_model=score_model,
-            biased_potential_max=(
-                None
-                if biased_potential_max is None
-                else float(biased_potential_max)
-            ),
+            biased_potential_max=biased_potential_max,
             adaptive_potential_state=adaptive_potential_state,
         )
 

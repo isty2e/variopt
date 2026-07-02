@@ -363,11 +363,13 @@ class CSAProgressionState:
             )
 
         refresh_mask: list[int] = []
-        for raw_index in raw_refresh_mask:
-            if not isinstance(raw_index, int):
-                msg = "progression-state snapshot refresh_mask values must be integers"
-                raise TypeError(msg)
-            refresh_mask.append(raw_index)
+        for raw_position, raw_index in enumerate(raw_refresh_mask):
+            refresh_mask.append(
+                require_json_int(
+                    raw_index,
+                    field_name=f"refresh_mask[{raw_position}]",
+                ),
+            )
 
         return cls(
             cutoff_state=CSACutoffState.from_dict(raw_cutoff_state),

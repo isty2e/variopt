@@ -2,13 +2,19 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from typing import Generic
 
 from typing_extensions import Self
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ......json_types import JSONDict, JSONValue
+from ......json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_finite_float,
+    require_json_int,
+)
 from ......typevars import CandidateT
 from .policy import CSABankGrowthPolicy
 
@@ -33,10 +39,20 @@ class CSABankGrowthState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
     def __post_init__(self) -> None:
         """Reject invalid states."""
+        if isinstance(self.active_energy_gap_limit, bool):
+            msg = "active_energy_gap_limit must be numeric"
+            raise TypeError(msg)
+        if not isfinite(self.active_energy_gap_limit):
+            msg = "active_energy_gap_limit must be finite"
+            raise ValueError(msg)
+
         if self.active_energy_gap_limit < 0.0:
             msg = "active_energy_gap_limit must be non-negative"
             raise ValueError(msg)
 
+        if type(self.generation_growth_count) is not int:
+            msg = "generation_growth_count must be an integer"
+            raise TypeError(msg)
         if self.generation_growth_count < 0:
             msg = "generation_growth_count must be non-negative"
             raise ValueError(msg)
@@ -105,16 +121,16 @@ class CSABankGrowthState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        active_energy_gap_limit = data.get("active_energy_gap_limit")
-        generation_growth_count = data.get("generation_growth_count")
-        if not isinstance(active_energy_gap_limit, (int, float)):
-            msg = "growth-state snapshot requires numeric active_energy_gap_limit"
-            raise TypeError(msg)
-        if not isinstance(generation_growth_count, int):
-            msg = "growth-state snapshot requires integer generation_growth_count"
-            raise TypeError(msg)
+        active_energy_gap_limit = require_json_finite_float(
+            data.get("active_energy_gap_limit"),
+            field_name="active_energy_gap_limit",
+        )
+        generation_growth_count = require_json_int(
+            data.get("generation_growth_count"),
+            field_name="generation_growth_count",
+        )
         return cls(
             policy=policy,
-            active_energy_gap_limit=float(active_energy_gap_limit),
+            active_energy_gap_limit=active_energy_gap_limit,
             generation_growth_count=generation_growth_count,
         )

@@ -1,13 +1,23 @@
 """Tests for structured-space candidate serialization codecs."""
 
 from collections.abc import Mapping
+from typing import cast
+
+import pytest
 
 from variopt import CategoricalSpace, IntegerSpace, RecordSpace, TupleSpace
+from variopt.json_types import JSONValue
 from variopt.spaces import RecordCandidate
 from variopt.spaces.serialization import (
     space_candidate_from_dict,
     space_candidate_to_dict,
 )
+from variopt.spaces.types import SpaceCandidateValue
+
+
+def runtime_value(value: object) -> object:
+    """Return a value through an object-typed boundary for runtime guard tests."""
+    return value
 
 
 class SpaceCandidateSerializationTests:
@@ -61,3 +71,99 @@ class SpaceCandidateSerializationTests:
         restored = space_candidate_from_dict(payload, record_candidates=True)
 
         assert restored == candidate
+
+    def test_marker_shaped_mapping_payload_round_trips_as_mapping(self) -> None:
+        candidate = {"__variopt_bytes__": "abcd"}
+
+        payload = space_candidate_to_dict(candidate)
+        restored = space_candidate_from_dict(payload)
+
+        assert restored == candidate
+
+    def test_nested_marker_shaped_mapping_payload_round_trips(self) -> None:
+        candidate = {
+            "outer": {
+                "__variopt_bytearray__": "0102",
+            },
+        }
+
+        payload = space_candidate_to_dict(candidate)
+        restored = space_candidate_from_dict(payload)
+
+        assert restored == candidate
+
+    def test_escape_marker_shaped_mapping_payload_round_trips(self) -> None:
+        candidate = {"__variopt_mapping__": "kept-as-user-data"}
+
+        payload = space_candidate_to_dict(candidate)
+        restored = space_candidate_from_dict(payload)
+
+        assert restored == candidate
+
+    def test_legacy_escape_marker_mapping_without_format_stays_plain_mapping(self) -> None:
+        restored = space_candidate_from_dict(
+            {
+                "__variopt_mapping__": {
+                    "items": [["depth", 3]],
+                },
+            },
+        )
+
+        assert restored == {"__variopt_mapping__": {"items": (("depth", 3),)}}
+
+    def test_malformed_escaped_mapping_payload_raises_type_error(self) -> None:
+        payload: JSONValue = {
+            "__variopt_mapping__": {
+                "format": "variopt.mapping",
+                "items": [["depth"]],
+            },
+        }
+
+        with pytest.raises(TypeError, match="two-item arrays"):
+            _ = space_candidate_from_dict(payload)
+
+    def test_escaped_mapping_payload_rejects_duplicate_keys(self) -> None:
+        payload: JSONValue = {
+            "__variopt_mapping__": {
+                "format": "variopt.mapping",
+                "items": [["depth", 1], ["depth", 2]],
+            },
+        }
+
+        with pytest.raises(ValueError, match="keys must be unique"):
+            _ = space_candidate_from_dict(payload)
+
+    def test_legacy_bytes_marker_payload_still_decodes_as_bytes(self) -> None:
+        restored = space_candidate_from_dict({"__variopt_bytes__": "00ff"})
+
+        assert restored == b"\x00\xff"
+
+    def test_legacy_bytearray_marker_payload_still_decodes_as_bytearray(self) -> None:
+        restored = space_candidate_from_dict({"__variopt_bytearray__": "0102"})
+
+        assert restored == bytearray(b"\x01\x02")
+
+    def test_to_dict_rejects_unsupported_list_candidate(self) -> None:
+        raw_candidate = runtime_value([1, 2])
+        unsupported_candidate = cast(SpaceCandidateValue, raw_candidate)
+
+        with pytest.raises(TypeError, match="supported structured candidate"):
+            _ = space_candidate_to_dict(unsupported_candidate)
+
+    def test_to_dict_rejects_null_candidate(self) -> None:
+        raw_candidate = runtime_value(None)
+        unsupported_candidate = cast(SpaceCandidateValue, raw_candidate)
+
+        with pytest.raises(TypeError, match="supported structured candidate"):
+            _ = space_candidate_to_dict(unsupported_candidate)
+
+    def test_to_dict_rejects_non_finite_float_candidate(self) -> None:
+        with pytest.raises(ValueError, match="finite"):
+            _ = space_candidate_to_dict(float("inf"))
+
+    def test_from_dict_rejects_non_finite_float_payload(self) -> None:
+        with pytest.raises(ValueError, match="finite"):
+            _ = space_candidate_from_dict(float("nan"))
+
+        with pytest.raises(ValueError, match="finite"):
+            _ = space_candidate_from_dict(float("inf"))
