@@ -29,6 +29,7 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
+from ..objective import Objective, ScalarEvaluationProtocol
 from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..spaces import CandidateEquality
@@ -170,7 +171,18 @@ def _supports_direct_scalar_sequential_path(
     if type(study.kernel) is not DirectKernel:
         return False
 
-    return study.problem.direct_objective is not None
+    objective = study.problem.direct_objective
+    return objective is not None and _uses_default_scalar_request_evaluation(objective)
+
+
+def _uses_default_scalar_request_evaluation(
+    objective: Objective[CandidateT],
+) -> bool:
+    for cls in type(objective).__mro__:
+        if "evaluate_request" in cls.__dict__:
+            return cls is ScalarEvaluationProtocol
+
+    return False
 
 
 def _optimize_direct_scalar_sequential(
