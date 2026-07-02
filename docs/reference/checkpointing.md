@@ -41,8 +41,11 @@ study = Study(
     evaluator=SequentialEvaluator[int, int](),
 )
 
-# Run partway and save.
-result, state = study.optimize(max_evaluations=20)
+# Run partway to a checkpoint-safe boundary and save.
+result, state = study.optimize(
+    max_evaluations=20,
+    stop_at_checkpoint_boundary=True,
+)
 checkpoint = optimizer.state_to_dict(state)
 
 with open("checkpoint.json", "w") as f:

@@ -55,10 +55,11 @@ problem's semantic evaluation rule.
 Refinement metadata does not count evaluations by itself. Logical evaluation cost
 is carried by `EvaluationOutcome.evaluation_count`.
 
-`Study.optimize(..., count_evaluation_cost=True)` charges the reported
-`evaluation_count` instead of only counting returned records. This matters when
-a local-search kernel evaluates several inner candidates before returning one
-refined result.
+By default, `Study.optimize(...)` charges the reported `evaluation_count` instead
+of only counting returned records. This matters when a local-search kernel
+evaluates several inner candidates before returning one refined result. Set
+`count_evaluation_cost=False` only when you deliberately want outer-record
+counting.
 
 Terminal surfaces preserve provenance only as aligned metadata:
 

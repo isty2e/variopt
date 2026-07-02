@@ -90,10 +90,9 @@ Practical trade-off:
 - but it may consume many inner objective evaluations due to finite-difference
   gradient estimation
 
-If you care about actual objective-evaluation cost rather than just the number
-of outer proposals, enable cost-aware budgeting in
-[`Study.optimize(...)`](../reference/api/study.md)
-with `count_evaluation_cost=True`.
+`Study.optimize(...)` budgets by actual objective-evaluation cost by default, so
+SciPy inner evaluations are charged against `max_evaluations` rather than hidden
+behind one outer proposal.
 
 ### `Powell`
 
@@ -177,15 +176,17 @@ The kernel path reports that cost through
 [`EvaluationOutcome.evaluation_count`](../reference/api/variopt.md).
 `Study.optimize(...)` then offers two modes:
 
-- default: budget decreases by the number of returned observations
-- `count_evaluation_cost=True`: budget decreases by the sum of inner objective
-  evaluations reported by the kernel/evaluator path
+- default: budget decreases by the sum of objective evaluations reported by the
+  kernel/evaluator path
+- `count_evaluation_cost=False`: budget decreases by the number of returned
+  observations
 
 Practical guidance:
 
-- use default counting when you only care about outer search steps
-- use `count_evaluation_cost=True` when comparing methods with and without local
-  optimization, or when the kernel itself is expensive
+- keep the default when comparing methods with and without local optimization,
+  or when the objective itself is expensive
+- use `count_evaluation_cost=False` only when you deliberately want an outer-step
+  budget rather than an objective-cost budget
 
 If a custom kernel already computed the objective value, it should return both
 that value and the true `evaluation_count` so that `Study` can reuse the value
@@ -257,7 +258,7 @@ execution configuration, not as free throughput toggles.
 | All-discrete structured space that already has a justified staged neighborhood-widening story | `StructuredVariableNeighborhoodKernel(max_steps=..., stages=(...))` |
 | All-discrete structured space with a fixed stage sequence | `StructuredScheduledLocalSearchKernel(stages=(...))` |
 | Mixed real/integer/categorical space | no built-in generic mixed adapter yet; use a custom kernel, split the local search cleanly by domain, or skip local optimization |
-| Comparing methods with and without local optimization | enable `count_evaluation_cost=True` |
+| Comparing methods with and without local optimization | use the default objective-cost budget |
 | Batch-parallel evaluation with joblib | keep the kernel serial and let the evaluator own parallelism |
 | Early debugging or correctness validation | start with `SequentialEvaluator` |
 
@@ -269,7 +270,7 @@ If you are unsure, start here:
 2. If the space is continuous and local improvement is clearly valuable, try
    `L-BFGS-B`.
 3. If `L-BFGS-B` behaves poorly on a rough objective, switch to `Powell`.
-4. Turn on `count_evaluation_cost=True` before making any fairness claims about
+4. Keep default objective-cost budgeting before making any fairness claims about
    efficiency.
 5. Add `JoblibEvaluator` only after the kernel itself is behaving well in
    sequential execution.
