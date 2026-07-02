@@ -186,6 +186,26 @@ class ProblemContractsTests:
         assert problem.interaction_evaluation_protocol is protocol
         assert problem.name == "matchup"
 
+    def test_interaction_problem_pickle_round_trips(self) -> None:
+        problem = InteractionProblem(
+            space=IntegerSpace(low=0, high=10),
+            interaction_evaluation_protocol=MatchupProtocol(),
+            name="matchup",
+        )
+
+        restored = pickle_round_trip(problem)
+        interaction_record = restored.interaction_evaluation_protocol.evaluate_requests(
+            (
+                EvaluationRequest(proposal=Proposal(candidate=2, proposal_id="left")),
+                EvaluationRequest(proposal=Proposal(candidate=7, proposal_id="right")),
+            ),
+            interaction_evaluation_spec=MatchupSpec(arena="restored"),
+        )
+
+        assert restored.name == "matchup"
+        assert interaction_record.winner == 7
+        assert interaction_record.arena == "restored"
+
     def test_study_pickle_round_trips_without_runtime_generic_metadata(self) -> None:
         space = IntegerSpace(low=0, high=10)
         problem = Problem(space=space, objective=SquareObjective())

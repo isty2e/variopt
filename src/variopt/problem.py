@@ -351,3 +351,6 @@ class InteractionProblem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT
         if self.name == "":
             msg = "name must not be empty"
             raise ValueError(msg)
+
+
+install_frozen_generic_slots_pickle(InteractionProblem)

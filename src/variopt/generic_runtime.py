@@ -52,38 +52,42 @@ def frozen_generic_slots_compat_setstate(
         object.__setattr__(self, dataclass_field.name, value)
 
 
-def install_frozen_generic_slots_pickle(
-    cls: type[FrozenGenericSlotsCompat],
-    *,
-    getstate: Callable[
-        [FrozenGenericSlotsCompat],
-        list[object | None],
-    ] = frozen_generic_slots_compat_getstate,
-    setstate: Callable[
-        [FrozenGenericSlotsCompat, list[object | None]],
-        None,
-    ] = frozen_generic_slots_compat_setstate,
-) -> None:
-    """Install tolerant pickle hooks on one frozen slotted dataclass.
+def create_frozen_generic_slots_pickle_installer(
+    getstate: Callable[[FrozenGenericSlotsCompat], list[object | None]],
+    setstate: Callable[[FrozenGenericSlotsCompat, list[object | None]], None],
+) -> Callable[[type[FrozenGenericSlotsCompat]], None]:
+    """Return the standard pickle-hook installer while keeping hooks private."""
 
-    Parameters
-    ----------
-    cls : type[FrozenGenericSlotsCompat]
-        Frozen slotted dataclass type that should tolerate a missing
-        ``__orig_class__`` slot during pickling.
+    def install_frozen_generic_slots_pickle(
+        cls: type[FrozenGenericSlotsCompat],
+    ) -> None:
+        """Install tolerant pickle hooks on one frozen slotted dataclass.
 
-    Notes
-    -----
-    ``@dataclass(frozen=True, slots=True)`` installs pickle hooks on every
-    dataclass subclass. Apply this helper after the subclass decorator has run
-    when a custom ``__init__`` cannot rely on dataclasses to populate inherited
-    runtime generic metadata.
-    """
-    setattr(cls, "__getstate__", getstate)
-    setattr(cls, "__setstate__", setstate)
+        Parameters
+        ----------
+        cls : type[FrozenGenericSlotsCompat]
+            Frozen slotted dataclass type that should tolerate a missing
+            ``__orig_class__`` slot during pickling.
+
+        Notes
+        -----
+        ``@dataclass(frozen=True, slots=True)`` installs pickle hooks on every
+        dataclass subclass. Apply this helper after the subclass decorator has
+        run when a custom ``__init__`` cannot rely on dataclasses to populate
+        inherited runtime generic metadata.
+        """
+        setattr(cls, "__getstate__", getstate)
+        setattr(cls, "__setstate__", setstate)
+
+    return install_frozen_generic_slots_pickle
 
 
+install_frozen_generic_slots_pickle = create_frozen_generic_slots_pickle_installer(
+    frozen_generic_slots_compat_getstate,
+    frozen_generic_slots_compat_setstate,
+)
 install_frozen_generic_slots_pickle(FrozenGenericSlotsCompat)
 
+del create_frozen_generic_slots_pickle_installer
 del frozen_generic_slots_compat_getstate
 del frozen_generic_slots_compat_setstate
