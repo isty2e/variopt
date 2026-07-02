@@ -507,12 +507,13 @@ class SpeciesConservingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         offspring: tuple[SpeciesGAPopulationMember[CandidateT], ...],
     ) -> tuple[SpeciesGAPopulationMember[CandidateT], ...]:
         candidate_pool = self._sort_population(parents + offspring)
-        species_members: list[list[SpeciesGAPopulationMember[CandidateT]]] = []
-        overflow_members: list[SpeciesGAPopulationMember[CandidateT]] = []
-        for member in candidate_pool:
+        species_members: list[
+            list[tuple[int, SpeciesGAPopulationMember[CandidateT]]]
+        ] = []
+        for member_index, member in enumerate(candidate_pool):
             assigned = False
             for members in species_members:
-                seed_member = members[0]
+                seed_member = members[0][1]
                 if (
                     self.diversity_metric.distance(
                         member.candidate,
@@ -521,28 +522,37 @@ class SpeciesConservingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
                     < self.resolved_profile.species_radius
                 ):
                     if len(members) < self.resolved_profile.species_capacity:
-                        members.append(member)
-                    else:
-                        overflow_members.append(member)
+                        members.append((member_index, member))
                     assigned = True
                     break
             if assigned:
                 continue
 
-            species_members.append([member])
+            species_members.append([(member_index, member)])
 
-        protected_population = tuple(
-            member
+        protected_entries = tuple(
+            (member_index, species_member_index == 0, member)
             for members in species_members
-            for member in members
+            for species_member_index, (member_index, member) in enumerate(members)
         )
-        if len(protected_population) >= self.population_size:
-            return self._sort_population(protected_population[: self.population_size])
+        if len(protected_entries) >= self.population_size:
+            seed_prioritized_population = tuple(
+                member
+                for _, _, member in sorted(
+                    protected_entries,
+                    key=lambda entry: (not entry[1], entry[2].score),
+                )[: self.population_size]
+            )
+            return self._sort_population(seed_prioritized_population)
 
+        protected_indices = frozenset(
+            member_index for member_index, _, _ in protected_entries
+        )
+        protected_population = tuple(member for _, _, member in protected_entries)
         backfill_members = tuple(
             member
-            for member in candidate_pool
-            if member not in protected_population
+            for member_index, member in enumerate(candidate_pool)
+            if member_index not in protected_indices
         )
         next_population = self._sort_population(
             protected_population

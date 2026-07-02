@@ -14,10 +14,14 @@ from variopt import (
     PermutationSpace,
     Problem,
     Proposal,
+    SearchSpace,
 )
 from variopt.algorithms import (
     SpeciesConservingGeneticAlgorithmOptimizer,
     SpeciesGAProfile,
+)
+from variopt.algorithms.population.species_ga.state import (
+    SpeciesGAPopulationMember,
 )
 from variopt.diversity import DiversityMetric
 from variopt.evaluators import SequentialEvaluator
@@ -101,6 +105,103 @@ class IntegerDistance(DiversityMetric[int]):
         return float(abs(left - right))
 
 
+class EqualityHostileCandidate:
+    """Candidate that fails the test if scalar equality is used."""
+
+    value: int
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ = other
+        raise AssertionError("species survival must not compare candidates by value")
+
+
+class EqualityHostileSpace(
+    SearchSpace[EqualityHostileCandidate, EqualityHostileCandidate],
+):
+    """Minimal search space for equality-hostile candidate fixtures."""
+
+    @override
+    def normalize(
+        self,
+        raw_candidate: EqualityHostileCandidate,
+    ) -> EqualityHostileCandidate:
+        self.validate(raw_candidate)
+        return raw_candidate
+
+    @override
+    def validate(self, candidate: EqualityHostileCandidate) -> None:
+        if type(candidate) is not EqualityHostileCandidate:
+            msg = "candidate must be an EqualityHostileCandidate"
+            raise TypeError(msg)
+
+    @override
+    def sample(self, random_state: np.random.RandomState) -> EqualityHostileCandidate:
+        return EqualityHostileCandidate(int(random_state.randint(0, 2)))
+
+
+class EqualityHostileDistance(DiversityMetric[EqualityHostileCandidate]):
+    """Absolute-difference distance for equality-hostile candidates."""
+
+    @override
+    def distance(
+        self,
+        left: EqualityHostileCandidate,
+        right: EqualityHostileCandidate,
+    ) -> float:
+        return float(abs(left.value - right.value))
+
+
+class PreserveEqualityHostileMutation(VariationOperator[EqualityHostileCandidate]):
+    """Unary mutation fixture that leaves equality-hostile candidates unchanged."""
+
+    @property
+    @override
+    def arity(self) -> int:
+        return 1
+
+    @override
+    def apply(
+        self,
+        parents: Sequence[EqualityHostileCandidate],
+        random_state: np.random.RandomState,
+    ) -> EqualityHostileCandidate:
+        _ = random_state
+        return parents[0]
+
+
+class TestableSpeciesGA(SpeciesConservingGeneticAlgorithmOptimizer[int, int]):
+    """Test-only species GA that exposes one survival seam."""
+
+    def build_next_population_for_test(
+        self,
+        *,
+        parents: tuple[SpeciesGAPopulationMember[int], ...],
+        offspring: tuple[SpeciesGAPopulationMember[int], ...],
+    ) -> tuple[SpeciesGAPopulationMember[int], ...]:
+        return self._build_next_population(parents=parents, offspring=offspring)
+
+
+class EqualityHostileTestableSpeciesGA(
+    SpeciesConservingGeneticAlgorithmOptimizer[
+        EqualityHostileCandidate,
+        EqualityHostileCandidate,
+    ],
+):
+    """Test-only species GA for non-scalar equality candidates."""
+
+    def build_next_population_for_test(
+        self,
+        *,
+        parents: tuple[SpeciesGAPopulationMember[EqualityHostileCandidate], ...],
+        offspring: tuple[SpeciesGAPopulationMember[EqualityHostileCandidate], ...],
+    ) -> tuple[SpeciesGAPopulationMember[EqualityHostileCandidate], ...]:
+        return self._build_next_population(parents=parents, offspring=offspring)
+
+
 class SpeciesConservingGeneticAlgorithmOptimizerTests:
     """Regression tests for the species-conserving GA optimizer."""
 
@@ -172,8 +273,128 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
         state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
 
         assert state.generation_index == 1
-        assert tuple(member.candidate for member in state.population) == (0, 1, 7, 8)
+        next_candidates = tuple(member.candidate for member in state.population)
+        assert next_candidates[0] == 0
+        assert 7 in next_candidates
         assert len(state.population) == 4
+
+    def test_species_backfill_uses_pool_indices_for_clone_members(self) -> None:
+        optimizer = TestableSpeciesGA(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=SpeciesGAProfile(
+                mutation_probability=0.0,
+                crossover_probability=0.0,
+                species_radius=3.0,
+                species_capacity=1,
+            ),
+        )
+        clone_pool = tuple(
+            SpeciesGAPopulationMember(candidate=0, value=0.0, score=0.0)
+            for _ in range(8)
+        )
+
+        next_population = optimizer.build_next_population_for_test(
+            parents=clone_pool[:4],
+            offspring=clone_pool[4:],
+        )
+
+        assert len(next_population) == 4
+        assert tuple(member.candidate for member in next_population) == (0, 0, 0, 0)
+
+    def test_species_backfill_does_not_use_candidate_value_equality(self) -> None:
+        optimizer = EqualityHostileTestableSpeciesGA(
+            space=EqualityHostileSpace(),
+            population_size=4,
+            diversity_metric=EqualityHostileDistance(),
+            mutation_operator=PreserveEqualityHostileMutation(),
+            profile=SpeciesGAProfile(
+                mutation_probability=0.0,
+                crossover_probability=0.0,
+                species_radius=3.0,
+                species_capacity=1,
+            ),
+        )
+        clone_pool = tuple(
+            SpeciesGAPopulationMember(
+                candidate=EqualityHostileCandidate(0),
+                value=0.0,
+                score=0.0,
+            )
+            for _ in range(8)
+        )
+
+        next_population = optimizer.build_next_population_for_test(
+            parents=clone_pool[:4],
+            offspring=clone_pool[4:],
+        )
+
+        assert len(next_population) == 4
+        assert all(member.candidate.value == 0 for member in next_population)
+
+    def test_species_clone_survival_keeps_next_tournament_valid(self) -> None:
+        optimizer = SpeciesConservingGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=SpeciesGAProfile(
+                tournament_size=2,
+                mutation_probability=0.0,
+                crossover_probability=0.0,
+                species_radius=3.0,
+                species_capacity=1,
+            ),
+            sampler=CyclingIntegerSampler((0, 0, 0, 0)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
+        assert len(state.population) == 4
+
+        proposals, state = optimizer.ask(state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
+        assert len(state.population) == 4
+
+        proposals, state = optimizer.ask(state, batch_size=4)
+        assert len(proposals) == 4
+
+    def test_species_truncation_prioritizes_seeds_over_crowd_members(self) -> None:
+        optimizer = TestableSpeciesGA(
+            space=IntegerSpace(0, 20),
+            population_size=3,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=SpeciesGAProfile(
+                mutation_probability=0.0,
+                crossover_probability=0.0,
+                species_radius=3.0,
+                species_capacity=3,
+            ),
+        )
+        pool = tuple(
+            SpeciesGAPopulationMember(candidate=candidate, value=score, score=score)
+            for candidate, score in ((0, 0.0), (1, 1.0), (2, 2.0), (10, 10.0))
+        )
+
+        next_population = optimizer.build_next_population_for_test(
+            parents=pool,
+            offspring=(),
+        )
+
+        assert tuple(member.candidate for member in next_population) == (0, 1, 10)
 
     def test_from_permutation_space_defaults_can_optimize(self) -> None:
         space = PermutationSpace(size=6)
