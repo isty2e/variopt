@@ -1,10 +1,18 @@
 """Regression tests for CSA safe-boundary checkpoint snapshots."""
 
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
 import pytest
 
-from variopt import IntegerSpace, Observation, Proposal
+from variopt import (
+    IntegerSpace,
+    Observation,
+    Proposal,
+    RealSpace,
+    RecordSpace,
+    TupleSpace,
+)
 from variopt.algorithms.population.csa import CSAOptimizer, CSAProfile
 from variopt.algorithms.population.csa.banking.bank import Bank, BankEntry
 from variopt.algorithms.population.csa.banking.clustering import (
@@ -65,6 +73,7 @@ from variopt.algorithms.population.csa.selection.state import (
 )
 from variopt.json_types import JSONValue
 from variopt.randomness import RandomStateSnapshot
+from variopt.spaces import RecordCandidate, SpaceBoundaryValue, SpaceCandidateValue
 
 
 def _int_candidate_to_dict(candidate: int) -> JSONValue:
@@ -371,3 +380,97 @@ class CSAOptimizerCheckpointTests:
         assert optimizer.state_to_dict(resumed_state) == optimizer.state_to_dict(
             uninterrupted_state,
         )
+
+    def test_record_space_checkpoint_restore_preserves_record_candidates(self) -> None:
+        space = RecordSpace(
+            x=RealSpace(0.0, 1.0),
+            depth=IntegerSpace(0, 5),
+        )
+        candidate = space.normalize({"x": 0.5, "depth": 2})
+        optimizer: CSAOptimizer[
+            Mapping[str, SpaceBoundaryValue] | RecordCandidate,
+            RecordCandidate,
+        ] = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            profile=CSAProfile(seed_count=1),
+            random_state=7,
+        )
+        entries = (
+            BankEntry(
+                candidate=candidate,
+                value=1.25,
+                proposal_id="csa-0",
+            ),
+        )
+        initial_state = optimizer.create_initial_state()
+        state = replace(
+            initial_state,
+            banking_state=replace(
+                initial_state.banking_state,
+                bank=Bank[RecordCandidate](capacity=4, entries=entries),
+                reference_bank=ReferenceBank[RecordCandidate](
+                    capacity=4,
+                    entries=entries,
+                ),
+            ),
+        )
+
+        snapshot = optimizer.state_to_dict(state)
+        restored = optimizer.state_from_dict(snapshot)
+
+        restored_candidate = restored.banking_state.bank.entries[0].candidate
+        assert isinstance(restored_candidate, RecordCandidate)
+        assert restored_candidate == candidate
+        space.validate(restored_candidate)
+        assert optimizer.state_to_dict(restored) == snapshot
+
+    def test_nested_record_space_checkpoint_restore_preserves_record_candidates(
+        self,
+    ) -> None:
+        space = TupleSpace(
+            RecordSpace(depth=IntegerSpace(0, 5)),
+            IntegerSpace(0, 5),
+        )
+        candidate = space.normalize([{"depth": 2}, 1])
+        optimizer: CSAOptimizer[
+            Sequence[SpaceBoundaryValue],
+            tuple[SpaceCandidateValue, ...],
+        ] = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            profile=CSAProfile(seed_count=1),
+            random_state=7,
+        )
+        entries = (
+            BankEntry(
+                candidate=candidate,
+                value=1.25,
+                proposal_id="csa-0",
+            ),
+        )
+        initial_state = optimizer.create_initial_state()
+        state = replace(
+            initial_state,
+            banking_state=replace(
+                initial_state.banking_state,
+                bank=Bank[tuple[SpaceCandidateValue, ...]](
+                    capacity=4,
+                    entries=entries,
+                ),
+                reference_bank=ReferenceBank[tuple[SpaceCandidateValue, ...]](
+                    capacity=4,
+                    entries=entries,
+                ),
+            ),
+        )
+
+        snapshot = optimizer.state_to_dict(state)
+        restored = optimizer.state_from_dict(snapshot)
+
+        restored_candidate = restored.banking_state.bank.entries[0].candidate
+        assert isinstance(restored_candidate, tuple)
+        assert isinstance(restored_candidate[0], RecordCandidate)
+        assert restored_candidate == candidate
+        space.validate(restored_candidate)
+        assert optimizer.state_to_dict(restored) == snapshot
