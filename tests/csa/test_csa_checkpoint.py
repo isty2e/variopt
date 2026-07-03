@@ -7,6 +7,7 @@ import pytest
 from typing_extensions import override
 
 from variopt import (
+    CategoricalSpace,
     IntegerSpace,
     Objective,
     Observation,
@@ -17,6 +18,7 @@ from variopt import (
     Study,
     TupleSpace,
 )
+from variopt.algorithms.local_search import StructuredStochasticNeighborhoodKernel
 from variopt.algorithms.population.csa import CSAOptimizer, CSAProfile
 from variopt.algorithms.population.csa.banking.bank import Bank, BankEntry
 from variopt.algorithms.population.csa.banking.clustering import (
@@ -112,6 +114,14 @@ class _SquareObjective(Objective[int]):
     @override
     def evaluate(self, candidate: int) -> float:
         return float(candidate * candidate)
+
+
+class _CategoricalRankObjective(Objective[int]):
+    """Categorical objective where lower integer labels are better."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        return float(candidate)
 
 
 def _advance_to_safe_boundary(
@@ -628,6 +638,61 @@ class CSAOptimizerCheckpointTests:
         snapshot = optimizer.state_to_dict(safe_state)
         restored_state = optimizer.state_from_dict(snapshot)
         assert optimizer.state_to_dict(restored_state) == snapshot
+
+    def test_structured_local_search_checkpoint_resume_matches_continuation(
+        self,
+    ) -> None:
+        space = CategoricalSpace(tuple(range(10)))
+
+        def build_study() -> tuple[
+            Study[int, int, CSAEngineState[int], Observation[int]],
+            CSAOptimizer[int, int],
+        ]:
+            optimizer = CSAOptimizer.from_space_defaults(
+                space=space,
+                bank_capacity=6,
+                profile=CSAProfile(seed_count=3),
+                random_state=7,
+            )
+            study = Study(
+                problem=Problem(
+                    space=space,
+                    objective=_CategoricalRankObjective(),
+                ),
+                run_method=optimizer,
+                evaluator=SequentialEvaluator[int, int](),
+                kernel=StructuredStochasticNeighborhoodKernel[int, int](
+                    max_steps=1,
+                    max_neighbors_per_step=1,
+                    random_state=13,
+                ),
+            )
+            return study, optimizer
+
+        continuous_study, continuous_optimizer = build_study()
+        _, checkpoint_state = continuous_study.run(
+            max_evaluations=12,
+            stop_at_checkpoint_boundary=True,
+        )
+        snapshot = continuous_optimizer.state_to_dict(checkpoint_state)
+        continuous_report, continuous_state = continuous_study.run(
+            max_evaluations=12,
+            initial_state=checkpoint_state,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        resumed_study, resumed_optimizer = build_study()
+        restored_state = resumed_optimizer.state_from_dict(snapshot)
+        resumed_report, resumed_state = resumed_study.run(
+            max_evaluations=12,
+            initial_state=restored_state,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert resumed_report == continuous_report
+        assert resumed_optimizer.state_to_dict(
+            resumed_state,
+        ) == continuous_optimizer.state_to_dict(continuous_state)
 
     def test_record_space_checkpoint_restore_preserves_record_candidates(self) -> None:
         space = RecordSpace(

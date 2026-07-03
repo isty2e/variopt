@@ -41,7 +41,6 @@ from variopt.diversity import (
     StructuredSpaceDiversityMetric,
 )
 from variopt.evaluators import SequentialEvaluator
-from variopt.kernel import ProposalLocalSearchContext
 from variopt.operators import VariationOperator
 from variopt.sampling import CandidateSampler, SearchSpaceSampler
 
@@ -278,12 +277,78 @@ class CSADefaultComponentTests:
 
         contexts = optimizer.proposal_kernel_hints(state, (proposal,))
 
-        assert contexts == (
-                ProposalLocalSearchContext(
-                    local_budget=2,
-                    prioritized_leaf_paths=((1,), (0,)),
-                ),
-            )
+        assert contexts is not None
+        assert len(contexts) == 1
+        context = contexts[0]
+        assert context is not None
+        assert context.local_budget == 2
+        assert context.prioritized_leaf_paths == ((1,), (0,))
+        assert context.random_state_snapshot is not None
+        assert optimizer.proposal_kernel_hints(state, (proposal,)) == contexts
+
+    def test_disabled_csa_proposal_adaptation_emits_only_rng_hint(self) -> None:
+        space = TupleSpace(
+            IntegerSpace(0, 5),
+            IntegerSpace(0, 5),
+        )
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            profile=CSAProfile(
+                proposal_policy=CSAProposalPolicy(enabled=False),
+            ),
+            random_state=0,
+        )
+        proposal = Proposal(candidate=space.normalize((3, 1)), proposal_id="p-1")
+        state = optimizer.create_initial_state()
+
+        contexts = optimizer.proposal_kernel_hints(state, (proposal,))
+
+        assert contexts is not None
+        assert len(contexts) == 1
+        context = contexts[0]
+        assert context is not None
+        assert context.enabled
+        assert context.local_budget is None
+        assert context.prioritized_leaf_paths == ()
+        assert context.random_state_snapshot is not None
+
+    def test_csa_local_search_rng_hint_is_keyed_by_proposal_id(self) -> None:
+        space = TupleSpace(
+            IntegerSpace(0, 5),
+            IntegerSpace(0, 5),
+        )
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=0,
+        )
+        first_proposal = Proposal(candidate=space.normalize((3, 1)), proposal_id="p-1")
+        second_proposal = Proposal(candidate=space.normalize((1, 3)), proposal_id="p-2")
+        state = optimizer.create_initial_state()
+
+        single_contexts = optimizer.proposal_kernel_hints(state, (first_proposal,))
+        reordered_contexts = optimizer.proposal_kernel_hints(
+            state,
+            (second_proposal, first_proposal),
+        )
+
+        assert single_contexts is not None
+        assert reordered_contexts is not None
+        single_context = single_contexts[0]
+        reordered_first_context = reordered_contexts[1]
+        reordered_second_context = reordered_contexts[0]
+        assert single_context is not None
+        assert reordered_first_context is not None
+        assert reordered_second_context is not None
+        assert (
+            reordered_first_context.random_state_snapshot
+            == single_context.random_state_snapshot
+        )
+        assert (
+            reordered_second_context.random_state_snapshot
+            != single_context.random_state_snapshot
+        )
 
 
 class ConstantIntegerSampler(CandidateSampler[int]):

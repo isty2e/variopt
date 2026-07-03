@@ -22,7 +22,11 @@ from ....json_types import JSONDict, JSONValue
 from ....kernel import ProposalLocalSearchContext
 from ....methods import RunMethod
 from ....outcomes import EvaluationOutcome
-from ....randomness import RandomSeed, RandomStateSnapshot
+from ....randomness import (
+    RandomSeed,
+    RandomStateSnapshot,
+    derive_random_state_snapshot,
+)
 from ....sampling import CandidateSampler
 from ....spaces import LeafPath, SearchSpace
 from ....spaces.projections import compile_homogeneous_numeric_subspace
@@ -785,12 +789,24 @@ class CSAOptimizer(
             return None
 
         proposal_state = state.proposal_state
-        if not proposal_state.policy.enabled:
-            return None
-
         leaf_paths = self.space.leaf_paths()
-        contexts = tuple(
-            proposal_local_search_context(
+        contexts: list[ProposalLocalSearchContext | None] = []
+        for proposal in proposals:
+            proposal_id = proposal.proposal_id
+            # Proposal adaptation may be disabled while the caller still uses a
+            # stochastic local-search kernel. Keep the context snapshot-only in
+            # that case so checkpoint resume does not fall back to kernel-local
+            # RNG state.
+            random_state_snapshot = (
+                None
+                if proposal_id is None
+                else derive_random_state_snapshot(
+                    state.random_state,
+                    namespace="variopt.csa.local_search",
+                    keys=(proposal_id,),
+                )
+            )
+            context = proposal_local_search_context(
                 state=proposal_state,
                 leaf_paths=leaf_paths,
                 attribution=(
@@ -799,11 +815,20 @@ class CSAOptimizer(
                     else None
                 ),
             )
-            for proposal in proposals
-        )
+            if context is None and random_state_snapshot is not None:
+                context = ProposalLocalSearchContext(
+                    random_state_snapshot=random_state_snapshot,
+                )
+            elif context is not None:
+                context = replace(
+                    context,
+                    random_state_snapshot=random_state_snapshot,
+                )
+            contexts.append(context)
+
         if all(context is None for context in contexts):
             return None
-        return contexts
+        return tuple(contexts)
 
     def propose_candidate(
         self,

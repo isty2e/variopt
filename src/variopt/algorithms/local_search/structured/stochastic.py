@@ -1,7 +1,7 @@
 """Sampled-neighborhood kernel for structured discrete local search."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic
 
 import numpy as np
@@ -18,7 +18,7 @@ from ....kernel import (
     ProposalLocalSearchContext,
 )
 from ....outcomes import EvaluationOutcome
-from ....randomness import RandomSeed, normalize_random_state
+from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import BoundaryT, DiscreteLeafSpace, StructuredCandidateT
 from .runtime.prepared import (
@@ -58,13 +58,19 @@ class StructuredStochasticNeighborhoodKernel(
     max_categorical_neighbors_per_leaf : int | None, default=None
         Optional cap on categorical alternatives sampled per leaf.
     random_state : RandomSeed, optional
-        Seed or random-state object used to sample neighborhoods.
+        Seed used to initialize the fallback neighborhood-sampling stream when
+        a proposal does not provide an episode-local random-state snapshot.
     """
 
     max_steps: int = 8
     max_neighbors_per_step: int = 8
     max_categorical_neighbors_per_leaf: int | None = None
     random_state: RandomSeed = 0
+    _random_state_snapshot: RandomStateSnapshot = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """Validate stochastic local-search budgets.
@@ -88,6 +94,12 @@ class StructuredStochasticNeighborhoodKernel(
         ):
             msg = "max_categorical_neighbors_per_leaf must be positive when provided"
             raise ValueError(msg)
+
+        object.__setattr__(
+            self,
+            "_random_state_snapshot",
+            RandomStateSnapshot.from_seed(self.random_state),
+        )
 
     def _evaluate_candidate(
         self,
@@ -168,6 +180,9 @@ class StructuredStochasticNeighborhoodKernel(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
+        episode_random_state = random_state
+        if context is not None and context.random_state_snapshot is not None:
+            episode_random_state = context.random_state_snapshot.materialize()
 
         current_outcome = self._evaluate_candidate(
             runtime=runtime,
@@ -193,7 +208,7 @@ class StructuredStochasticNeighborhoodKernel(
                 runtime=runtime,
                 current_candidate=current_candidate,
                 leaf_schedule=leaf_schedule,
-                random_state=random_state,
+                random_state=episode_random_state,
                 max_neighbors_per_step=self.max_neighbors_per_step,
                 max_categorical_neighbors_per_leaf=(
                     self.max_categorical_neighbors_per_leaf
@@ -298,14 +313,27 @@ class StructuredStochasticNeighborhoodKernel(
             query=query,
             runner=runner,
         )
-        random_state = normalize_random_state(self.random_state)
-        return tuple(
-            self._optimize_proposal(
-                runtime=runtime,
-                proposal_index=proposal_index,
-                proposal=proposal,
-                random_state=random_state,
-                reserved_count=len(query.proposals) - proposal_index - 1,
+
+        def optimize_batch(
+            random_state: np.random.RandomState,
+        ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
+            return tuple(
+                self._optimize_proposal(
+                    runtime=runtime,
+                    proposal_index=proposal_index,
+                    proposal=proposal,
+                    random_state=random_state,
+                    reserved_count=len(query.proposals) - proposal_index - 1,
+                )
+                for proposal_index, proposal in enumerate(query.proposals)
             )
-            for proposal_index, proposal in enumerate(query.proposals)
+
+        outcomes, next_random_state_snapshot = self._random_state_snapshot.advance(
+            optimize_batch,
         )
+        object.__setattr__(
+            self,
+            "_random_state_snapshot",
+            next_random_state_snapshot,
+        )
+        return outcomes

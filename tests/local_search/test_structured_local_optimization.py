@@ -39,6 +39,7 @@ from variopt.kernel import (
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
+from variopt.randomness import RandomStateSnapshot
 from variopt.spaces import (
     LeafPath,
     RecordCandidate,
@@ -79,6 +80,15 @@ def evaluate_query_directly(
         )
         for proposal in query.proposals
     )
+
+
+def record_and_evaluate_query_directly(
+    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
+    evaluated_candidates: list[CandidateRunnerT],
+) -> tuple[EvaluationOutcome[CandidateRunnerT], ...]:
+    """Record candidates crossing the evaluator boundary before evaluation."""
+    evaluated_candidates.extend(proposal.candidate for proposal in query.proposals)
+    return evaluate_query_directly(query)
 
 
 class IntegerObjective(Objective[int]):
@@ -824,6 +834,174 @@ class StructuredStochasticNeighborhoodKernelTests:
         assert outcome.refinement.refined_candidate == outcome.observation.candidate
         assert outcome.refinement.changed_leaf_paths == ((),)
 
+    def test_stochastic_kernel_advances_rng_stream_between_runs(self) -> None:
+        problem = Problem(
+            space=CategoricalSpace(tuple(range(10))),
+            objective=ImproveAwayFromZeroObjective(),
+        )
+        kernel = StructuredStochasticNeighborhoodKernel[int, int](
+            max_steps=1,
+            max_neighbors_per_step=1,
+            random_state=0,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=0, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+        )
+
+        first_evaluated_candidates: list[int] = []
+        second_evaluated_candidates: list[int] = []
+        _ = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                first_evaluated_candidates,
+            ),
+        )
+        _ = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                second_evaluated_candidates,
+            ),
+        )
+
+        assert tuple(first_evaluated_candidates) != tuple(second_evaluated_candidates)
+
+    def test_stochastic_kernel_uses_context_rng_snapshot_between_runs(self) -> None:
+        problem = Problem(
+            space=CategoricalSpace(tuple(range(10))),
+            objective=ImproveAwayFromZeroObjective(),
+        )
+        kernel = StructuredStochasticNeighborhoodKernel[int, int](
+            max_steps=1,
+            max_neighbors_per_step=1,
+            random_state=0,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=0, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+            proposal_kernel_hints=(
+                ProposalLocalSearchContext(
+                    random_state_snapshot=RandomStateSnapshot.from_seed(4),
+                ),
+            ),
+        )
+
+        first_evaluated_candidates: list[int] = []
+        second_evaluated_candidates: list[int] = []
+        _ = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                first_evaluated_candidates,
+            ),
+        )
+        _ = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                second_evaluated_candidates,
+            ),
+        )
+
+        assert tuple(first_evaluated_candidates) == tuple(second_evaluated_candidates)
+
+    def test_stochastic_kernel_uses_aligned_context_rng_snapshot_per_proposal(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=CategoricalSpace(tuple(range(10))),
+            objective=ImproveAwayFromZeroObjective(),
+        )
+        kernel = StructuredStochasticNeighborhoodKernel[int, int](
+            max_steps=1,
+            max_neighbors_per_step=1,
+            random_state=0,
+        )
+        first_snapshot = RandomStateSnapshot.from_seed(4)
+        second_snapshot = RandomStateSnapshot.from_seed(5)
+        forward_query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=0, proposal_id="p-1"),
+                Proposal(candidate=0, proposal_id="p-2"),
+            ),
+            execution_resources=self.make_execution_resources(),
+            proposal_kernel_hints=(
+                ProposalLocalSearchContext(random_state_snapshot=first_snapshot),
+                ProposalLocalSearchContext(random_state_snapshot=second_snapshot),
+            ),
+        )
+        reversed_query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=0, proposal_id="p-1"),
+                Proposal(candidate=0, proposal_id="p-2"),
+            ),
+            execution_resources=self.make_execution_resources(),
+            proposal_kernel_hints=(
+                ProposalLocalSearchContext(random_state_snapshot=second_snapshot),
+                ProposalLocalSearchContext(random_state_snapshot=first_snapshot),
+            ),
+        )
+
+        forward_candidates = tuple(
+            outcome.observation.candidate
+            for outcome in kernel.run(forward_query, evaluate_query_directly)
+        )
+        reversed_candidates = tuple(
+            outcome.observation.candidate
+            for outcome in kernel.run(reversed_query, evaluate_query_directly)
+        )
+
+        assert forward_candidates[0] != forward_candidates[1]
+        assert reversed_candidates == (
+            forward_candidates[1],
+            forward_candidates[0],
+        )
+
+    def test_stochastic_kernel_disabled_context_ignores_rng_snapshot(self) -> None:
+        problem = Problem(
+            space=CategoricalSpace(tuple(range(10))),
+            objective=ImproveAwayFromZeroObjective(),
+        )
+        kernel = StructuredStochasticNeighborhoodKernel[int, int](
+            max_steps=1,
+            max_neighbors_per_step=1,
+            random_state=0,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=0, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+            proposal_kernel_hints=(
+                ProposalLocalSearchContext(
+                    enabled=False,
+                    random_state_snapshot=RandomStateSnapshot.from_seed(4),
+                ),
+            ),
+        )
+        evaluated_candidates: list[int] = []
+
+        outcomes = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                evaluated_candidates,
+            ),
+        )
+
+        assert tuple(evaluated_candidates) == (0,)
+        assert outcomes[0].observation.candidate == 0
+        assert outcomes[0].refinement is None
+        assert outcomes[0].kernel_diagnostics is not None
+        assert outcomes[0].kernel_diagnostics.message == (
+            "local search disabled by run-method context"
+        )
+
     def test_stochastic_kernel_rejects_dynamic_topology_space(self) -> None:
         problem = Problem(
             space=ConditionalDiscretePairSpace(
@@ -892,7 +1070,7 @@ class StructuredVariableNeighborhoodKernelTests:
                 ),
             ),
         )
-        query = ProposalBatchQuery(
+        query: ProposalBatchQuery[Sequence[int], tuple[int, ...]] = ProposalBatchQuery(
             problem=problem,
             proposals=(Proposal(candidate=(0, 0, 0), proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),
@@ -950,6 +1128,47 @@ class StructuredVariableNeighborhoodKernelTests:
             "after exhausting the configured variable-neighborhood stages"
         )
         assert outcome.refinement is None
+
+    def test_variable_neighborhood_kernel_advances_rng_stream_between_runs(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=CategoricalSpace(tuple(range(10))),
+            objective=ImproveAwayFromZeroObjective(),
+        )
+        kernel = StructuredVariableNeighborhoodKernel[int, int](
+            max_steps=1,
+            stages=(
+                StructuredVariableNeighborhoodStage.sampled_leafwise_first_improvement(
+                    max_neighbors_per_step=1,
+                ),
+            ),
+            random_state=0,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=0, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+        )
+
+        first_evaluated_candidates: list[int] = []
+        second_evaluated_candidates: list[int] = []
+        _ = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                first_evaluated_candidates,
+            ),
+        )
+        _ = kernel.run(
+            query,
+            lambda query: record_and_evaluate_query_directly(
+                query,
+                second_evaluated_candidates,
+            ),
+        )
+
+        assert tuple(first_evaluated_candidates) != tuple(second_evaluated_candidates)
 
     def test_variable_neighborhood_kernel_rejects_invalid_stage_metadata(
         self,
@@ -1056,6 +1275,42 @@ class StructuredIteratedLocalSearchKernelTests:
             outcome.kernel_diagnostics.message
             == "max_kicks reached before iterated local-search termination"
         )
+
+    def test_iterated_local_search_kernel_advances_kick_rng_stream_between_runs(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=ArraySpace(IntegerSpace(0, 1), length=3),
+            objective=StrictKickAcceptanceObjective(),
+        )
+        kernel = StructuredIteratedLocalSearchKernel[
+            Sequence[int],
+            tuple[int, ...],
+        ](
+            max_steps=4,
+            max_kicks=1,
+            kick_policy=StructuredKickPolicy(kick_leaf_count=1),
+            random_state=4,
+        )
+        query: ProposalBatchQuery[Sequence[int], tuple[int, ...]] = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=(0, 0, 0), proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+        )
+        evaluated_candidate_runs: list[tuple[tuple[int, ...], ...]] = []
+
+        for _ in range(3):
+            evaluated_candidates: list[tuple[int, ...]] = []
+            _ = kernel.run(
+                query,
+                lambda query: record_and_evaluate_query_directly(
+                    query,
+                    evaluated_candidates,
+                ),
+            )
+            evaluated_candidate_runs.append(tuple(evaluated_candidates))
+
+        assert len(frozenset(evaluated_candidate_runs)) > 1
 
     def test_iterated_local_search_kernel_rejects_invalid_kick_metadata(self) -> None:
         with pytest.raises(ValueError, match="max_kicks must be positive"):

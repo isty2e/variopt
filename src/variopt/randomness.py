@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import blake2b
 from typing import Protocol, TypeAlias, TypeVar, cast, overload
 
 import numpy as np
@@ -388,6 +389,60 @@ class RandomStateSnapshot:
             ),
             next_snapshot,
         )
+
+
+def derive_random_state_snapshot(
+    snapshot: RandomStateSnapshot,
+    *,
+    namespace: str,
+    keys: Sequence[str],
+) -> RandomStateSnapshot:
+    """Derive a deterministic child random-state snapshot from stable keys.
+
+    Parameters
+    ----------
+    snapshot : RandomStateSnapshot
+        Parent random-state snapshot that anchors the derived stream.
+    namespace : str
+        Domain separator for the child stream family.
+    keys : Sequence[str]
+        Stable key components that identify the child stream.
+
+    Returns
+    -------
+    RandomStateSnapshot
+        Child snapshot initialized from a deterministic seed.
+
+    Raises
+    ------
+    ValueError
+        Raised when ``namespace`` is empty.
+    """
+    if namespace == "":
+        msg = "namespace must not be empty"
+        raise ValueError(msg)
+
+    hasher = blake2b(digest_size=8)
+
+    def update_text(value: str) -> None:
+        encoded_value = value.encode("utf-8")
+        hasher.update(len(encoded_value).to_bytes(8, "big"))
+        hasher.update(encoded_value)
+
+    update_text(namespace)
+    update_text(snapshot.algorithm)
+    hasher.update(len(snapshot.key_bytes).to_bytes(8, "big"))
+    hasher.update(snapshot.key_bytes)
+    hasher.update(snapshot.position.to_bytes(8, "big"))
+    hasher.update(snapshot.has_gaussian.to_bytes(1, "big"))
+    update_text(repr(snapshot.cached_gaussian))
+    for key in keys:
+        update_text(key)
+
+    seed_limit = int(np.iinfo(np.int32).max)
+    seed = int.from_bytes(hasher.digest(), "big") % seed_limit
+    return RandomStateSnapshot.from_seed(seed)
+
 
 @overload
 def normalize_random_state(random_state: None = None) -> np.random.RandomState:

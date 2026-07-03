@@ -1,7 +1,7 @@
 """Variable-neighborhood kernel for structured discrete local search."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic
 
 import numpy as np
@@ -18,7 +18,7 @@ from ....kernel import (
     ProposalLocalSearchContext,
 )
 from ....outcomes import EvaluationOutcome
-from ....randomness import RandomSeed, normalize_random_state
+from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import (
     BoundaryT,
@@ -61,7 +61,8 @@ class StructuredVariableNeighborhoodKernel(
     stages : tuple[StructuredVariableNeighborhoodStage, ...], optional
         Ordered neighborhood stages attempted during each episode.
     random_state : RandomSeed, optional
-        Seed or random-state object used by stochastic stages.
+        Seed used to initialize the fallback stochastic-stage stream when a
+        proposal does not provide an episode-local random-state snapshot.
 
     Notes
     -----
@@ -79,6 +80,11 @@ class StructuredVariableNeighborhoodKernel(
         ),
     )
     random_state: RandomSeed = 0
+    _random_state_snapshot: RandomStateSnapshot = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """Validate variable-neighborhood episode metadata.
@@ -95,6 +101,12 @@ class StructuredVariableNeighborhoodKernel(
         if len(self.stages) == 0:
             msg = "stages must contain at least one neighborhood stage"
             raise ValueError(msg)
+
+        object.__setattr__(
+            self,
+            "_random_state_snapshot",
+            RandomStateSnapshot.from_seed(self.random_state),
+        )
 
     def _evaluate_candidate(
         self,
@@ -174,6 +186,9 @@ class StructuredVariableNeighborhoodKernel(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
+        episode_random_state = random_state
+        if context is not None and context.random_state_snapshot is not None:
+            episode_random_state = context.random_state_snapshot.materialize()
 
         current_outcome = self._evaluate_candidate(
             runtime=runtime,
@@ -201,7 +216,7 @@ class StructuredVariableNeighborhoodKernel(
                 current_score=current_score,
                 leaf_schedule=leaf_schedule,
                 proposal_evaluation_spec=proposal_evaluation_spec,
-                random_state=random_state,
+                random_state=episode_random_state,
                 reserved_count=reserved_count,
             )
             evaluation_count += stage_attempt.evaluation_count
@@ -309,14 +324,27 @@ class StructuredVariableNeighborhoodKernel(
             query=query,
             runner=runner,
         )
-        random_state = normalize_random_state(self.random_state)
-        return tuple(
-            self._optimize_proposal(
-                runtime=runtime,
-                proposal_index=proposal_index,
-                proposal=proposal,
-                random_state=random_state,
-                reserved_count=len(query.proposals) - proposal_index - 1,
+
+        def optimize_batch(
+            random_state: np.random.RandomState,
+        ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
+            return tuple(
+                self._optimize_proposal(
+                    runtime=runtime,
+                    proposal_index=proposal_index,
+                    proposal=proposal,
+                    random_state=random_state,
+                    reserved_count=len(query.proposals) - proposal_index - 1,
+                )
+                for proposal_index, proposal in enumerate(query.proposals)
             )
-            for proposal_index, proposal in enumerate(query.proposals)
+
+        outcomes, next_random_state_snapshot = self._random_state_snapshot.advance(
+            optimize_batch,
         )
+        object.__setattr__(
+            self,
+            "_random_state_snapshot",
+            next_random_state_snapshot,
+        )
+        return outcomes

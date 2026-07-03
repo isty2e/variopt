@@ -10,6 +10,7 @@ from tests import conformance as contract_cases
 from variopt import SearchSpace, VariationOperator
 from variopt.randomness import (
     RandomStateSnapshot,
+    derive_random_state_snapshot,
     normalize_random_state,
     random_state_randint,
 )
@@ -153,3 +154,71 @@ class RandomnessContractTests:
 
         assert seeds == ()
         assert next_snapshot == snapshot
+
+    def test_derived_random_state_snapshot_is_stable_for_same_keys(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7)
+
+        first_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.local_search",
+            keys=("proposal-1",),
+        )
+        second_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.local_search",
+            keys=("proposal-1",),
+        )
+
+        assert first_child == second_child
+
+    def test_derived_random_state_snapshot_separates_namespaces_and_keys(
+        self,
+    ) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7)
+
+        baseline_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.local_search",
+            keys=("proposal-1",),
+        )
+        other_namespace_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.other",
+            keys=("proposal-1",),
+        )
+        other_key_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.local_search",
+            keys=("proposal-2",),
+        )
+
+        assert baseline_child != other_namespace_child
+        assert baseline_child != other_key_child
+
+    def test_derived_random_state_snapshot_separates_ambiguous_key_boundaries(
+        self,
+    ) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7)
+
+        first_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.local_search",
+            keys=("ab", "c"),
+        )
+        second_child = derive_random_state_snapshot(
+            snapshot,
+            namespace="test.local_search",
+            keys=("a", "bc"),
+        )
+
+        assert first_child != second_child
+
+    def test_derived_random_state_snapshot_rejects_empty_namespace(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7)
+
+        with pytest.raises(ValueError, match="namespace"):
+            _ = derive_random_state_snapshot(
+                snapshot,
+                namespace="",
+                keys=("proposal-1",),
+            )

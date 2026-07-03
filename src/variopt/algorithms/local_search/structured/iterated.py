@@ -1,7 +1,7 @@
 """Iterated local-search kernel for structured discrete spaces."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic
 
 import numpy as np
@@ -18,7 +18,7 @@ from ....kernel import (
     ProposalLocalSearchContext,
 )
 from ....outcomes import EvaluationOutcome
-from ....randomness import RandomSeed, normalize_random_state
+from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import (
     BoundaryT,
@@ -67,7 +67,8 @@ class StructuredIteratedLocalSearchKernel(
     kick_policy : StructuredKickPolicy, optional
         Policy that determines how kicks perturb the incumbent.
     random_state : RandomSeed, optional
-        Seed or random-state object used to sample kicks.
+        Seed used to initialize the fallback kick-sampling stream when a
+        proposal does not provide an episode-local random-state snapshot.
 
     Notes
     -----
@@ -80,6 +81,11 @@ class StructuredIteratedLocalSearchKernel(
     max_kicks: int = 2
     kick_policy: StructuredKickPolicy = StructuredKickPolicy()
     random_state: RandomSeed = 0
+    _random_state_snapshot: RandomStateSnapshot = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """Validate iterated local-search budgets.
@@ -96,6 +102,12 @@ class StructuredIteratedLocalSearchKernel(
         if self.max_kicks <= 0:
             msg = "max_kicks must be positive"
             raise ValueError(msg)
+
+        object.__setattr__(
+            self,
+            "_random_state_snapshot",
+            RandomStateSnapshot.from_seed(self.random_state),
+        )
 
     def _evaluate_original_proposal(
         self,
@@ -162,6 +174,9 @@ class StructuredIteratedLocalSearchKernel(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
+        episode_random_state = random_state
+        if context is not None and context.random_state_snapshot is not None:
+            episode_random_state = context.random_state_snapshot.materialize()
 
         episode_max_steps = self._episode_max_steps(runtime=runtime, context=context)
         leaf_schedule = self._ordered_leaf_schedule(
@@ -198,7 +213,7 @@ class StructuredIteratedLocalSearchKernel(
                 candidate=incumbent_candidate,
                 leaf_schedule=leaf_schedule,
                 kick_policy=self.kick_policy,
-                random_state=random_state,
+                random_state=episode_random_state,
             )
             if kicked_candidate is None:
                 terminal_message = (
@@ -297,14 +312,27 @@ class StructuredIteratedLocalSearchKernel(
             query=query,
             runner=runner,
         )
-        random_state = normalize_random_state(self.random_state)
-        return tuple(
-            self._optimize_proposal(
-                runtime=runtime,
-                proposal_index=proposal_index,
-                proposal=proposal,
-                random_state=random_state,
-                reserved_count=len(query.proposals) - proposal_index - 1,
+
+        def optimize_batch(
+            random_state: np.random.RandomState,
+        ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
+            return tuple(
+                self._optimize_proposal(
+                    runtime=runtime,
+                    proposal_index=proposal_index,
+                    proposal=proposal,
+                    random_state=random_state,
+                    reserved_count=len(query.proposals) - proposal_index - 1,
+                )
+                for proposal_index, proposal in enumerate(query.proposals)
             )
-            for proposal_index, proposal in enumerate(query.proposals)
+
+        outcomes, next_random_state_snapshot = self._random_state_snapshot.advance(
+            optimize_batch,
         )
+        object.__setattr__(
+            self,
+            "_random_state_snapshot",
+            next_random_state_snapshot,
+        )
+        return outcomes
