@@ -417,12 +417,31 @@ class StructuredSpaceDiversityMetricTests:
         right = space.normalize((3, "b"))
 
         geometry = compile_structured_geometry(space)
+        metric = StructuredSpaceDiversityMetric(space=space)
 
         assert geometry is not None
+        assert metric.geometry == geometry
+        assert metric.part_values_geometry is None
         assert distance_parts(space, left, right) == compiled_parts
         assert approx_equal(
             math.sqrt(0.125),
-            StructuredSpaceDiversityMetric(space=space).distance(left, right),
+            metric.distance(left, right),
+        )
+
+    def test_metric_caches_builtin_raw_distance_part_geometry(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 5),
+            mode=CategoricalSpace(("a", "b")),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        assert metric.geometry is not None
+        assert metric.part_values_geometry is metric.geometry
+        left = space.normalize({"depth": 1, "mode": "a"})
+        right = space.normalize({"depth": 3, "mode": "b"})
+        assert approx_equal(
+            metric.distance(left, right),
+            math.sqrt((0.25 + 1.0) / 2.0),
         )
 
     def test_generic_geometry_returns_distance_parts_for_active_topology_mismatch(self) -> None:
