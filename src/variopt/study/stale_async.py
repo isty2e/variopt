@@ -1,6 +1,6 @@
 """Stale-async study helpers."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Generic, Protocol
 
@@ -147,6 +147,21 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
     def cancel(self) -> None:
         """Cancel the underlying evaluator-owned batch session."""
         self.batch_session.cancel()
+
+
+def _cancel_active_stale_async_sessions(
+    active_sessions: Sequence[
+        StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
+    ],
+) -> None:
+    """Cancel all active stale-async sessions while preserving the run failure."""
+    for active_session in active_sessions:
+        try:
+            active_session.cancel()
+        except Exception:
+            # Cancellation is best-effort; do not let one backend cleanup failure
+            # leak later sessions or mask the original run failure.
+            continue
 
 
 def open_stale_async_batch_session(
@@ -386,13 +401,7 @@ def run_stale_async(
             if len(active_sessions) == 0:
                 break
 
-            next_active_sessions: list[
-                StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
-            ] = []
-            refill_sessions: list[
-                StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
-            ] = []
-            for active_session in active_sessions:
+            for active_session in tuple(active_sessions):
                 completed_groups = active_session.poll_completed_groups()
                 for completed_group in completed_groups:
                     group_records = tuple(outcome.record for outcome in completed_group)
@@ -464,15 +473,15 @@ def run_stale_async(
                                 evaluation_budget=evaluation_budget,
                             )
                         )
-                        refill_sessions.append(refill_session)
+                        active_sessions.append(refill_session)
 
-                if not active_session.is_completed:
-                    next_active_sessions.append(active_session)
-
-            active_sessions = next_active_sessions + refill_sessions
+            active_sessions = [
+                active_session
+                for active_session in active_sessions
+                if not active_session.is_completed
+            ]
     except BaseException:
-        for active_session in active_sessions:
-            active_session.cancel()
+        _cancel_active_stale_async_sessions(active_sessions)
         raise
 
     if stop_at_checkpoint_boundary and not study.run_method.is_checkpoint_safe_state(

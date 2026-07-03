@@ -1,6 +1,10 @@
 """Tests for stale-async Study execution."""
 
+from collections.abc import Sequence
+from typing import final
+
 import pytest
+from typing_extensions import override
 
 from tests.study_support import (
     OutOfOrderAsyncEvaluator,
@@ -14,9 +18,63 @@ from tests.study_support import (
     SpaceOwnedEqualitySpace,
     SquareObjective,
 )
-from variopt import IntegerSpace, Problem, Proposal, Study
+from variopt import (
+    EvaluationOutcome,
+    IntegerSpace,
+    Observation,
+    Problem,
+    Proposal,
+    Study,
+)
 from variopt.artifacts import Trace, TraceEvent
+from variopt.evaluators import (
+    BatchExecutionFailed,
+    CompletionGroup,
+    EvaluationBatchHandle,
+)
 from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
+
+
+class FailingSecondBatchAsyncEvaluator(OutOfOrderAsyncEvaluator):
+    """Async evaluator that fails a later active batch after a refill opens."""
+
+    cancelled_batch_ids: tuple[str, ...]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled_batch_ids = ()
+
+    @override
+    def poll(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[CompletionGroup[EvaluationOutcome[int, Observation[int]]]]:
+        if handle.batch_id == "batch-1":
+            raise BatchExecutionFailed(
+                handle=handle,
+                kind="infrastructure",
+                cause=RuntimeError("forced mid-sweep failure"),
+            )
+
+        return super().poll(handle)
+
+    @override
+    def cancel(self, handle: EvaluationBatchHandle) -> None:
+        self.cancelled_batch_ids += (handle.batch_id,)
+        super().cancel(handle)
+
+
+@final
+class CancelFailingSecondBatchAsyncEvaluator(FailingSecondBatchAsyncEvaluator):
+    """Async evaluator whose first cancellation fails during cleanup."""
+
+    @override
+    def cancel(self, handle: EvaluationBatchHandle) -> None:
+        self.cancelled_batch_ids += (handle.batch_id,)
+        if handle.batch_id == "batch-0":
+            raise RuntimeError("forced cancellation failure")
+
+        OutOfOrderAsyncEvaluator.cancel(self, handle)
 
 
 class StudyStaleAsyncTests:
@@ -104,6 +162,56 @@ class StudyStaleAsyncTests:
             "p-1",
             "spawn-p-2",
         )
+
+    def test_run_stale_async_cancels_refill_opened_before_mid_sweep_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = FailingSecondBatchAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        with pytest.raises(BatchExecutionFailed, match="batch-1"):
+            _ = study.run(
+                max_evaluations=4,
+                batch_size=2,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            )
+
+        assert "batch-2" in evaluator.cancelled_batch_ids
+
+    def test_run_stale_async_cancels_remaining_sessions_after_cancel_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = CancelFailingSecondBatchAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        with pytest.raises(BatchExecutionFailed, match="batch-1"):
+            _ = study.run(
+                max_evaluations=4,
+                batch_size=2,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            )
+
+        assert evaluator.cancelled_batch_ids == ("batch-0", "batch-1", "batch-2")
 
     def test_run_stale_async_buffers_trace_events_without_trace_append(
         self,
