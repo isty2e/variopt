@@ -67,10 +67,22 @@ class RealSpaceGeometry:
         ValueError
             If either value lies outside the declared bounds.
         """
-        return StructuredDistanceParts(
-            overlap_squared_distance=self.squared_distance(left, right),
-            shared_leaf_count=1,
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
         )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one real leaf."""
+        return (self.squared_distance(left, right), 1, 0)
 
     def squared_distance(
         self,
@@ -144,10 +156,22 @@ class IntegerSpaceGeometry:
         ValueError
             If either value lies outside the declared bounds.
         """
-        return StructuredDistanceParts(
-            overlap_squared_distance=self.squared_distance(left, right),
-            shared_leaf_count=1,
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
         )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one integer leaf."""
+        return (self.squared_distance(left, right), 1, 0)
 
     def squared_distance(
         self,
@@ -253,24 +277,54 @@ class CategoricalSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> float:
         """Return the match-or-mismatch squared distance for one categorical leaf."""
+        choice_keys = self.choice_keys
+        equal_choice_values = self.equal_choice_values
+        if choice_keys is not None and equal_choice_values is not None:
+            left_key = categorical_choice_key(left)
+            right_key = categorical_choice_key(right)
+            if left_key is not None and right_key is not None:
+                if left_key not in choice_keys:
+                    if left_key[1] in equal_choice_values:
+                        msg = "categorical candidate must use the declared choice type"
+                        raise TypeError(msg)
+                    msg = "categorical candidate is not in the declared choices"
+                    raise ValueError(msg)
+                if right_key not in choice_keys:
+                    if right_key[1] in equal_choice_values:
+                        msg = "categorical candidate must use the declared choice type"
+                        raise TypeError(msg)
+                    msg = "categorical candidate is not in the declared choices"
+                    raise ValueError(msg)
+                if left_key == right_key:
+                    return 0.0
+                return 1.0
+
         require_geometry_categorical_choice(
             space=self.space,
-            choice_keys=self.choice_keys,
-            equal_choice_values=self.equal_choice_values,
+            choice_keys=choice_keys,
+            equal_choice_values=equal_choice_values,
             value=left,
         )
         require_geometry_categorical_choice(
             space=self.space,
-            choice_keys=self.choice_keys,
-            equal_choice_values=self.equal_choice_values,
+            choice_keys=choice_keys,
+            equal_choice_values=equal_choice_values,
             value=right,
         )
         if left == right:
             return 0.0
         return 1.0
 
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one categorical leaf."""
+        return (self.squared_distance(left, right), 1, 0)
 
-def categorical_choice_key(value: SpaceScalarValue) -> CategoricalChoiceKey | None:
+
+def categorical_choice_key(value: SpaceCandidateValue) -> CategoricalChoiceKey | None:
     """Return a hashable exact-type choice key, if ``value`` supports hashing."""
     if type(value) is bool:
         return (bool, value)

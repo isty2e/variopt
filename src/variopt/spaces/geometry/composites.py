@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from math import log
+from typing import TypeAlias, TypeGuard
 
 from ..scalar import IntegerSpace, RealSpace
 from ..types import SpaceCandidateValue
@@ -12,6 +13,7 @@ from .leaf import (
     require_record_candidate,
 )
 from .parts import StructuredDistanceParts
+from .permutation import PermutationSpaceGeometry
 from .scalar import CategoricalSpaceGeometry, IntegerSpaceGeometry, RealSpaceGeometry
 
 _SCALAR_LEAF_GEOMETRY_TYPES = (
@@ -62,6 +64,21 @@ class TupleSpaceGeometry:
         ValueError
             If a tuple length does not match ``arity``.
         """
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
+        )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one tuple candidate."""
         left_tuple = require_candidate_tuple(
             value=left,
             message="tuple-space fast diversity path requires canonical tuple candidates",
@@ -78,25 +95,33 @@ class TupleSpaceGeometry:
         shared_leaf_count = 0
         topology_mismatch_leaf_count = 0
         for index, child_geometry in enumerate(self.child_geometries):
+            left_value = left_tuple[index]
+            right_value = right_tuple[index]
             if isinstance(child_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
                 squared_distance += child_geometry.squared_distance(
-                    left_tuple[index],
-                    right_tuple[index],
+                    left_value,
+                    right_value,
                 )
                 shared_leaf_count += 1
                 continue
+            if geometry_has_distance_part_values(child_geometry):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = child_geometry.distance_part_values(left_value, right_value)
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+                continue
             child_parts = child_geometry.distance_parts(
-                left_tuple[index],
-                right_tuple[index],
+                left_value,
+                right_value,
             )
             squared_distance += child_parts.overlap_squared_distance
             shared_leaf_count += child_parts.shared_leaf_count
             topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
-        return StructuredDistanceParts(
-            overlap_squared_distance=squared_distance,
-            shared_leaf_count=shared_leaf_count,
-            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
-        )
+        return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +162,21 @@ class RecordSpaceGeometry:
         ValueError
             If the record keys do not match the declared field order.
         """
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
+        )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one record candidate."""
         left_record = require_record_candidate(
             value=left,
             message="record-space fast diversity path requires canonical record candidates",
@@ -170,6 +210,16 @@ class RecordSpaceGeometry:
                 )
                 shared_leaf_count += 1
                 continue
+            if geometry_has_distance_part_values(child_geometry):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = child_geometry.distance_part_values(left_value, right_value)
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+                continue
             child_parts = child_geometry.distance_parts(
                 left_value,
                 right_value,
@@ -177,11 +227,7 @@ class RecordSpaceGeometry:
             squared_distance += child_parts.overlap_squared_distance
             shared_leaf_count += child_parts.shared_leaf_count
             topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
-        return StructuredDistanceParts(
-            overlap_squared_distance=squared_distance,
-            shared_leaf_count=shared_leaf_count,
-            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
-        )
+        return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,6 +271,21 @@ class ArraySpaceGeometry:
         ValueError
             If an array length does not match ``length``.
         """
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
+        )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one homogeneous array."""
         left_tuple = require_candidate_tuple(
             value=left,
             message="array-space fast diversity path requires canonical tuple candidates",
@@ -248,10 +309,22 @@ class ArraySpaceGeometry:
                     right_tuple[index],
                 )
                 shared_leaf_count += 1
-            return StructuredDistanceParts(
-                overlap_squared_distance=squared_distance,
-                shared_leaf_count=shared_leaf_count,
-            )
+            return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
+
+        if geometry_has_distance_part_values(element_geometry):
+            for index in range(self.length):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = element_geometry.distance_part_values(
+                    left_tuple[index],
+                    right_tuple[index],
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+            return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
 
         for index in range(self.length):
             child_parts = element_geometry.distance_parts(
@@ -261,11 +334,7 @@ class ArraySpaceGeometry:
             squared_distance += child_parts.overlap_squared_distance
             shared_leaf_count += child_parts.shared_leaf_count
             topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
-        return StructuredDistanceParts(
-            overlap_squared_distance=squared_distance,
-            shared_leaf_count=shared_leaf_count,
-            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
-        )
+        return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +389,21 @@ class BinaryArraySpaceGeometry:
             If an array length does not match ``length`` or a value is outside
             ``{0, 1}``.
         """
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
+        )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one binary integer array."""
         left_tuple = require_candidate_tuple(
             value=left,
             message="binary-array diversity requires canonical tuple candidates",
@@ -344,10 +428,7 @@ class BinaryArraySpaceGeometry:
                 raise ValueError(msg)
             if left_value != right_value:
                 mismatch_count += 1.0
-        return StructuredDistanceParts(
-            overlap_squared_distance=mismatch_count,
-            shared_leaf_count=self.length,
-        )
+        return (mismatch_count, self.length, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -392,6 +473,21 @@ class IntegerArraySpaceGeometry:
             If an array length does not match ``length`` or a value is outside
             the declared integer bounds.
         """
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
+        )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one integer array."""
         left_tuple = require_candidate_tuple(
             value=left,
             message="integer-array diversity requires canonical tuple candidates",
@@ -420,10 +516,7 @@ class IntegerArraySpaceGeometry:
                 ):
                     msg = "integer candidate is outside the declared bounds"
                     raise ValueError(msg)
-            return StructuredDistanceParts(
-                overlap_squared_distance=0.0,
-                shared_leaf_count=self.length,
-            )
+            return (0.0, self.length, 0)
 
         squared_distance = 0.0
         if element_space.scale == "log":
@@ -444,10 +537,7 @@ class IntegerArraySpaceGeometry:
                     raise ValueError(msg)
                 leaf_distance = abs(log(float(left_value)) - log(float(right_value))) / coordinate_span
                 squared_distance += leaf_distance * leaf_distance
-            return StructuredDistanceParts(
-                overlap_squared_distance=squared_distance,
-                shared_leaf_count=self.length,
-            )
+            return (squared_distance, self.length, 0)
 
         coordinate_span = float(element_space.high - element_space.low)
         for index in range(self.length):
@@ -466,10 +556,7 @@ class IntegerArraySpaceGeometry:
                 raise ValueError(msg)
             leaf_distance = abs(float(left_value - right_value)) / coordinate_span
             squared_distance += leaf_distance * leaf_distance
-        return StructuredDistanceParts(
-            overlap_squared_distance=squared_distance,
-            shared_leaf_count=self.length,
-        )
+        return (squared_distance, self.length, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,6 +601,21 @@ class RealArraySpaceGeometry:
             If an array length does not match ``length`` or a value is outside
             the declared real bounds.
         """
+        overlap_squared_distance, shared_leaf_count, topology_mismatch_leaf_count = (
+            self.distance_part_values(left, right)
+        )
+        return StructuredDistanceParts(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values for one real array."""
         left_tuple = require_candidate_tuple(
             value=left,
             message="real-array diversity requires canonical tuple candidates",
@@ -545,10 +647,7 @@ class RealArraySpaceGeometry:
                 ):
                     msg = "real candidate is outside the declared bounds"
                     raise ValueError(msg)
-            return StructuredDistanceParts(
-                overlap_squared_distance=0.0,
-                shared_leaf_count=self.length,
-            )
+            return (0.0, self.length, 0)
 
         squared_distance = 0.0
         if element_space.scale == "log":
@@ -572,10 +671,7 @@ class RealArraySpaceGeometry:
                     raise ValueError(msg)
                 leaf_distance = abs(log(left_value) - log(right_value)) / coordinate_span
                 squared_distance += leaf_distance * leaf_distance
-            return StructuredDistanceParts(
-                overlap_squared_distance=squared_distance,
-                shared_leaf_count=self.length,
-            )
+            return (squared_distance, self.length, 0)
 
         coordinate_span = element_space.high - element_space.low
         for index in range(self.length):
@@ -597,10 +693,41 @@ class RealArraySpaceGeometry:
                 raise ValueError(msg)
             leaf_distance = abs(left_value - right_value) / coordinate_span
             squared_distance += leaf_distance * leaf_distance
-        return StructuredDistanceParts(
-            overlap_squared_distance=squared_distance,
-            shared_leaf_count=self.length,
-        )
+        return (squared_distance, self.length, 0)
+
+
+DistancePartValuesGeometry: TypeAlias = (
+    CategoricalSpaceGeometry
+    | IntegerSpaceGeometry
+    | RealSpaceGeometry
+    | TupleSpaceGeometry
+    | RecordSpaceGeometry
+    | ArraySpaceGeometry
+    | BinaryArraySpaceGeometry
+    | IntegerArraySpaceGeometry
+    | RealArraySpaceGeometry
+    | PermutationSpaceGeometry
+)
+
+_DISTANCE_PART_VALUES_GEOMETRY_TYPES = (
+    CategoricalSpaceGeometry,
+    IntegerSpaceGeometry,
+    RealSpaceGeometry,
+    TupleSpaceGeometry,
+    RecordSpaceGeometry,
+    ArraySpaceGeometry,
+    BinaryArraySpaceGeometry,
+    IntegerArraySpaceGeometry,
+    RealArraySpaceGeometry,
+    PermutationSpaceGeometry,
+)
+
+
+def geometry_has_distance_part_values(
+    geometry: StructuredSpaceGeometry,
+) -> TypeGuard[DistancePartValuesGeometry]:
+    """Return whether a concrete built-in geometry exposes raw part values."""
+    return isinstance(geometry, _DISTANCE_PART_VALUES_GEOMETRY_TYPES)
 
 
 def collect_child_geometries(

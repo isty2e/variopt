@@ -14,8 +14,8 @@ from ..spaces.geometry.compile import (
     compile_structured_geometry,
     generic_distance_parts,
 )
+from ..spaces.geometry.composites import geometry_has_distance_part_values
 from ..spaces.geometry.contracts import StructuredSpaceGeometry
-from ..spaces.geometry.parts import StructuredDistanceParts
 from ..spaces.types import SpaceCandidateValue
 from .base import DiversityMetric
 
@@ -69,26 +69,46 @@ class StructuredSpaceDiversityMetric(FrozenGenericSlotsCompat,
                 left,
                 right,
             )
-        else:
-            parts = self.geometry.distance_parts(left, right)
-        if parts.total_leaf_count == 0:
-            msg = "structured diversity metric requires at least one leaf path"
-            raise ValueError(msg)
-        return require_valid_distance(
-            math.sqrt(
-                _collapse_distance_parts_to_full_penalty_squared_distance(
-                    parts,
-                )
-                / parts.total_leaf_count,
-            ),
+            return _distance_from_part_values(
+                overlap_squared_distance=parts.overlap_squared_distance,
+                shared_leaf_count=parts.shared_leaf_count,
+                topology_mismatch_leaf_count=parts.topology_mismatch_leaf_count,
+            )
+        if geometry_has_distance_part_values(self.geometry):
+            (
+                overlap_squared_distance,
+                shared_leaf_count,
+                topology_mismatch_leaf_count,
+            ) = self.geometry.distance_part_values(left, right)
+            return _distance_from_part_values(
+                overlap_squared_distance=overlap_squared_distance,
+                shared_leaf_count=shared_leaf_count,
+                topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+            )
+        parts = self.geometry.distance_parts(left, right)
+        return _distance_from_part_values(
+            overlap_squared_distance=parts.overlap_squared_distance,
+            shared_leaf_count=parts.shared_leaf_count,
+            topology_mismatch_leaf_count=parts.topology_mismatch_leaf_count,
         )
 
 
-def _collapse_distance_parts_to_full_penalty_squared_distance(
-    distance_parts: StructuredDistanceParts,
+def _distance_from_part_values(
+    *,
+    overlap_squared_distance: float,
+    shared_leaf_count: int,
+    topology_mismatch_leaf_count: int,
 ) -> float:
-    """Collapse structured distance parts under the current RMS penalty policy."""
+    """Return the RMS structured distance from raw distance-part values."""
+    total_leaf_count = shared_leaf_count + topology_mismatch_leaf_count
+    if total_leaf_count == 0:
+        msg = "structured diversity metric requires at least one leaf path"
+        raise ValueError(msg)
     return require_valid_distance(
-        distance_parts.overlap_squared_distance
-        + float(distance_parts.topology_mismatch_leaf_count),
+        math.sqrt(
+            require_valid_distance(
+                overlap_squared_distance + float(topology_mismatch_leaf_count)
+            )
+            / total_leaf_count,
+        ),
     )
