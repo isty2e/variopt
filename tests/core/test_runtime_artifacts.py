@@ -1168,6 +1168,78 @@ class RuntimeArtifactsTests:
         assert surface.records == report.records
         assert surface.refinements == (refinement, None)
 
+    def test_nondominated_run_surface_replace_preserves_prevalidated_frontier(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            objective_values=(1.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        surface = NondominatedRunSurface[int].from_records((record,))
+
+        def reject_frontier_collection(
+            records: tuple[ObjectiveVectorRecord[int], ...],
+        ) -> tuple[ObjectiveVectorRecord[int], ...]:
+            _ = records
+            raise AssertionError("frontier should already be validated")
+
+        monkeypatch.setattr(
+            "variopt.artifacts.terminal.collect_nondominated_records",
+            reject_frontier_collection,
+        )
+
+        updated_surface = replace(surface, evaluation_count=2)
+
+        assert updated_surface.evaluation_count == 2
+        assert updated_surface.nondominated_records == (record,)
+
+    def test_nondominated_run_surface_replace_revalidates_changed_records(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            objective_values=(1.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        replacement_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            objective_values=(2.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        surface = NondominatedRunSurface[int].from_records((record,))
+        collection_calls: list[tuple[ObjectiveVectorRecord[int], ...]] = []
+
+        def collect_empty_frontier(
+            records: tuple[ObjectiveVectorRecord[int], ...],
+        ) -> tuple[ObjectiveVectorRecord[int], ...]:
+            collection_calls.append(records)
+            return ()
+
+        monkeypatch.setattr(
+            "variopt.artifacts.terminal.collect_nondominated_records",
+            collect_empty_frontier,
+        )
+
+        with pytest.raises(ValueError, match="stable nondominated frontier"):
+            _ = replace(surface, records=(replacement_record,))
+
+        assert collection_calls == [(replacement_record,)]
+
     def test_nondominated_run_surface_rejects_unaligned_refinements(self) -> None:
         record = ObjectiveVectorRecord.from_objective_values(
             proposal=Proposal(candidate=4, proposal_id="p-1"),

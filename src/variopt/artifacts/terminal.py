@@ -570,13 +570,14 @@ def dominates_objective_scores(
         msg = "objective score vectors must have the same dimension"
         raise ValueError(msg)
 
-    return all(
-        left_score <= right_score
-        for left_score, right_score in zip(left_scores, right_scores, strict=True)
-    ) and any(
-        left_score < right_score
-        for left_score, right_score in zip(left_scores, right_scores, strict=True)
-    )
+    strictly_better = False
+    for left_score, right_score in zip(left_scores, right_scores, strict=True):
+        if left_score > right_score:
+            return False
+        if left_score < right_score:
+            strictly_better = True
+
+    return strictly_better
 
 
 def collect_nondominated_records(
@@ -653,6 +654,20 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         compare=False,
         kw_only=True,
     )
+    _validated_frontier_source_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = (
+        field(
+            default=(),
+            repr=False,
+            compare=False,
+            kw_only=True,
+        )
+    )
+    _validated_frontier_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
 
     def __post_init__(
         self,
@@ -679,12 +694,13 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "all objective score vectors must share one dimension"
             raise ValueError(msg)
 
-        if any(record not in self.records for record in self.nondominated_records):
-            msg = "nondominated_records must come from records"
-            raise ValueError(msg)
-
-        expected_frontier = collect_nondominated_records(self.records)
-        if self.nondominated_records != expected_frontier:
+        frontier_is_prevalidated = (
+            self.records is self._validated_frontier_source_records
+            and self.nondominated_records is self._validated_frontier_records
+        )
+        if not frontier_is_prevalidated and (
+            self.nondominated_records != collect_nondominated_records(self.records)
+        ):
             msg = (
                 "nondominated_records must equal the stable nondominated frontier "
                 "of records"
@@ -753,13 +769,16 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
+        nondominated_records = collect_nondominated_records(record_tuple)
         return cls(
-            nondominated_records=collect_nondominated_records(record_tuple),
+            nondominated_records=nondominated_records,
             records=record_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
             candidate_equal=candidate_equal,
+            _validated_frontier_source_records=record_tuple,
+            _validated_frontier_records=nondominated_records,
         )
 
     @classmethod
@@ -823,6 +842,11 @@ def terminal_surface_setstate(
         elif dataclass_field.name == "_candidate_equal_required":
             object.__setattr__(self, dataclass_field.name, False)
         elif dataclass_field.name == "_validated_refinement_pairs":
+            object.__setattr__(self, dataclass_field.name, ())
+        elif dataclass_field.name in {
+            "_validated_frontier_source_records",
+            "_validated_frontier_records",
+        }:
             object.__setattr__(self, dataclass_field.name, ())
         else:
             object.__setattr__(self, dataclass_field.name, None)
