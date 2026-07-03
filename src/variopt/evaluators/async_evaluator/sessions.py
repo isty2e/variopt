@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from time import monotonic, sleep
 from typing import Generic
 
 from typing_extensions import TypeVar
@@ -14,6 +15,7 @@ from .artifacts import (
 )
 
 EvaluationT = TypeVar("EvaluationT")
+_DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 0.001
 
 
 class EvaluationBatchSession(ABC, Generic[EvaluationT]):
@@ -39,13 +41,57 @@ class EvaluationBatchSession(ABC, Generic[EvaluationT]):
 
     @abstractmethod
     def poll(self) -> Sequence[CompletionGroup[EvaluationT]]:
-        """Return newly completed ordered groups.
+        """Return immediately with newly completed ordered groups.
 
         Returns
         -------
         Sequence[CompletionGroup[EvaluationT]]
-            Newly available completion groups since the previous poll.
+            Newly available completion groups since the previous poll. An
+            empty sequence means no completion is currently available; callers
+            that want blocking behavior should use :meth:`wait`.
         """
+
+    def wait(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> Sequence[CompletionGroup[EvaluationT]]:
+        """Block until at least one completion group is available.
+
+        Parameters
+        ----------
+        timeout : float | None, default=None
+            Maximum number of seconds to wait. ``None`` waits indefinitely.
+
+        Returns
+        -------
+        Sequence[CompletionGroup[EvaluationT]]
+            Newly available completion groups, or an empty sequence when
+            ``timeout`` expires before any completion is available.
+
+        Raises
+        ------
+        ValueError
+            If ``timeout`` is negative.
+        """
+        if timeout is not None and timeout < 0.0:
+            msg = "timeout must be non-negative"
+            raise ValueError(msg)
+
+        deadline = None if timeout is None else monotonic() + timeout
+        while True:
+            completion_groups = self.poll()
+            if len(completion_groups) > 0:
+                return completion_groups
+
+            if deadline is None:
+                sleep(_DEFAULT_WAIT_POLL_INTERVAL_SECONDS)
+                continue
+
+            remaining_seconds = deadline - monotonic()
+            if remaining_seconds <= 0.0:
+                return ()
+            sleep(min(_DEFAULT_WAIT_POLL_INTERVAL_SECONDS, remaining_seconds))
 
     @abstractmethod
     def cancel(self) -> None:

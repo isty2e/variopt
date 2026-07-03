@@ -155,16 +155,50 @@ class StudyExactAsyncStepSession(
             )
             raise
 
-        for completion_group in completion_groups:
-            _ = store_completion_group(
-                self.ordered_outcomes,
-                completion_group,
-                request_count=self.handle.request_count,
+        self._record_completion_groups(completion_groups)
+        return completion_groups
+
+    def wait(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> tuple[
+        CompletionGroup[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]],
+        ...,
+    ]:
+        """Wait for newly completed exact-async groups for this step session.
+
+        Parameters
+        ----------
+        timeout : float | None, default=None
+            Maximum number of seconds to wait. ``None`` waits indefinitely.
+
+        Returns
+        -------
+        tuple[CompletionGroup[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]], ...]
+            Newly completed outcome groups emitted by the evaluator, or an
+            empty tuple when ``timeout`` expires first.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when waiting on a session that is no longer active.
+        BatchExecutionFailed
+            Raised when the evaluator reports batch failure or cancellation.
+        """
+        if self._lifecycle != "active":
+            msg = "study exact-async step session is no longer active"
+            raise RuntimeError(msg)
+
+        try:
+            completion_groups = tuple(self.batch_session.wait(timeout=timeout))
+        except BatchExecutionFailed as exception:
+            self._lifecycle = (
+                "cancelled" if exception.kind == "cancelled" else "failed"
             )
+            raise
 
-        if all(outcome is not None for outcome in self.ordered_outcomes):
-            self._lifecycle = "completed"
-
+        self._record_completion_groups(completion_groups)
         return completion_groups
 
     def cancel(self) -> None:
@@ -178,6 +212,26 @@ class StudyExactAsyncStepSession(
             return
         self.batch_session.cancel()
         self._lifecycle = "cancelled"
+
+    def _record_completion_groups(
+        self,
+        completion_groups: tuple[
+            CompletionGroup[
+                EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+            ],
+            ...,
+        ],
+    ) -> None:
+        """Store newly observed completion groups and update lifecycle."""
+        for completion_group in completion_groups:
+            _ = store_completion_group(
+                self.ordered_outcomes,
+                completion_group,
+                request_count=self.handle.request_count,
+            )
+
+        if all(outcome is not None for outcome in self.ordered_outcomes):
+            self._lifecycle = "completed"
 
     def suspend(
         self,
@@ -241,7 +295,7 @@ class StudyExactAsyncStepSession(
             raise RuntimeError(msg)
 
         while self._lifecycle == "active":
-            _ = self.poll()
+            _ = self.wait()
 
         outcomes = finalize_ordered_outcomes(self.ordered_outcomes)
         validate_aligned_outcomes(

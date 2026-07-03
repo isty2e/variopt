@@ -1,7 +1,7 @@
 """Tests for stale-async Study execution."""
 
 from collections.abc import Sequence
-from typing import final
+from typing import TypeAlias, final
 
 import pytest
 from typing_extensions import override
@@ -20,6 +20,7 @@ from tests.study_support import (
 )
 from variopt import (
     EvaluationOutcome,
+    EvaluationRequest,
     IntegerSpace,
     Observation,
     Problem,
@@ -28,11 +29,16 @@ from variopt import (
 )
 from variopt.artifacts import Trace, TraceEvent
 from variopt.evaluators import (
+    AsyncEvaluator,
     BatchExecutionFailed,
     CompletionGroup,
     EvaluationBatchHandle,
+    EvaluationBatchSession,
 )
 from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
+
+StaleAsyncOutcome: TypeAlias = EvaluationOutcome[int, Observation[int]]
+StaleAsyncCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncOutcome]
 
 
 class FailingSecondBatchAsyncEvaluator(OutOfOrderAsyncEvaluator):
@@ -48,7 +54,7 @@ class FailingSecondBatchAsyncEvaluator(OutOfOrderAsyncEvaluator):
     def poll(
         self,
         handle: EvaluationBatchHandle,
-    ) -> Sequence[CompletionGroup[EvaluationOutcome[int, Observation[int]]]]:
+    ) -> Sequence[StaleAsyncCompletionGroup]:
         if handle.batch_id == "batch-1":
             raise BatchExecutionFailed(
                 handle=handle,
@@ -75,6 +81,115 @@ class CancelFailingSecondBatchAsyncEvaluator(FailingSecondBatchAsyncEvaluator):
             raise RuntimeError("forced cancellation failure")
 
         OutOfOrderAsyncEvaluator.cancel(self, handle)
+
+
+@final
+class ScriptedNonBlockingBatchSession(
+    EvaluationBatchSession[StaleAsyncOutcome],
+):
+    """Batch session whose poll results follow a deterministic script."""
+
+    _handle: EvaluationBatchHandle
+    _poll_results: list[tuple[StaleAsyncCompletionGroup, ...]]
+
+    def __init__(
+        self,
+        *,
+        handle: EvaluationBatchHandle,
+        poll_results: Sequence[tuple[StaleAsyncCompletionGroup, ...]],
+    ) -> None:
+        self._handle = handle
+        self._poll_results = list(poll_results)
+
+    @property
+    @override
+    def handle(self) -> EvaluationBatchHandle:
+        return self._handle
+
+    @override
+    def poll(
+        self,
+    ) -> tuple[StaleAsyncCompletionGroup, ...]:
+        if len(self._poll_results) == 0:
+            return ()
+        return self._poll_results.pop(0)
+
+    @override
+    def cancel(self) -> None:
+        self._poll_results.clear()
+
+
+@final
+class HolAvoidanceAsyncEvaluator(
+    AsyncEvaluator[
+        Problem[int, int],
+        EvaluationRequest[int],
+        StaleAsyncOutcome,
+    ],
+):
+    """Async evaluator with one empty earlier poll before a ready later batch."""
+
+    _next_batch_id: int
+    _sessions: dict[str, ScriptedNonBlockingBatchSession]
+
+    def __init__(self) -> None:
+        self._next_batch_id = 0
+        self._sessions = {}
+
+    @override
+    def open_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[StaleAsyncOutcome]:
+        handle = EvaluationBatchHandle(
+            batch_id=f"batch-{self._next_batch_id}",
+            request_count=len(requests),
+        )
+        self._next_batch_id += 1
+        outcomes: tuple[StaleAsyncOutcome, ...] = tuple(
+            EvaluationOutcome[int, Observation[int]](
+                record=problem.evaluation_protocol.evaluate_request(request),
+                evaluation_count=1,
+            )
+            for request in requests
+        )
+        poll_results: tuple[tuple[StaleAsyncCompletionGroup, ...], ...]
+        if handle.batch_id == "batch-0":
+            poll_results = (
+                (CompletionGroup(start_index=1, outcomes=(outcomes[1],)),),
+                (),
+                (CompletionGroup(start_index=0, outcomes=(outcomes[0],)),),
+            )
+        else:
+            poll_results = (
+                (CompletionGroup(start_index=0, outcomes=(outcomes[0],)),),
+            )
+        session = ScriptedNonBlockingBatchSession(
+            handle=handle,
+            poll_results=poll_results,
+        )
+        self._sessions[handle.batch_id] = session
+        return session
+
+    @override
+    def submit_batch(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchHandle:
+        return self.open_session(problem, requests).handle
+
+    @override
+    def poll(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[StaleAsyncCompletionGroup]:
+        return self._sessions[handle.batch_id].poll()
+
+    @override
+    def cancel(self, handle: EvaluationBatchHandle) -> None:
+        self._sessions[handle.batch_id].cancel()
 
 
 class StudyStaleAsyncTests:
@@ -162,6 +277,39 @@ class StudyStaleAsyncTests:
             "p-1",
             "spawn-p-2",
         )
+
+    def test_run_stale_async_polls_ready_later_session_after_empty_earlier_session(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = HolAvoidanceAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+            "spawn-p-2",
+            "p-1",
+        )
+        assert tuple(
+            observation.proposal.proposal_id
+            for observation_batch in final_state.tell_history
+            for observation in observation_batch
+        ) == ("p-2", "spawn-p-2", "p-1")
 
     def test_run_stale_async_cancels_refill_opened_before_mid_sweep_failure(
         self,

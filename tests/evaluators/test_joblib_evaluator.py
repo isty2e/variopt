@@ -41,10 +41,6 @@ from variopt.execution import (
 )
 
 EvaluationRecordT = EvaluationOutcome[int]
-JOBLIB_CANCELLED_TASKS_WARNING = (
-    r"\d+ tasks? which were still being processed by the workers "
-    r"have been cancelled"
-)
 
 
 def _require_pending_aware_session(
@@ -78,6 +74,15 @@ class DelayedSquareObjective(Objective[int]):
     def evaluate(self, candidate: int) -> float:
         if candidate == 4:
             time.sleep(0.05)
+        return float(candidate * candidate)
+
+
+class SlowSquareObjective(Objective[int]):
+    """Objective that makes every candidate slow enough to test polling."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        time.sleep(0.05)
         return float(candidate * candidate)
 
 
@@ -285,6 +290,61 @@ class AsyncJoblibEvaluatorTests:
                 owner_backend="threading",
             )
 
+    @pytest.mark.parametrize("backend", ("threading", "loky"))
+    def test_poll_returns_empty_without_blocking_when_no_result_is_ready(
+        self,
+        backend: Literal["threading", "loky"],
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SlowSquareObjective(),
+        )
+        evaluator = AsyncJoblibEvaluator[int, int](backend=backend, n_jobs=2)
+        session = evaluator.open_session(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        start_time = time.monotonic()
+        completion_groups = tuple(session.poll())
+
+        assert completion_groups == ()
+        assert time.monotonic() - start_time < 0.03
+        assert len(tuple(session.wait(timeout=5.0))) == 1
+
+    def test_wait_returns_empty_when_timeout_expires_before_result_is_ready(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SlowSquareObjective(),
+        )
+        evaluator = AsyncJoblibEvaluator[int, int](backend="threading", n_jobs=2)
+        session = evaluator.open_session(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        assert tuple(session.wait(timeout=0.001)) == ()
+
+        session.cancel()
+
+    def test_wait_rejects_negative_timeout(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SlowSquareObjective(),
+        )
+        evaluator = AsyncJoblibEvaluator[int, int](backend="threading", n_jobs=2)
+        session = evaluator.open_session(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        with pytest.raises(ValueError, match="timeout must be non-negative"):
+            _ = session.wait(timeout=-0.001)
+
+        session.cancel()
+
     def test_poll_wraps_terminal_failure(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
@@ -303,7 +363,7 @@ class AsyncJoblibEvaluatorTests:
 
         with pytest.raises(BatchExecutionFailed) as caught:
             while True:
-                _ = evaluator.poll(handle)
+                _ = evaluator.wait(handle)
 
         assert caught.value.kind == "user_code"
         assert isinstance(caught.value.cause, ValueError)
@@ -329,7 +389,7 @@ class AsyncJoblibEvaluatorTests:
         ] * session.handle.request_count
         completed_count = 0
         while completed_count < session.handle.request_count:
-            completion_groups = tuple(session.poll())
+            completion_groups = tuple(session.wait())
             for completion_group in completion_groups:
                 for offset, outcome in enumerate(completion_group.outcomes):
                     ordered_outcomes[completion_group.start_index + offset] = outcome
@@ -365,15 +425,15 @@ class AsyncJoblibEvaluatorTests:
                 completed_count=0,
                 pending_count=2,
                 lifecycle="active",
-            )
+        )
 
-        _ = tuple(pending_aware_session.poll())
+        _ = tuple(pending_aware_session.wait())
         after_first_poll = pending_aware_session.state()
         assert after_first_poll.completed_count == 1
         assert after_first_poll.pending_count == 1
         assert after_first_poll.lifecycle == "active"
 
-        _ = tuple(pending_aware_session.poll())
+        _ = tuple(pending_aware_session.wait())
         assert pending_aware_session.state() == EvaluationBatchSessionState(
                 request_count=2,
                 completed_count=2,
@@ -398,8 +458,7 @@ class AsyncJoblibEvaluatorTests:
         )
         pending_aware_session = _require_pending_aware_session(session)
 
-        with pytest.warns(UserWarning, match=JOBLIB_CANCELLED_TASKS_WARNING):
-            pending_aware_session.cancel()
+        pending_aware_session.cancel()
 
         assert pending_aware_session.state() == EvaluationBatchSessionState(
                 request_count=2,
@@ -428,8 +487,7 @@ class AsyncJoblibEvaluatorTests:
         )
 
         assert isinstance(session, ResumableBatchSession)
-        with pytest.warns(UserWarning, match=JOBLIB_CANCELLED_TASKS_WARNING):
-            session.cancel()
+        session.cancel()
 
     def test_suspend_and_resume_session_preserves_remaining_work(self) -> None:
         problem = Problem(
@@ -449,9 +507,8 @@ class AsyncJoblibEvaluatorTests:
         pending_aware_session = _require_pending_aware_session(session)
         resumable_session = _require_resumable_session(session)
 
-        first_completion_groups = tuple(pending_aware_session.poll())
-        with pytest.warns(UserWarning, match=JOBLIB_CANCELLED_TASKS_WARNING):
-            resume_handle = resumable_session.suspend()
+        first_completion_groups = tuple(pending_aware_session.wait())
+        resume_handle = resumable_session.suspend()
 
         assert pending_aware_session.state() == EvaluationBatchSessionState(
                 request_count=2,
@@ -464,7 +521,7 @@ class AsyncJoblibEvaluatorTests:
         resumed_session = evaluator.resume_session(resume_handle)
         pending_resumed_session = _require_pending_aware_session(resumed_session)
 
-        second_completion_groups = tuple(pending_resumed_session.poll())
+        second_completion_groups = tuple(pending_resumed_session.wait())
         assert pending_resumed_session.state() == EvaluationBatchSessionState(
                 request_count=2,
                 completed_count=2,

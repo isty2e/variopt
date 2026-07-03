@@ -86,7 +86,7 @@ class AsyncEvaluator(
         self,
         handle: EvaluationBatchHandle,
     ) -> Sequence[CompletionGroup[EvaluationT]]:
-        """Poll one submitted exact-async batch by immutable handle.
+        """Poll one submitted exact-async batch without blocking.
 
         Parameters
         ----------
@@ -96,7 +96,8 @@ class AsyncEvaluator(
         Returns
         -------
         Sequence[CompletionGroup[EvaluationT]]
-            Newly completed groups in logical batch order.
+            Newly completed groups in logical batch order. An empty sequence
+            means no completion is currently available.
 
         Notes
         -----
@@ -146,7 +147,7 @@ class AsyncEvaluator(
         completed_count = 0
         try:
             while completed_count < session.handle.request_count:
-                completion_groups = tuple(session.poll())
+                completion_groups = tuple(session.wait())
                 for completion_group in completion_groups:
                     completed_count += store_completion_group(
                         ordered_outcomes,
