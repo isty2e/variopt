@@ -48,8 +48,12 @@ def uniform_crossover(
     ValueError
         If the parents do not expose matching active leaf topology.
     """
-    editable_paths = space.active_leaf_paths(primary_parent)
-    partner_editable_paths = space.active_leaf_paths(partner_parent)
+    space.validate(primary_parent)
+    space.validate(partner_parent)
+    editable_paths = space.active_leaf_paths_for_validated_candidate(primary_parent)
+    partner_editable_paths = space.active_leaf_paths_for_validated_candidate(
+        partner_parent,
+    )
     if editable_paths != partner_editable_paths:
         msg = "uniform crossover requires parents with matching active topology"
         raise ValueError(msg)
@@ -65,7 +69,10 @@ def uniform_crossover(
         random_state,
     )
     replacements = {
-        path: space.leaf_value_at_path(partner_parent, path)
+        path: space.leaf_value_at_validated_path(partner_parent, path)
         for path in selected_paths
     }
-    return space.replace_leaf_values(primary_parent, replacements)
+    return space.replace_leaf_values_in_validated_candidate(
+        primary_parent,
+        replacements,
+    )

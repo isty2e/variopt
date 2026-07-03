@@ -89,7 +89,7 @@ class HomogeneousNumericSubspaceDescriptor(
         self.space.validate(candidate)
         coordinates: list[float] = []
         for path, leaf_space in zip(self.leaf_paths, self.leaf_spaces, strict=True):
-            leaf_value = self.space.leaf_value_at_path(candidate, path)
+            leaf_value = self.space.leaf_value_at_validated_path(candidate, path)
             if isinstance(leaf_space, RealSpace):
                 if type(leaf_value) is not float:
                     msg = "real-valued numeric subspaces require canonical float leaf values"
@@ -143,7 +143,10 @@ class HomogeneousNumericSubspaceDescriptor(
                 strict=True,
             )
         }
-        candidate = self.space.replace_leaf_values(template_candidate, replacements)
+        candidate = self.space.replace_leaf_values_in_validated_candidate(
+            template_candidate,
+            replacements,
+        )
         self.space.validate(candidate)
         return candidate
 
@@ -212,8 +215,8 @@ class HomogeneousNumericSubspaceDescriptor(
         return tuple(
             path
             for path in self.leaf_paths
-            if self.space.leaf_value_at_path(source_candidate, path)
-            != self.space.leaf_value_at_path(candidate, path)
+            if self.space.leaf_value_at_validated_path(source_candidate, path)
+            != self.space.leaf_value_at_validated_path(candidate, path)
         )
 
 

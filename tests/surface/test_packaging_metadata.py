@@ -1,9 +1,9 @@
 """Regression tests for release-facing packaging metadata."""
 
+import importlib
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict, cast
-
-import tomli
 
 ProjectMetadata = TypedDict(
     "ProjectMetadata",
@@ -19,9 +19,23 @@ class PyprojectMetadata(TypedDict):
     project: ProjectMetadata
 
 
+def _load_toml(text: str) -> dict[str, object]:
+    """Load TOML using the stdlib parser when available."""
+    try:
+        toml_module = importlib.import_module("tomllib")
+    except ModuleNotFoundError:
+        toml_module = importlib.import_module("tomli")
+    loads = cast(Callable[[str], object], getattr(toml_module, "loads"))
+    parsed = loads(text)
+    if not isinstance(parsed, dict):
+        msg = "TOML parser returned a non-mapping document"
+        raise TypeError(msg)
+    return cast(dict[str, object], parsed)
+
+
 def _load_pyproject_metadata() -> PyprojectMetadata:
     """Load the typed release-facing pyproject metadata subset."""
-    pyproject_data = tomli.loads(
+    pyproject_data = _load_toml(
         Path("pyproject.toml").read_text(),
     )
     return cast(PyprojectMetadata, cast(object, pyproject_data))
@@ -73,7 +87,7 @@ class PackagingMetadataTests:
         assert "tomli>=2.0.0" in optional_dependencies["test"]
 
     def test_wheel_only_packages_variopt_runtime(self) -> None:
-        pyproject_data = tomli.loads(Path("pyproject.toml").read_text())
+        pyproject_data = _load_toml(Path("pyproject.toml").read_text())
 
         hatch_config = cast(dict[str, object], pyproject_data["tool"])["hatch"]
         build_config = cast(dict[str, object], hatch_config)["build"]
@@ -83,7 +97,7 @@ class PackagingMetadataTests:
         assert cast(dict[str, object], wheel_config)["packages"] == ["src/variopt"]
 
     def test_sdist_excludes_repo_local_workflow_artifacts(self) -> None:
-        pyproject_data = tomli.loads(Path("pyproject.toml").read_text())
+        pyproject_data = _load_toml(Path("pyproject.toml").read_text())
 
         hatch_config = cast(dict[str, object], pyproject_data["tool"])["hatch"]
         build_config = cast(dict[str, object], hatch_config)["build"]

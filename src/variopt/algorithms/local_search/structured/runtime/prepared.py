@@ -323,8 +323,8 @@ class PreparedStructuredLocalSearchRuntime(
         changed_leaf_paths = tuple(
             path
             for path in self.neighborhood.leaf_paths
-            if space.leaf_value_at_path(source_candidate, path)
-            != space.leaf_value_at_path(refined_candidate, path)
+            if space.leaf_value_at_validated_path(source_candidate, path)
+            != space.leaf_value_at_validated_path(refined_candidate, path)
         )
         if len(changed_leaf_paths) == 0:
             return None

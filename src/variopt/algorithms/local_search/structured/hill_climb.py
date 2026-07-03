@@ -136,7 +136,8 @@ class StructuredHillClimbKernel(
         reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one local hill-climb episode for one original proposal."""
-        runtime.neighborhood.space.validate(proposal.candidate)
+        space = runtime.neighborhood.space
+        space.validate(proposal.candidate)
         context = self._proposal_context(runtime=runtime, proposal_index=proposal_index)
         proposal_evaluation_spec = runtime.proposal_evaluation_spec(
             proposal_index=proposal_index,
@@ -169,8 +170,9 @@ class StructuredHillClimbKernel(
         budget_exhausted = False
         while completed_steps < episode_max_steps:
             improved = False
+            space.validate(current_candidate)
             for path, leaf_space in leaf_schedule:
-                current_leaf_value = runtime.neighborhood.space.leaf_value_at_path(
+                current_leaf_value = space.leaf_value_at_validated_path(
                     current_candidate,
                     path,
                 )
@@ -181,7 +183,7 @@ class StructuredHillClimbKernel(
                     if not runtime.can_evaluate(reserved_count=reserved_count):
                         budget_exhausted = True
                         break
-                    proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
+                    proposed_candidate = space.replace_leaf_values_in_validated_candidate(
                         current_candidate,
                         {path: replacement},
                     )

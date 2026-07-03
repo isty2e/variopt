@@ -1,6 +1,6 @@
 """Tests for built-in variopt search spaces."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from math import exp, log
 from typing import cast
 
@@ -21,10 +21,13 @@ from variopt import (
 )
 from variopt.randomness import normalize_random_state
 from variopt.spaces import (
+    LeafPath,
     RecordCandidate,
     SpaceBoundaryValue,
     SpaceCandidateValue,
     SpaceScalarValue,
+    StructuredLeafSpace,
+    StructuredSearchSpace,
 )
 from variopt.spaces.structured import (
     is_space_candidate_value,
@@ -804,6 +807,168 @@ class SearchSpaceTests:
         assert tuple_space.replace_leaf_values(tuple_candidate, {}) is tuple_candidate
         assert record_space.replace_leaf_values(record_candidate, {}) is record_candidate
         assert array_space.replace_leaf_values(array_candidate, {}) is array_candidate
+
+    def test_validated_composite_leaf_reads_do_not_revalidate_children(self) -> None:
+        validate_count = 0
+
+        class CountingIntegerSpace(IntegerSpace):
+            """Integer space that counts validation calls."""
+
+            @override
+            def validate(self, candidate: int) -> None:
+                nonlocal validate_count
+                validate_count += 1
+                super().validate(candidate)
+
+        leaf_space = CountingIntegerSpace(0, 9)
+        record_space = RecordSpace(
+            pair=TupleSpace(leaf_space, leaf_space),
+            order=PermutationSpace(3),
+        )
+        record_candidate = record_space.normalize(
+            {
+                "pair": [1, 2],
+                "order": [0, 1, 2],
+            },
+        )
+        array_space = ArraySpace(TupleSpace(leaf_space, leaf_space), length=2)
+        array_candidate = array_space.normalize([[3, 4], [5, 6]])
+
+        validate_count = 0
+        record_space.validate(record_candidate)
+        for path in record_space.leaf_paths():
+            _ = record_space.leaf_value_at_validated_path(record_candidate, path)
+        array_space.validate(array_candidate)
+        for path in array_space.leaf_paths():
+            _ = array_space.leaf_value_at_validated_path(array_candidate, path)
+
+        assert validate_count == 6
+
+    def test_validated_composite_replacement_validates_each_changed_leaf_once(self) -> None:
+        validate_count = 0
+
+        class CountingIntegerSpace(IntegerSpace):
+            """Integer space that counts validation calls."""
+
+            @override
+            def validate(self, candidate: int) -> None:
+                nonlocal validate_count
+                validate_count += 1
+                super().validate(candidate)
+
+        leaf_space = CountingIntegerSpace(0, 9)
+        record_space = RecordSpace(
+            pair=TupleSpace(leaf_space, leaf_space),
+        )
+        record_candidate = record_space.normalize({"pair": [1, 2]})
+        array_space = ArraySpace(TupleSpace(leaf_space, leaf_space), length=2)
+        array_candidate = array_space.normalize([[3, 4], [5, 6]])
+
+        validate_count = 0
+        replaced_record = record_space.replace_leaf_values(
+            record_candidate,
+            {("pair", 0): 8},
+        )
+        replaced_array = array_space.replace_leaf_values(array_candidate, {(1, 0): 7})
+
+        assert replaced_record.entries == (("pair", (8, 2)),)
+        assert replaced_array == ((3, 4), (7, 6))
+        assert validate_count == 8
+
+    def test_validated_permutation_replacement_preserves_global_constraint(self) -> None:
+        space = PermutationSpace(4)
+        candidate = space.normalize([0, 1, 2, 3])
+        space.validate(candidate)
+
+        replaced = space.replace_leaf_values_in_validated_candidate(
+            candidate,
+            {
+                (0,): 1,
+                (1,): 0,
+            },
+        )
+
+        assert replaced == (1, 0, 2, 3)
+        with pytest.raises(ValueError):
+            _ = space.replace_leaf_values_in_validated_candidate(candidate, {(0,): 1})
+
+    def test_validated_array_replacement_rejects_bool_path_index(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        candidate = space.normalize([1, 2])
+        space.validate(candidate)
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values_in_validated_candidate(
+                candidate,
+                {(True,): 7},
+            )
+
+    def test_custom_space_validated_fallback_preserves_public_validation(self) -> None:
+        validate_count = 0
+
+        class CustomRootSpace(StructuredSearchSpace[int, int]):
+            """Custom structured space without built-in validated traversal hooks."""
+
+            @override
+            def normalize(self, raw_candidate: int) -> int:
+                self.validate(raw_candidate)
+                return raw_candidate
+
+            @override
+            def validate(self, candidate: int) -> None:
+                nonlocal validate_count
+                validate_count += 1
+                IntegerSpace(0, 9).validate(candidate)
+
+            @override
+            def sample(self, random_state: np.random.RandomState) -> int:
+                return IntegerSpace(0, 9).sample(random_state)
+
+            @override
+            def leaf_paths(self) -> tuple[LeafPath, ...]:
+                return ((),)
+
+            @override
+            def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
+                return IntegerSpace(0, 9).leaf_space_at_path(path)
+
+            @override
+            def leaf_value_at_path(
+                self,
+                candidate: int,
+                path: LeafPath,
+            ) -> SpaceCandidateValue:
+                self.validate(candidate)
+                if path != ():
+                    msg = f"invalid custom path: {path!r}"
+                    raise TypeError(msg)
+                return candidate
+
+            @override
+            def replace_leaf_values(
+                self,
+                candidate: int,
+                replacements: Mapping[LeafPath, SpaceCandidateValue],
+            ) -> int:
+                self.validate(candidate)
+                if () not in replacements:
+                    return candidate
+                replacement = replacements[()]
+                if type(replacement) is not int:
+                    msg = "custom replacement must be an integer"
+                    raise TypeError(msg)
+                return IntegerSpace(0, 9).normalize(replacement)
+
+        space = CustomRootSpace()
+        candidate = space.normalize(3)
+
+        validate_count = 0
+        space.validate(candidate)
+        assert space.active_leaf_paths_for_validated_candidate(candidate) == ((),)
+        assert space.leaf_value_at_validated_path(candidate, ()) == 3
+        assert space.replace_leaf_values_in_validated_candidate(candidate, {(): 4}) == 4
+
+        assert validate_count == 4
 
     def test_record_space_sampling_is_valid(self) -> None:
         space = RecordSpace(

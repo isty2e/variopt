@@ -670,8 +670,14 @@ def infer_structured_local_displacement_leaf_paths(
     tuple[LeafPath, ...]
         Structured leaf paths whose active status or canonical value changed.
     """
-    proposal_active_leaf_paths = set(space.active_leaf_paths(proposal_candidate))
-    observed_active_leaf_paths = set(space.active_leaf_paths(observed_candidate))
+    space.validate(proposal_candidate)
+    space.validate(observed_candidate)
+    proposal_active_leaf_paths = set(
+        space.active_leaf_paths_for_validated_candidate(proposal_candidate),
+    )
+    observed_active_leaf_paths = set(
+        space.active_leaf_paths_for_validated_candidate(observed_candidate),
+    )
     return tuple(
         path
         for path in space.leaf_paths()
@@ -682,7 +688,7 @@ def infer_structured_local_displacement_leaf_paths(
         or (
             path in proposal_active_leaf_paths
             and path in observed_active_leaf_paths
-            and space.leaf_value_at_path(proposal_candidate, path)
-            != space.leaf_value_at_path(observed_candidate, path)
+            and space.leaf_value_at_validated_path(proposal_candidate, path)
+            != space.leaf_value_at_validated_path(observed_candidate, path)
         )
     )

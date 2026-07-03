@@ -62,8 +62,8 @@ def _candidate_refinement_from_codec(
     changed_leaf_paths = tuple(
         path
         for path in codec.leaf_paths
-        if codec.space.leaf_value_at_path(source_candidate, path)
-        != codec.space.leaf_value_at_path(refined_candidate, path)
+        if codec.space.leaf_value_at_validated_path(source_candidate, path)
+        != codec.space.leaf_value_at_validated_path(refined_candidate, path)
     )
     if len(changed_leaf_paths) == 0:
         return None

@@ -198,6 +198,25 @@ class ArraySpace(
         return tuple(paths)
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: tuple[ElementCandidateT, ...],
+    ) -> tuple[LeafPath, ...]:
+        """Return all array leaves for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[ElementCandidateT, ...]
+            Canonical array candidate already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Canonical leaf paths prefixed by array index.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at an array path.
 
@@ -250,6 +269,28 @@ class ArraySpace(
             Canonical leaf value stored at ``path``.
         """
         self.validate(candidate)
+        return self.leaf_value_at_validated_path(candidate, path)
+
+    @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: tuple[ElementCandidateT, ...],
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one array leaf for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[ElementCandidateT, ...]
+            Canonical array candidate already validated by the current operation.
+        path : LeafPath
+            Leaf path whose first segment identifies the array index.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+        """
         structured_element_space = require_structured_element_space(
             self.element_space,
             operation="leaf traversal",
@@ -266,7 +307,10 @@ class ArraySpace(
         if segment < 0 or segment >= self.length:
             msg = f"path {path!r} references an out-of-bounds array index"
             raise TypeError(msg)
-        return structured_element_space.leaf_value_at_path(candidate[segment], path[1:])
+        return structured_element_space.leaf_value_at_validated_path(
+            candidate[segment],
+            path[1:],
+        )
 
     @override
     def replace_leaf_values(
@@ -289,6 +333,31 @@ class ArraySpace(
             Updated canonical array candidate.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: tuple[ElementCandidateT, ...],
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> tuple[ElementCandidateT, ...]:
+        """Return replacements for an already validated array candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[ElementCandidateT, ...]
+            Canonical array candidate already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by index-prefixed leaf paths.
+
+        Returns
+        -------
+        tuple[ElementCandidateT, ...]
+            Updated canonical array candidate.
+        """
         structured_element_space = require_structured_element_space(
             self.element_space,
             operation="leaf replacement",
@@ -308,8 +377,10 @@ class ArraySpace(
             child_replacements = grouped_replacements.get(index)
             if child_replacements is None:
                 continue
-            replaced_children[index] = structured_element_space.replace_leaf_values(
-                child_candidate,
-                child_replacements,
+            replaced_children[index] = (
+                structured_element_space.replace_leaf_values_in_validated_candidate(
+                    child_candidate,
+                    child_replacements,
+                )
             )
         return tuple(replaced_children)

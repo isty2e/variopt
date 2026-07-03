@@ -127,7 +127,7 @@ class ContinuousStructuredSpaceCodec(FrozenGenericSlotsCompat, Generic[BoundaryT
         self.space.validate(candidate)
         coordinates: list[float] = []
         for path, leaf_space in zip(self.leaf_paths, self.leaf_spaces, strict=True):
-            leaf_value = self.space.leaf_value_at_path(candidate, path)
+            leaf_value = self.space.leaf_value_at_validated_path(candidate, path)
             if type(leaf_value) is not float:
                 msg = "continuous structured codec requires canonical float leaf values"
                 raise TypeError(msg)
@@ -174,6 +174,9 @@ class ContinuousStructuredSpaceCodec(FrozenGenericSlotsCompat, Generic[BoundaryT
                 strict=True,
             )
         }
-        candidate = self.space.replace_leaf_values(template_candidate, replacements)
+        candidate = self.space.replace_leaf_values_in_validated_candidate(
+            template_candidate,
+            replacements,
+        )
         self.space.validate(candidate)
         return candidate

@@ -91,8 +91,8 @@ def generic_distance_parts(
     space.validate(right)
 
     declared_leaf_paths = space.leaf_paths()
-    left_active_leaf_paths = set(space.active_leaf_paths(left))
-    right_active_leaf_paths = set(space.active_leaf_paths(right))
+    left_active_leaf_paths = set(space.active_leaf_paths_for_validated_candidate(left))
+    right_active_leaf_paths = set(space.active_leaf_paths_for_validated_candidate(right))
 
     shared_leaf_count = 0
     topology_mismatch_leaf_count = 0
@@ -105,8 +105,8 @@ def generic_distance_parts(
             shared_leaf_count += 1
             squared_distance += normalized_squared_leaf_distance(
                 space=space.leaf_space_at_path(path),
-                left=space.leaf_value_at_path(left, path),
-                right=space.leaf_value_at_path(right, path),
+                left=space.leaf_value_at_validated_path(left, path),
+                right=space.leaf_value_at_validated_path(right, path),
             )
             continue
 
