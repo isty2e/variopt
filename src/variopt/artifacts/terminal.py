@@ -1,6 +1,6 @@
 """Terminal-surface artifact definitions."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, fields
 from typing import Generic, TypeVar, cast
 
@@ -164,6 +164,26 @@ def _optional_refinement_tuple(
         return ()
 
     return tuple(refinements)
+
+
+def _initialize_dataclass_fields(
+    instance: FrozenGenericSlotsCompat,
+    *,
+    field_values: Mapping[str, object | None],
+) -> None:
+    dataclass_field_names = {dataclass_field.name for dataclass_field in fields(instance)}
+    value_names = set(field_values)
+    missing_names = dataclass_field_names - value_names
+    extra_names = value_names - dataclass_field_names
+    if missing_names or extra_names:
+        msg = (
+            "prevalidated surface construction field mismatch: "
+            f"missing={sorted(missing_names)!r}, extra={sorted(extra_names)!r}"
+        )
+        raise RuntimeError(msg)
+
+    for field_name, value in field_values.items():
+        object.__setattr__(instance, field_name, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -681,17 +701,22 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         candidate_equal: CandidateEquality[CandidateT] | None,
     ) -> Self:
         surface = cls.__new__(cls)
-        object.__setattr__(surface, "__orig_class__", None)
-        object.__setattr__(surface, "nondominated_records", nondominated_records)
-        object.__setattr__(surface, "records", records)
-        object.__setattr__(surface, "evaluation_count", evaluation_count)
-        object.__setattr__(surface, "trace", trace)
-        object.__setattr__(surface, "refinements", refinements)
-        object.__setattr__(surface, "_candidate_equal", None)
-        object.__setattr__(surface, "_candidate_equal_required", False)
-        object.__setattr__(surface, "_validated_refinement_pairs", ())
-        object.__setattr__(surface, "_validated_frontier_source_records", records)
-        object.__setattr__(surface, "_validated_frontier_records", nondominated_records)
+        _initialize_dataclass_fields(
+            surface,
+            field_values={
+                "__orig_class__": None,
+                "nondominated_records": nondominated_records,
+                "records": records,
+                "evaluation_count": evaluation_count,
+                "trace": trace,
+                "refinements": refinements,
+                "_candidate_equal": None,
+                "_candidate_equal_required": False,
+                "_validated_refinement_pairs": (),
+                "_validated_frontier_source_records": records,
+                "_validated_frontier_records": nondominated_records,
+            },
+        )
         surface.__post_init__(candidate_equal)
         return surface
 

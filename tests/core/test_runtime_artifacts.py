@@ -1,7 +1,7 @@
 """Tests for runtime artifact values and terminal surfaces."""
 
 import pickle
-from dataclasses import replace
+from dataclasses import fields, replace
 from inspect import signature
 from typing import cast
 
@@ -1221,6 +1221,26 @@ class RuntimeArtifactsTests:
 
         assert "_validated_frontier_source_records" not in constructor_parameters
         assert "_validated_frontier_records" not in constructor_parameters
+
+    def test_nondominated_run_surface_from_records_initializes_dataclass_fields(
+        self,
+    ) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            objective_values=(1.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+
+        surface = NondominatedRunSurface[int].from_records((record,))
+
+        assert all(
+            hasattr(surface, dataclass_field.name)
+            for dataclass_field in fields(surface)
+        )
 
     def test_nondominated_run_surface_replace_revalidates_changed_records(
         self,
