@@ -2,13 +2,19 @@
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from math import isfinite
 from typing import Generic
 
 import numpy as np
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....json_types import JSONDict, JSONValue
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_finite_float,
+    require_json_int,
+)
 from .....typevars import CandidateT
 
 
@@ -29,6 +35,15 @@ class BankEntry(FrozenGenericSlotsCompat, Generic[CandidateT]):
     candidate: CandidateT
     value: float
     proposal_id: str | None = None
+
+    def __post_init__(self) -> None:
+        """Reject values that cannot be represented in strict JSON."""
+        if isinstance(self.value, bool):
+            msg = "value must be numeric"
+            raise TypeError(msg)
+        if not isfinite(self.value):
+            msg = "value must be finite"
+            raise ValueError(msg)
 
     def to_dict(
         self,
@@ -82,15 +97,13 @@ class BankEntry(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         value = data.get("value")
         proposal_id = data.get("proposal_id")
-        if not isinstance(value, (int, float)):
-            msg = "bank entry snapshot requires numeric value"
-            raise TypeError(msg)
+        finite_value = require_json_finite_float(value, field_name="value")
         if proposal_id is not None and not isinstance(proposal_id, str):
             msg = "bank entry snapshot requires proposal_id to be a string or null"
             raise TypeError(msg)
         return cls(
             candidate=candidate_from_dict(data.get("candidate")),
-            value=float(value),
+            value=finite_value,
             proposal_id=proposal_id,
         )
 
@@ -172,11 +185,8 @@ class Bank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        capacity = data.get("capacity")
+        capacity = require_json_int(data.get("capacity"), field_name="capacity")
         raw_entries = data.get("entries")
-        if not isinstance(capacity, int):
-            msg = "bank snapshot requires integer capacity"
-            raise TypeError(msg)
         if not isinstance(raw_entries, list):
             msg = "bank snapshot requires entry list"
             raise TypeError(msg)

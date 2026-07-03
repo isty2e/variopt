@@ -1,5 +1,6 @@
 """Shared JSON-safe type aliases and validators for snapshot codecs."""
 
+from math import isfinite
 from typing import TypeAlias
 
 JSONScalar: TypeAlias = None | bool | int | float | str
@@ -91,6 +92,15 @@ def require_json_float(value: JSONValue, *, field_name: str) -> float:
     return float(value)
 
 
+def require_json_finite_float(value: JSONValue, *, field_name: str) -> float:
+    """Return one finite JSON numeric value as ``float`` or raise."""
+    number = require_json_float(value, field_name=field_name)
+    if not isfinite(number):
+        msg = f"{field_name} must be finite"
+        raise ValueError(msg)
+    return number
+
+
 def require_json_optional_float(
     value: JSONValue,
     *,
@@ -100,3 +110,14 @@ def require_json_optional_float(
     if value is None:
         return None
     return require_json_float(value, field_name=field_name)
+
+
+def require_json_optional_finite_float(
+    value: JSONValue,
+    *,
+    field_name: str,
+) -> float | None:
+    """Return one optional finite JSON numeric value or raise."""
+    if value is None:
+        return None
+    return require_json_finite_float(value, field_name=field_name)
