@@ -15,6 +15,8 @@ from .leaf import (
 )
 from .parts import StructuredDistanceParts
 
+# Categorical geometry keys keep the exact runtime type next to the value so
+# choices such as ``1`` and ``1.0`` remain distinct in membership caches.
 HashableCategoricalValue = bool | int | float | str | bytes
 HashableCategoricalType = type[bool] | type[int] | type[float] | type[str] | type[bytes]
 CategoricalChoiceKey = tuple[HashableCategoricalType, HashableCategoricalValue]
@@ -280,6 +282,8 @@ class CategoricalSpaceGeometry:
         choice_keys = self.choice_keys
         equal_choice_values = self.equal_choice_values
         if choice_keys is not None and equal_choice_values is not None:
+            # This mirrors require_geometry_categorical_choice for the all-hashable
+            # cache path to avoid two function calls per categorical leaf.
             left_key = categorical_choice_key(left)
             right_key = categorical_choice_key(right)
             if left_key is not None and right_key is not None:

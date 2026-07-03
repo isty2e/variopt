@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from math import log
-from typing import TypeAlias, TypeGuard
+from typing import Protocol, TypeGuard
 
 from ..scalar import IntegerSpace, RealSpace
 from ..types import SpaceCandidateValue
@@ -21,6 +21,18 @@ _SCALAR_LEAF_GEOMETRY_TYPES = (
     IntegerSpaceGeometry,
     RealSpaceGeometry,
 )
+
+
+class DistancePartValuesGeometry(StructuredSpaceGeometry, Protocol):
+    """Internal geometry shape that exposes allocation-free distance parts."""
+
+    def distance_part_values(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values without allocating a parts object."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -696,19 +708,8 @@ class RealArraySpaceGeometry:
         return (squared_distance, self.length, 0)
 
 
-DistancePartValuesGeometry: TypeAlias = (
-    CategoricalSpaceGeometry
-    | IntegerSpaceGeometry
-    | RealSpaceGeometry
-    | TupleSpaceGeometry
-    | RecordSpaceGeometry
-    | ArraySpaceGeometry
-    | BinaryArraySpaceGeometry
-    | IntegerArraySpaceGeometry
-    | RealArraySpaceGeometry
-    | PermutationSpaceGeometry
-)
-
+# Keep the closed built-in registry as the single concrete class list. The
+# protocol above is structural so this tuple does not need a mirrored type union.
 _DISTANCE_PART_VALUES_GEOMETRY_TYPES = (
     CategoricalSpaceGeometry,
     IntegerSpaceGeometry,
