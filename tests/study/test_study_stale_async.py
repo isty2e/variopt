@@ -15,6 +15,7 @@ from tests.study_support import (
     SquareObjective,
 )
 from variopt import IntegerSpace, Problem, Proposal, Study
+from variopt.artifacts import Trace, TraceEvent
 from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
 
 
@@ -103,6 +104,41 @@ class StudyStaleAsyncTests:
             "p-1",
             "spawn-p-2",
         )
+
+    def test_run_stale_async_buffers_trace_events_without_trace_append(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def reject_trace_append(_trace: Trace, _event: TraceEvent) -> Trace:
+            raise AssertionError(
+                "stale-async run should buffer trace events before materialization",
+            )
+
+        monkeypatch.setattr(Trace, "append", reject_trace_append)
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = OutOfOrderAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, _ = study.run(
+            max_evaluations=2,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+            "p-1",
+        )
+        assert len(report.trace.events) == 2
 
     def test_run_stale_async_preserves_refinement_completion_order(self) -> None:
         problem = Problem(
