@@ -8,7 +8,12 @@ from ..composites.array_space import ArraySpace
 from ..composites.record_space import RecordSpace
 from ..composites.tuple_space import TupleSpace
 from ..permutation import PermutationSpace
-from ..scalar import CategoricalSpace, IntegerSpace, RealSpace
+from ..scalar import (
+    CategoricalSpace,
+    IntegerSpace,
+    RealSpace,
+    require_categorical_scalar,
+)
 from ..structured import StructuredLeafSpace, StructuredSearchSpace
 from ..types import SpaceBoundaryValue, SpaceCandidateValue, SpaceScalarValue
 
@@ -47,18 +52,17 @@ def require_real_candidate(
     Raises
     ------
     TypeError
-        If ``value`` is not numeric or is a boolean.
+        If ``value`` is not a canonical float.
     ValueError
-        If the numeric value is not finite.
+        If ``value`` is not finite.
     """
-    if isinstance(value, bool) or not isinstance(value, (float, int)):
+    if type(value) is not float:
         raise TypeError(message)
 
-    numeric_value = float(value)
-    if not isfinite(numeric_value):
+    if not isfinite(value):
         msg = "real candidate must be finite"
         raise ValueError(msg)
-    return numeric_value
+    return value
 
 
 def require_integer_candidate(
@@ -163,12 +167,13 @@ def validate_categorical_choice(
 
     Raises
     ------
+    TypeError
+        If ``value`` is not a scalar categorical candidate.
     ValueError
         If ``value`` is not one of the declared categorical choices.
     """
-    if not any(value == choice for choice in space.choices):
-        msg = "categorical candidate is not in the declared choices"
-        raise ValueError(msg)
+    scalar_value = require_categorical_scalar(value)
+    space.validate(scalar_value)
 
 
 def is_builtin_structured_space(

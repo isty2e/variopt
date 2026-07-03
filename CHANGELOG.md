@@ -18,6 +18,12 @@ format. Stability guarantees for the public surface are documented in the
 - Study execution now raises `EvaluationBudgetExhausted` instead of silently
   assimilating a step whose reported evaluation cost exceeds the remaining hard
   budget.
+- Structured spaces now enforce canonical candidate form consistently.
+  Composite validation no longer coerces integer real leaves, categorical
+  normalization returns the declared choice object, categorical validation
+  rejects equal-but-different scalar runtime types, and non-finite categorical
+  float choices or non-canonical structured scalar values are rejected at the
+  relevant space boundary.
 
 ### Added
 

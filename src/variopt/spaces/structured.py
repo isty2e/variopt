@@ -40,7 +40,7 @@ def is_space_scalar_value(value: object) -> TypeGuard[SpaceScalarValue]:
         ``True`` when ``value`` is one of the canonical scalar structured
         candidate variants.
     """
-    return isinstance(value, (bool, int, float, str, bytes, bytearray))
+    return type(value) in {bool, int, float, str, bytes, bytearray}
 
 
 def is_space_candidate_value(value: object) -> TypeGuard[SpaceCandidateValue]:
