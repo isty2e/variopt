@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from time import sleep
 from typing import Generic, Protocol
 
 from typing_extensions import TypeVar
@@ -34,6 +35,7 @@ from .common import (
 from .validation import require_async_evaluator, validate_execution_request
 
 BoundaryT = TypeVar("BoundaryT")
+_STALE_ASYNC_IDLE_SLEEP_SECONDS = 0.001
 
 
 class _StudyStaleAsyncOwner(
@@ -401,8 +403,11 @@ def run_stale_async(
             if len(active_sessions) == 0:
                 break
 
+            completed_any = False
             for active_session in tuple(active_sessions):
                 completed_groups = active_session.poll_completed_groups()
+                if len(completed_groups) > 0:
+                    completed_any = True
                 for completed_group in completed_groups:
                     group_records = tuple(outcome.record for outcome in completed_group)
                     group_refinements = tuple(
@@ -480,6 +485,8 @@ def run_stale_async(
                 for active_session in active_sessions
                 if not active_session.is_completed
             ]
+            if not completed_any and len(active_sessions) > 0:
+                sleep(_STALE_ASYNC_IDLE_SLEEP_SECONDS)
     except BaseException:
         _cancel_active_stale_async_sessions(active_sessions)
         raise

@@ -56,7 +56,7 @@ def evaluate_batch_exact_async(
     completed_count = 0
     try:
         while completed_count < batch_session.handle.request_count:
-            completion_groups = tuple(batch_session.poll())
+            completion_groups = tuple(batch_session.wait())
             for completion_group in completion_groups:
                 completed_count += store_completion_group(
                     ordered_outcomes,

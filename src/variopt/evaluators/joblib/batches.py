@@ -1,7 +1,9 @@
 """Async batch state for joblib-backed evaluators."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
+from queue import Queue
+from threading import Thread
 from typing import Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import override
@@ -47,7 +49,7 @@ class AsyncJoblibBatchSessionEvaluator(
         CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]],
         ...,
     ]:
-        """Poll one submitted batch handle.
+        """Poll one submitted batch handle without blocking.
 
         Parameters
         ----------
@@ -57,7 +59,34 @@ class AsyncJoblibBatchSessionEvaluator(
         Returns
         -------
         tuple[CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]], ...]
-            Newly completed outcome groups.
+            Newly completed outcome groups, or an empty tuple when none are
+            currently available.
+        """
+        ...
+
+    def wait(
+        self,
+        handle: EvaluationBatchHandle,
+        *,
+        timeout: float | None = None,
+    ) -> tuple[
+        CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]],
+        ...,
+    ]:
+        """Wait for at least one submitted-batch completion group.
+
+        Parameters
+        ----------
+        handle : EvaluationBatchHandle
+            Logical batch handle to wait on.
+        timeout : float | None, default=None
+            Maximum number of seconds to wait. ``None`` waits indefinitely.
+
+        Returns
+        -------
+        tuple[CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]], ...]
+            Newly completed outcome groups, or an empty tuple when ``timeout``
+            expires before a completion is available.
         """
         ...
 
@@ -116,6 +145,40 @@ class AsyncJoblibRequestInput(Generic[CandidateT]):
     request: EvaluationRequest[CandidateT]
 
 
+@dataclass(frozen=True, slots=True)
+class AsyncJoblibCompletedResult(Generic[CandidateT, JoblibEvaluationRecordT]):
+    """One completed result emitted by a joblib result-drain worker.
+
+    Parameters
+    ----------
+    index : int
+        Logical request index completed by the joblib attempt.
+    outcome : EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
+        Evaluation outcome for ``index``.
+    """
+
+    index: int
+    outcome: EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncJoblibFailedResult:
+    """Failure emitted by a joblib result-drain worker.
+
+    Parameters
+    ----------
+    exception : BaseException
+        Exception raised while draining the joblib result stream.
+    """
+
+    exception: BaseException
+
+
+@dataclass(frozen=True, slots=True)
+class AsyncJoblibExhaustedResult:
+    """Marker emitted when a joblib result stream is exhausted."""
+
+
 @dataclass(slots=True)
 class ActiveAsyncJoblibBatch(Generic[BoundaryT, CandidateT, JoblibEvaluationRecordT]):
     """In-flight async joblib batch state.
@@ -130,6 +193,12 @@ class ActiveAsyncJoblibBatch(Generic[BoundaryT, CandidateT, JoblibEvaluationReco
         Execution resources reserved for the batch.
     result_generator : Generator[tuple[int, EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]], None, None]
         Joblib-backed generator that yields indexed outcomes.
+    result_queue : Queue[AsyncJoblibCompletedResult[CandidateT, JoblibEvaluationRecordT] | AsyncJoblibFailedResult | AsyncJoblibExhaustedResult]
+        Non-blocking handoff queue populated by the drain worker.
+    result_worker : Thread
+        Daemon worker that drains the blocking joblib result stream.
+    abort_attempt : Callable[[], None] | None, optional
+        Best-effort abort hook for the underlying joblib attempt.
     completed_indices : set[int], optional
         Request indices already completed inside the active batch.
     infrastructure_retry_count : int, default=0
@@ -144,6 +213,13 @@ class ActiveAsyncJoblibBatch(Generic[BoundaryT, CandidateT, JoblibEvaluationReco
         None,
         None,
     ]
+    result_queue: Queue[
+        AsyncJoblibCompletedResult[CandidateT, JoblibEvaluationRecordT]
+        | AsyncJoblibFailedResult
+        | AsyncJoblibExhaustedResult
+    ]
+    result_worker: Thread
+    abort_attempt: Callable[[], None] | None = None
     completed_indices: set[int] = field(default_factory=set)
     infrastructure_retry_count: int = 0
 
@@ -258,13 +334,53 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
             )
             raise
 
-        self._completed_count += sum(
-            len(completion_group.outcomes)
-            for completion_group in completion_groups
-        )
-        if self._completed_count >= self.handle.request_count:
-            self._completed_count = self.handle.request_count
-            self._lifecycle = "completed"
+        self._record_completion_groups(completion_groups)
+        return completion_groups
+
+    @override
+    def wait(
+        self,
+        *,
+        timeout: float | None = None,
+    ) -> tuple[
+        CompletionGroup[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]],
+        ...,
+    ]:
+        """Wait for newly completed outcomes for this logical batch.
+
+        Parameters
+        ----------
+        timeout : float | None, default=None
+            Maximum number of seconds to wait. ``None`` waits indefinitely.
+
+        Returns
+        -------
+        tuple[CompletionGroup[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]], ...]
+            Newly completed outcome groups, or an empty tuple when ``timeout``
+            expires before a completion is available.
+
+        Raises
+        ------
+        RuntimeError
+            Raised when waiting on a session that is no longer active.
+        BatchExecutionFailed
+            Raised when the evaluator reports batch failure or cancellation.
+        """
+        if self._lifecycle != "active":
+            msg = "batch session is no longer active"
+            raise RuntimeError(msg)
+
+        try:
+            completion_groups = tuple(
+                self.evaluator.wait(self.handle, timeout=timeout),
+            )
+        except BatchExecutionFailed as exception:
+            self._lifecycle = (
+                "cancelled" if exception.kind == "cancelled" else "failed"
+            )
+            raise
+
+        self._record_completion_groups(completion_groups)
         return completion_groups
 
     @override
@@ -284,6 +400,24 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
             return
         self.evaluator.cancel(self.handle)
         self._lifecycle = "cancelled"
+
+    def _record_completion_groups(
+        self,
+        completion_groups: tuple[
+            CompletionGroup[
+                EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
+            ],
+            ...,
+        ],
+    ) -> None:
+        """Update lifecycle state after newly observed completion groups."""
+        self._completed_count += sum(
+            len(completion_group.outcomes)
+            for completion_group in completion_groups
+        )
+        if self._completed_count >= self.handle.request_count:
+            self._completed_count = self.handle.request_count
+            self._lifecycle = "completed"
 
     @override
     def state(self) -> EvaluationBatchSessionState:
