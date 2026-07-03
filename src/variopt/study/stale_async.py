@@ -333,7 +333,7 @@ def run_stale_async(
 
     records: list[StudyEvaluationRecordT] = []
     refinements: list[CandidateRefinement[CandidateT] | None] | None = None
-    trace = Trace()
+    trace_events: list[TraceEvent] = []
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
     )
@@ -345,7 +345,7 @@ def run_stale_async(
     )
     safe_records: tuple[StudyEvaluationRecordT, ...] | None = None
     safe_refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None = None
-    safe_trace = trace
+    safe_trace = Trace()
     safe_evaluation_count = 0
     safe_state = state
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
@@ -426,7 +426,7 @@ def run_stale_async(
                         state,
                         completed_group,
                     )
-                    trace = trace.append(
+                    trace_events.append(
                         TraceEvent(
                             kind="study.step",
                             message=f"evaluated {len(group_records)} proposal(s)",
@@ -441,7 +441,7 @@ def run_stale_async(
                         safe_refinements = (
                             None if refinements is None else tuple(refinements)
                         )
-                        safe_trace = trace
+                        safe_trace = Trace(events=tuple(trace_events))
                         safe_evaluation_count = (
                             max_evaluations - record_budget_remaining
                             if evaluation_budget is None
@@ -502,7 +502,7 @@ def run_stale_async(
                 if evaluation_budget is None
                 else max_evaluations - evaluation_budget.remaining
             ),
-            trace=trace,
+            trace=Trace(events=tuple(trace_events)),
             refinements=None if refinements is None else tuple(refinements),
             candidate_equal=study.problem.space.candidates_equal,
         ),

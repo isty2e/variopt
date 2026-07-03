@@ -707,7 +707,7 @@ def run(
 
     records: list[StudyEvaluationRecordT] = []
     refinements: list[CandidateRefinement[CandidateT] | None] | None = None
-    trace = Trace()
+    trace_events: list[TraceEvent] = []
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
     )
@@ -730,7 +730,7 @@ def run(
         safe_snapshot = _CheckpointSafeRunSnapshot(
             records=(),
             refinements=None,
-            trace=trace,
+            trace=Trace(),
             evaluation_count=0,
             state=state,
         )
@@ -769,7 +769,7 @@ def run(
         if evaluation_budget is None:
             remaining -= len(batch_records)
             record_budget_remaining = remaining
-        trace = trace.append(
+        trace_events.append(
             TraceEvent(
                 kind="study.step",
                 message=f"evaluated {len(batch_records)} proposal(s)",
@@ -786,7 +786,7 @@ def run(
                 safe_snapshot = _CheckpointSafeRunSnapshot(
                     records=tuple(records),
                     refinements=None if refinements is None else tuple(refinements),
-                    trace=trace,
+                    trace=Trace(events=tuple(trace_events)),
                     evaluation_count=evaluation_count,
                     state=state,
                 )
@@ -823,7 +823,7 @@ def run(
                 if evaluation_budget is None
                 else max_evaluations - evaluation_budget.remaining
             ),
-            trace=trace,
+            trace=Trace(events=tuple(trace_events)),
             refinements=None if refinements is None else tuple(refinements),
             candidate_equal=study.problem.space.candidates_equal,
         ),

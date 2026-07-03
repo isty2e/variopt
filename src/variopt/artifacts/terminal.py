@@ -1,6 +1,6 @@
 """Terminal-surface artifact definitions."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, fields
 from typing import Generic, TypeVar, cast
 
@@ -164,6 +164,26 @@ def _optional_refinement_tuple(
         return ()
 
     return tuple(refinements)
+
+
+def _initialize_dataclass_fields(
+    instance: FrozenGenericSlotsCompat,
+    *,
+    field_values: Mapping[str, object | None],
+) -> None:
+    dataclass_field_names = {dataclass_field.name for dataclass_field in fields(instance)}
+    value_names = set(field_values)
+    missing_names = dataclass_field_names - value_names
+    extra_names = value_names - dataclass_field_names
+    if missing_names or extra_names:
+        msg = (
+            "prevalidated surface construction field mismatch: "
+            f"missing={sorted(missing_names)!r}, extra={sorted(extra_names)!r}"
+        )
+        raise RuntimeError(msg)
+
+    for field_name, value in field_values.items():
+        object.__setattr__(instance, field_name, value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,13 +590,14 @@ def dominates_objective_scores(
         msg = "objective score vectors must have the same dimension"
         raise ValueError(msg)
 
-    return all(
-        left_score <= right_score
-        for left_score, right_score in zip(left_scores, right_scores, strict=True)
-    ) and any(
-        left_score < right_score
-        for left_score, right_score in zip(left_scores, right_scores, strict=True)
-    )
+    strictly_better = False
+    for left_score, right_score in zip(left_scores, right_scores, strict=True):
+        if left_score > right_score:
+            return False
+        if left_score < right_score:
+            strictly_better = True
+
+    return strictly_better
 
 
 def collect_nondominated_records(
@@ -653,6 +674,51 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         compare=False,
         kw_only=True,
     )
+    _validated_frontier_source_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = (
+        field(
+            default=(),
+            init=False,
+            repr=False,
+            compare=False,
+        )
+    )
+    _validated_frontier_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = field(
+        default=(),
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    @classmethod
+    def _from_prevalidated_frontier(
+        cls,
+        *,
+        nondominated_records: tuple[ObjectiveVectorRecord[CandidateT], ...],
+        records: tuple[ObjectiveVectorRecord[CandidateT], ...],
+        evaluation_count: int,
+        trace: Trace,
+        refinements: tuple[CandidateRefinement[CandidateT] | None, ...],
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> Self:
+        surface = cls.__new__(cls)
+        _initialize_dataclass_fields(
+            surface,
+            field_values={
+                "__orig_class__": None,
+                "nondominated_records": nondominated_records,
+                "records": records,
+                "evaluation_count": evaluation_count,
+                "trace": trace,
+                "refinements": refinements,
+                "_candidate_equal": None,
+                "_candidate_equal_required": False,
+                "_validated_refinement_pairs": (),
+                "_validated_frontier_source_records": records,
+                "_validated_frontier_records": nondominated_records,
+            },
+        )
+        surface.__post_init__(candidate_equal)
+        return surface
 
     def __post_init__(
         self,
@@ -679,12 +745,13 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "all objective score vectors must share one dimension"
             raise ValueError(msg)
 
-        if any(record not in self.records for record in self.nondominated_records):
-            msg = "nondominated_records must come from records"
-            raise ValueError(msg)
-
-        expected_frontier = collect_nondominated_records(self.records)
-        if self.nondominated_records != expected_frontier:
+        frontier_is_prevalidated = (
+            self.records is self._validated_frontier_source_records
+            and self.nondominated_records is self._validated_frontier_records
+        )
+        if not frontier_is_prevalidated and (
+            self.nondominated_records != collect_nondominated_records(self.records)
+        ):
             msg = (
                 "nondominated_records must equal the stable nondominated frontier "
                 "of records"
@@ -753,8 +820,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
-        return cls(
-            nondominated_records=collect_nondominated_records(record_tuple),
+        nondominated_records = collect_nondominated_records(record_tuple)
+        return cls._from_prevalidated_frontier(
+            nondominated_records=nondominated_records,
             records=record_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
@@ -798,6 +866,12 @@ def terminal_surface_getstate(self: FrozenGenericSlotsCompat) -> list[object | N
         if dataclass_field.name == "_candidate_equal":
             state.append(None)
             continue
+        if dataclass_field.name in {
+            "_validated_frontier_source_records",
+            "_validated_frontier_records",
+        }:
+            state.append(())
+            continue
         state.append(getattr(self, dataclass_field.name, None))
     return state
 
@@ -823,6 +897,11 @@ def terminal_surface_setstate(
         elif dataclass_field.name == "_candidate_equal_required":
             object.__setattr__(self, dataclass_field.name, False)
         elif dataclass_field.name == "_validated_refinement_pairs":
+            object.__setattr__(self, dataclass_field.name, ())
+        elif dataclass_field.name in {
+            "_validated_frontier_source_records",
+            "_validated_frontier_records",
+        }:
             object.__setattr__(self, dataclass_field.name, ())
         else:
             object.__setattr__(self, dataclass_field.name, None)

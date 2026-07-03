@@ -44,7 +44,7 @@ from variopt import (
     RunReport,
     Study,
 )
-from variopt.artifacts import ProposalEvaluationSpec
+from variopt.artifacts import ProposalEvaluationSpec, Trace, TraceEvent
 from variopt.evaluators import SequentialEvaluator
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -825,6 +825,34 @@ class StudyTests:
         assert report.records[0].value == 16.0
         assert report.records[1].value == 4.0
         assert report.records[2].value == 1.0
+        assert tuple(event.value for event in report.trace.events) == (4.0, 1.0)
+
+    def test_run_buffers_trace_events_without_trace_append(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def reject_trace_append(_trace: Trace, _event: TraceEvent) -> Trace:
+            raise AssertionError("run should buffer trace events before materialization")
+
+        monkeypatch.setattr(Trace, "append", reject_trace_append)
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+                (Proposal(candidate=1, proposal_id="p-3"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, _ = study.run(max_evaluations=3, batch_size=2)
+
         assert tuple(event.value for event in report.trace.events) == (4.0, 1.0)
 
     def test_run_preserves_record_aligned_refinement_metadata(self) -> None:
