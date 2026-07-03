@@ -30,7 +30,7 @@ from variopt.spaces.geometry import (
     compile_structured_geometry,
     distance_parts,
 )
-from variopt.spaces.types import SpaceCandidateValue
+from variopt.spaces.types import SpaceCandidateValue, SpaceScalarValue
 
 WrappedPairCandidate = tuple[int, str]
 ConditionalBranchCandidate = tuple[str, int]
@@ -257,12 +257,25 @@ class StructuredSpaceDiversityMetricTests:
 
         assert distance == 0.5
 
+    def test_real_space_distance_rejects_noncanonical_integer_leaf(self) -> None:
+        metric = StructuredSpaceDiversityMetric(space=RealSpace(0.0, 10.0))
+
+        with pytest.raises(TypeError):
+            _ = metric.distance(2, 7.0)
+
     def test_real_space_distance_respects_log_scale(self) -> None:
         metric = StructuredSpaceDiversityMetric(space=RealSpace(1.0, 100.0, scale="log"))
 
         distance = metric.distance(1.0, 10.0)
 
         assert approx_equal(distance, 0.5)
+
+    def test_categorical_space_distance_rejects_equal_noncanonical_leaf(self) -> None:
+        space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((0, 1))
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        with pytest.raises(TypeError):
+            _ = metric.distance(True, 1)
 
     def test_composite_space_distance_combines_leaf_distances_by_rms(self) -> None:
         space = RecordSpace(

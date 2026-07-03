@@ -589,17 +589,17 @@ def require_real_candidate(value: SpaceCandidateValue) -> float:
     Returns
     -------
     float
-        Numeric candidate value normalized to ``float``.
+        Canonical floating-point candidate value.
 
     Raises
     ------
     TypeError
-        If ``value`` is not numeric or is a boolean.
+        If ``value`` is not a canonical float.
     """
-    if isinstance(value, bool) or not isinstance(value, (float, int)):
-        msg = "real child candidate must be numeric"
+    if type(value) is not float:
+        msg = "real child candidate must be a canonical float"
         raise TypeError(msg)
-    return float(value)
+    return value
 
 
 def require_integer_candidate(value: SpaceCandidateValue) -> int:

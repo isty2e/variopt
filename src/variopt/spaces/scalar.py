@@ -2,8 +2,8 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from math import exp, log
-from typing import Generic, Literal, TypeVar
+from math import exp, isfinite, log
+from typing import Generic, Literal, TypeGuard, TypeVar
 
 import numpy as np
 from typing_extensions import override
@@ -34,6 +34,63 @@ def has_duplicate_choices(choices: Sequence[CategoricalT]) -> bool:
                 return True
 
     return False
+
+
+def is_canonical_scalar_choice(value: object) -> TypeGuard[SpaceScalarValue]:
+    """Return whether a categorical value uses one supported scalar runtime type.
+
+    Parameters
+    ----------
+    value : object
+        Runtime value to classify.
+
+    Returns
+    -------
+    bool
+        Whether ``value`` uses an exact scalar type supported by structured
+        candidates.
+    """
+    return type(value) in {bool, int, float, str, bytes, bytearray}
+
+
+def has_nonfinite_float_choice(choices: Sequence[CategoricalT]) -> bool:
+    """Return whether a categorical declaration contains a non-finite float.
+
+    Parameters
+    ----------
+    choices : Sequence[CategoricalT]
+        Declared categorical choices to inspect.
+
+    Returns
+    -------
+    bool
+        Whether any declared float choice is NaN or infinite.
+    """
+    return any(isinstance(choice, float) and not isfinite(choice) for choice in choices)
+
+
+def require_categorical_scalar(value: object) -> SpaceScalarValue:
+    """Return one categorical scalar value or raise.
+
+    Parameters
+    ----------
+    value : object
+        Runtime value to validate.
+
+    Returns
+    -------
+    SpaceScalarValue
+        Scalar value accepted by categorical spaces.
+
+    Raises
+    ------
+    TypeError
+        If ``value`` is not one of the supported exact scalar types.
+    """
+    if not is_canonical_scalar_choice(value):
+        msg = "categorical candidate must be scalar"
+        raise TypeError(msg)
+    return value
 
 
 @dataclass(frozen=True)
@@ -580,11 +637,25 @@ class CategoricalSpace(
             msg = "CategoricalSpace requires at least one choice"
             raise ValueError(msg)
 
+        for choice in choices:
+            _ = require_categorical_scalar(choice)
+
+        if has_nonfinite_float_choice(choices):
+            msg = "CategoricalSpace float choices must be finite"
+            raise ValueError(msg)
+
         if has_duplicate_choices(choices):
             msg = "CategoricalSpace choices must be unique"
             raise ValueError(msg)
 
         object.__setattr__(self, "choices", tuple(choices))
+
+    def _matching_choice(self, value: SpaceScalarValue) -> CategoricalT | None:
+        """Return the declared choice equal to ``value``, if one exists."""
+        for choice in self.choices:
+            if value == choice:
+                return choice
+        return None
 
     @override
     def normalize(self, raw_candidate: CategoricalT) -> CategoricalT:
@@ -600,8 +671,12 @@ class CategoricalSpace(
         CategoricalT
             Canonical categorical value.
         """
-        self.validate(raw_candidate)
-        return raw_candidate
+        scalar_candidate = require_categorical_scalar(raw_candidate)
+        choice = self._matching_choice(scalar_candidate)
+        if choice is None:
+            msg = "categorical candidate is not in the declared choices"
+            raise ValueError(msg)
+        return choice
 
     @override
     def validate(self, candidate: CategoricalT) -> None:
@@ -612,9 +687,15 @@ class CategoricalSpace(
         candidate : CategoricalT
             Canonical categorical value to validate.
         """
-        if not any(candidate == choice for choice in self.choices):
+        scalar_candidate = require_categorical_scalar(candidate)
+        choice = self._matching_choice(scalar_candidate)
+        if choice is None:
             msg = "categorical candidate is not in the declared choices"
             raise ValueError(msg)
+
+        if type(candidate) is not type(choice):
+            msg = "categorical candidate must use the declared choice type"
+            raise TypeError(msg)
 
     @override
     def sample(self, random_state: np.random.RandomState) -> CategoricalT:
@@ -650,11 +731,17 @@ class CategoricalSpace(
         tuple[CategoricalT, ...]
             Alternative categorical values in declaration order.
         """
-        if not any(candidate == choice for choice in self.choices):
+        scalar_candidate = require_categorical_scalar(candidate)
+        choice = self._matching_choice(scalar_candidate)
+        if choice is None:
             msg = "categorical candidate is not in the declared choices"
             raise ValueError(msg)
 
-        return tuple(choice for choice in self.choices if choice != candidate)
+        if type(candidate) is not type(choice):
+            msg = "categorical candidate must use the declared choice type"
+            raise TypeError(msg)
+
+        return tuple(other_choice for other_choice in self.choices if other_choice != choice)
 
     @override
     def leaf_paths(self) -> tuple[LeafPath, ...]:
@@ -737,9 +824,10 @@ class CategoricalSpace(
             return candidate
 
         replacement = replacements[()]
-        for choice in self.choices:
-            if replacement == choice:
-                return choice
+        scalar_replacement = require_categorical_scalar(replacement)
+        choice = self._matching_choice(scalar_replacement)
+        if choice is not None:
+            return choice
 
         msg = "categorical leaf replacement is not in the declared choices"
         raise ValueError(msg)

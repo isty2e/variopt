@@ -24,6 +24,12 @@ from variopt.spaces import (
     RecordCandidate,
     SpaceBoundaryValue,
     SpaceCandidateValue,
+    SpaceScalarValue,
+)
+from variopt.spaces.structured import (
+    is_space_candidate_value,
+    is_space_scalar_value,
+    require_space_candidate_value,
 )
 
 
@@ -247,6 +253,17 @@ class SumTupleSpace(SearchSpace[SpaceBoundaryValue, SpaceCandidateValue]):
 class SearchSpaceTests:
     """Conformance checks for the built-in search space family."""
 
+    def test_structured_candidate_predicate_rejects_numpy_scalars(self) -> None:
+        scalar = np.float64(1.0)
+
+        assert not is_space_scalar_value(scalar)
+        assert not is_space_candidate_value(scalar)
+        with pytest.raises(TypeError):
+            _ = require_space_candidate_value(
+                scalar,
+                operation="test structured candidate gate",
+            )
+
     def test_real_space_normalizes_to_float(self) -> None:
         space = RealSpace(low=-1.0, high=1.0)
 
@@ -312,9 +329,79 @@ class SearchSpaceTests:
         with pytest.raises(ValueError):
             _ = space.normalize("z")
 
+    def test_categorical_space_normalizes_to_declared_choice_type(self) -> None:
+        numeric_space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((1.0, 2.0))
+        binary_space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((0, 1))
+
+        numeric_candidate = numeric_space.normalize(1)
+        binary_candidate = binary_space.normalize(True)
+
+        assert numeric_candidate == 1.0
+        assert type(numeric_candidate) is float
+        assert binary_candidate == 1
+        assert type(binary_candidate) is int
+
+    def test_categorical_space_validate_rejects_equal_noncanonical_value(self) -> None:
+        numeric_space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((1.0, 2.0))
+        binary_space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((0, 1))
+
+        with pytest.raises(TypeError):
+            numeric_space.validate(1)
+
+        with pytest.raises(TypeError):
+            binary_space.validate(True)
+
+    def test_categorical_space_canonicalizes_equal_bytearray_boundary_value(self) -> None:
+        space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((b"a", b"b"))
+
+        candidate = space.normalize(bytearray(b"a"))
+
+        assert candidate == b"a"
+        assert type(candidate) is bytes
+        with pytest.raises(TypeError):
+            space.validate(bytearray(b"a"))
+
+    def test_categorical_space_alternatives_reject_equal_noncanonical_value(self) -> None:
+        space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((0, 1))
+
+        with pytest.raises(TypeError):
+            _ = space.alternatives(True)
+
     def test_categorical_space_rejects_duplicate_choices(self) -> None:
         with pytest.raises(ValueError):
             _ = CategoricalSpace(("a", "a"))
+
+    def test_categorical_space_rejects_non_scalar_choices(self) -> None:
+        choices = cast(Sequence[SpaceScalarValue], (("nested",),))
+
+        with pytest.raises(TypeError):
+            _ = CategoricalSpace(choices)
+
+    def test_categorical_space_rejects_numpy_scalar_choices(self) -> None:
+        choices = cast(Sequence[SpaceScalarValue], (np.float64(1.0),))
+
+        with pytest.raises(TypeError):
+            _ = CategoricalSpace(choices)
+
+    def test_categorical_space_normalize_rejects_non_scalar_equal_object(self) -> None:
+        class EqualToOne:
+            @override
+            def __eq__(self, other: object) -> bool:
+                return other == 1
+
+        space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((1,))
+        boundary_space = cast(SearchSpace[object, SpaceScalarValue], space)
+
+        with pytest.raises(TypeError):
+            _ = boundary_space.normalize(EqualToOne())
+
+    @pytest.mark.parametrize("choice", [float("inf"), float("-inf"), float("nan")])
+    def test_categorical_space_rejects_nonfinite_float_choices(
+        self,
+        choice: float,
+    ) -> None:
+        with pytest.raises(ValueError):
+            _ = CategoricalSpace((1.0, choice))
 
     def test_tuple_space_normalizes_heterogeneous_sequence(self) -> None:
         space = TupleSpace(IntegerSpace(0, 5), RealSpace(-1.0, 1.0))
@@ -322,6 +409,27 @@ class SearchSpaceTests:
         candidate = space.normalize([3, 0])
 
         assert candidate == (3, 0.0)
+
+    def test_tuple_space_validate_rejects_noncanonical_real_child(self) -> None:
+        space = TupleSpace(RealSpace(0.0, 10.0))
+
+        with pytest.raises(TypeError):
+            space.validate((3,))
+
+    def test_tuple_space_equality_rejects_noncanonical_real_child(self) -> None:
+        space = TupleSpace(RealSpace(0.0, 10.0))
+
+        with pytest.raises(TypeError):
+            _ = space.candidates_equal((3,), (3.0,))
+
+    def test_tuple_space_leaf_access_rejects_noncanonical_real_child(self) -> None:
+        space = TupleSpace(RealSpace(0.0, 10.0))
+
+        with pytest.raises(TypeError):
+            _ = space.leaf_value_at_path((3,), (0,))
+
+        with pytest.raises(TypeError):
+            _ = space.replace_leaf_values((3,), {(0,): 4.0})
 
     def test_permutation_space_rejects_duplicates(self) -> None:
         space = PermutationSpace(size=4)
@@ -403,6 +511,13 @@ class SearchSpaceTests:
         candidate = RecordCandidate(entries=(("scale", 1.0), ("depth", 2)))
 
         with pytest.raises(ValueError):
+            space.validate(candidate)
+
+    def test_record_space_validate_rejects_noncanonical_real_field(self) -> None:
+        space = RecordSpace(scale=RealSpace(0.0, 2.0))
+        candidate = RecordCandidate(entries=(("scale", 1),))
+
+        with pytest.raises(TypeError):
             space.validate(candidate)
 
     def test_record_space_is_idempotent_for_canonical_candidate(self) -> None:
