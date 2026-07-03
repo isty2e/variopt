@@ -2,11 +2,13 @@
 
 import pickle
 from dataclasses import replace
+from inspect import signature
 from typing import cast
 
 import pytest
 from typing_extensions import override
 
+import variopt.artifacts.terminal as terminal_artifacts
 from tests import conformance as contract_cases
 from tests.problem_artifact_support import (
     LabelRecord,
@@ -1168,7 +1170,7 @@ class RuntimeArtifactsTests:
         assert surface.records == report.records
         assert surface.refinements == (refinement, None)
 
-    def test_nondominated_run_surface_replace_preserves_prevalidated_frontier(
+    def test_nondominated_run_surface_from_records_reuses_prevalidated_frontier(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -1181,23 +1183,44 @@ class RuntimeArtifactsTests:
                 OptimizationDirection.MINIMIZE,
             ),
         )
-        surface = NondominatedRunSurface[int].from_records((record,))
-
-        def reject_frontier_collection(
-            records: tuple[ObjectiveVectorRecord[int], ...],
-        ) -> tuple[ObjectiveVectorRecord[int], ...]:
-            _ = records
-            raise AssertionError("frontier should already be validated")
-
-        monkeypatch.setattr(
-            "variopt.artifacts.terminal.collect_nondominated_records",
-            reject_frontier_collection,
+        dominated_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            objective_values=(3.0, 4.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        collection_calls: list[tuple[ObjectiveVectorRecord[int], ...]] = []
+        original_collect_nondominated_records = (
+            terminal_artifacts.collect_nondominated_records
         )
 
-        updated_surface = replace(surface, evaluation_count=2)
+        def collect_counting_frontier(
+            records: tuple[ObjectiveVectorRecord[int], ...],
+        ) -> tuple[ObjectiveVectorRecord[int], ...]:
+            collection_calls.append(records)
+            return original_collect_nondominated_records(records)
 
-        assert updated_surface.evaluation_count == 2
-        assert updated_surface.nondominated_records == (record,)
+        monkeypatch.setattr(
+            terminal_artifacts,
+            "collect_nondominated_records",
+            collect_counting_frontier,
+        )
+
+        surface = NondominatedRunSurface[int].from_records((record, dominated_record))
+
+        assert collection_calls == [(record, dominated_record)]
+        assert surface.nondominated_records == (record,)
+
+    def test_nondominated_run_surface_rejects_public_prevalidation_cache_injection(
+        self,
+    ) -> None:
+        constructor_parameters = signature(NondominatedRunSurface).parameters
+
+        assert "_validated_frontier_source_records" not in constructor_parameters
+        assert "_validated_frontier_records" not in constructor_parameters
 
     def test_nondominated_run_surface_replace_revalidates_changed_records(
         self,

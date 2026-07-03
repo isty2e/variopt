@@ -657,17 +657,43 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     _validated_frontier_source_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = (
         field(
             default=(),
+            init=False,
             repr=False,
             compare=False,
-            kw_only=True,
         )
     )
     _validated_frontier_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = field(
         default=(),
+        init=False,
         repr=False,
         compare=False,
-        kw_only=True,
     )
+
+    @classmethod
+    def _from_prevalidated_frontier(
+        cls,
+        *,
+        nondominated_records: tuple[ObjectiveVectorRecord[CandidateT], ...],
+        records: tuple[ObjectiveVectorRecord[CandidateT], ...],
+        evaluation_count: int,
+        trace: Trace,
+        refinements: tuple[CandidateRefinement[CandidateT] | None, ...],
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> Self:
+        surface = cls.__new__(cls)
+        object.__setattr__(surface, "__orig_class__", None)
+        object.__setattr__(surface, "nondominated_records", nondominated_records)
+        object.__setattr__(surface, "records", records)
+        object.__setattr__(surface, "evaluation_count", evaluation_count)
+        object.__setattr__(surface, "trace", trace)
+        object.__setattr__(surface, "refinements", refinements)
+        object.__setattr__(surface, "_candidate_equal", None)
+        object.__setattr__(surface, "_candidate_equal_required", False)
+        object.__setattr__(surface, "_validated_refinement_pairs", ())
+        object.__setattr__(surface, "_validated_frontier_source_records", records)
+        object.__setattr__(surface, "_validated_frontier_records", nondominated_records)
+        surface.__post_init__(candidate_equal)
+        return surface
 
     def __post_init__(
         self,
@@ -770,15 +796,13 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             normalized_evaluation_count = evaluation_count
 
         nondominated_records = collect_nondominated_records(record_tuple)
-        return cls(
+        return cls._from_prevalidated_frontier(
             nondominated_records=nondominated_records,
             records=record_tuple,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
             candidate_equal=candidate_equal,
-            _validated_frontier_source_records=record_tuple,
-            _validated_frontier_records=nondominated_records,
         )
 
     @classmethod
@@ -816,6 +840,12 @@ def terminal_surface_getstate(self: FrozenGenericSlotsCompat) -> list[object | N
     for dataclass_field in fields(self):
         if dataclass_field.name == "_candidate_equal":
             state.append(None)
+            continue
+        if dataclass_field.name in {
+            "_validated_frontier_source_records",
+            "_validated_frontier_records",
+        }:
+            state.append(())
             continue
         state.append(getattr(self, dataclass_field.name, None))
     return state
