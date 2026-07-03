@@ -16,10 +16,12 @@ from variopt import (
     PermutationSpace,
     RealSpace,
     RecordSpace,
+    TupleSpace,
 )
 from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.spaces import (
     LeafPath,
+    RecordCandidate,
     StructuredLeafSpace,
     StructuredSearchSpace,
 )
@@ -277,6 +279,13 @@ class StructuredSpaceDiversityMetricTests:
         with pytest.raises(TypeError):
             _ = metric.distance(True, 1)
 
+    def test_categorical_space_distance_rejects_unknown_choice(self) -> None:
+        space: CategoricalSpace[str] = CategoricalSpace(("a", "b"))
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        with pytest.raises(ValueError, match="not in the declared choices"):
+            _ = metric.distance("a", "c")
+
     def test_composite_space_distance_combines_leaf_distances_by_rms(self) -> None:
         space = RecordSpace(
             depth=IntegerSpace(1, 5),
@@ -304,6 +313,25 @@ class StructuredSpaceDiversityMetricTests:
         expected = math.sqrt((0.5 * 0.5 + 1.0 + 0.5 * 0.5) / 3.0)
         assert approx_equal(distance, expected)
 
+    def test_record_space_distance_rejects_misordered_candidate_fields(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 5),
+            mode=CategoricalSpace(("a", "b")),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = RecordCandidate(entries=(("mode", "a"), ("depth", 1)))
+        right = space.normalize({"depth": 3, "mode": "b"})
+
+        with pytest.raises(ValueError, match="keys must exactly match"):
+            _ = metric.distance(left, right)
+
+    def test_tuple_space_distance_rejects_equal_noncanonical_leaf(self) -> None:
+        space = TupleSpace(CategoricalSpace((0, 1)), RealSpace(0.0, 1.0))
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        with pytest.raises(TypeError):
+            _ = metric.distance((True, 0.0), (1, 1.0))
+
     def test_array_space_distance_combines_element_leaf_distances_by_rms(self) -> None:
         space = ArraySpace(RealSpace(0.0, 10.0), length=3)
         metric = StructuredSpaceDiversityMetric(space=space)
@@ -315,6 +343,17 @@ class StructuredSpaceDiversityMetricTests:
 
         expected = math.sqrt((0.5 * 0.5 + 0.5 * 0.5 + 0.0) / 3.0)
         assert approx_equal(distance, expected)
+
+    def test_categorical_array_distance_uses_mismatch_fraction(self) -> None:
+        space = ArraySpace(CategoricalSpace(("a", "b")), length=4)
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        distance = metric.distance(
+            space.normalize(("a", "a", "b", "b")),
+            space.normalize(("a", "b", "a", "b")),
+        )
+
+        assert approx_equal(distance, math.sqrt(0.5))
 
     def test_binary_array_distance_uses_position_mismatch_fraction(self) -> None:
         space = ArraySpace(IntegerSpace(0, 1), length=4)
@@ -378,12 +417,31 @@ class StructuredSpaceDiversityMetricTests:
         right = space.normalize((3, "b"))
 
         geometry = compile_structured_geometry(space)
+        metric = StructuredSpaceDiversityMetric(space=space)
 
         assert geometry is not None
+        assert metric.geometry == geometry
+        assert metric.part_values_geometry is None
         assert distance_parts(space, left, right) == compiled_parts
         assert approx_equal(
             math.sqrt(0.125),
-            StructuredSpaceDiversityMetric(space=space).distance(left, right),
+            metric.distance(left, right),
+        )
+
+    def test_metric_caches_builtin_raw_distance_part_geometry(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 5),
+            mode=CategoricalSpace(("a", "b")),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        assert metric.geometry is not None
+        assert metric.part_values_geometry is metric.geometry
+        left = space.normalize({"depth": 1, "mode": "a"})
+        right = space.normalize({"depth": 3, "mode": "b"})
+        assert approx_equal(
+            metric.distance(left, right),
+            math.sqrt((0.25 + 1.0) / 2.0),
         )
 
     def test_generic_geometry_returns_distance_parts_for_active_topology_mismatch(self) -> None:
