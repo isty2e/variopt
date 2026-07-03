@@ -20,6 +20,7 @@ from variopt import (
 from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.spaces import (
     LeafPath,
+    RecordCandidate,
     StructuredLeafSpace,
     StructuredSearchSpace,
 )
@@ -277,6 +278,13 @@ class StructuredSpaceDiversityMetricTests:
         with pytest.raises(TypeError):
             _ = metric.distance(True, 1)
 
+    def test_categorical_space_distance_rejects_unknown_choice(self) -> None:
+        space: CategoricalSpace[str] = CategoricalSpace(("a", "b"))
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        with pytest.raises(ValueError, match="not in the declared choices"):
+            _ = metric.distance("a", "c")
+
     def test_composite_space_distance_combines_leaf_distances_by_rms(self) -> None:
         space = RecordSpace(
             depth=IntegerSpace(1, 5),
@@ -303,6 +311,18 @@ class StructuredSpaceDiversityMetricTests:
 
         expected = math.sqrt((0.5 * 0.5 + 1.0 + 0.5 * 0.5) / 3.0)
         assert approx_equal(distance, expected)
+
+    def test_record_space_distance_rejects_misordered_candidate_fields(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 5),
+            mode=CategoricalSpace(("a", "b")),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = RecordCandidate(entries=(("mode", "a"), ("depth", 1)))
+        right = space.normalize({"depth": 3, "mode": "b"})
+
+        with pytest.raises(ValueError, match="keys must exactly match"):
+            _ = metric.distance(left, right)
 
     def test_array_space_distance_combines_element_leaf_distances_by_rms(self) -> None:
         space = ArraySpace(RealSpace(0.0, 10.0), length=3)

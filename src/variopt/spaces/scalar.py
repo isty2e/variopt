@@ -13,6 +13,7 @@ from .structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
 from .types import SpaceCandidateValue, SpaceScalarValue
 
 CategoricalT = TypeVar("CategoricalT", bound=SpaceScalarValue)
+_CANONICAL_SCALAR_CHOICE_TYPES = frozenset((bool, int, float, str, bytes, bytearray))
 
 
 def has_duplicate_choices(choices: Sequence[CategoricalT]) -> bool:
@@ -50,7 +51,7 @@ def is_canonical_scalar_choice(value: object) -> TypeGuard[SpaceScalarValue]:
         Whether ``value`` uses an exact scalar type supported by structured
         candidates.
     """
-    return type(value) in {bool, int, float, str, bytes, bytearray}
+    return type(value) in _CANONICAL_SCALAR_CHOICE_TYPES
 
 
 def has_nonfinite_float_choice(choices: Sequence[CategoricalT]) -> bool:

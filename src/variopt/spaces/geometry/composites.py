@@ -12,6 +12,7 @@ from .leaf import (
     require_record_candidate,
 )
 from .parts import StructuredDistanceParts
+from .scalar import CategoricalSpaceGeometry
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,18 +132,34 @@ class RecordSpaceGeometry:
             value=right,
             message="record-space fast diversity path requires canonical record candidates",
         )
-        expected_names = tuple(name for name, _ in self.field_geometries)
-        if tuple(left_record.keys()) != expected_names or tuple(right_record.keys()) != expected_names:
+        left_entries = left_record.entries
+        right_entries = right_record.entries
+        if (
+            len(left_entries) != len(self.field_geometries)
+            or len(right_entries) != len(self.field_geometries)
+        ):
             msg = "record candidate keys must exactly match the declared fields"
             raise ValueError(msg)
 
         squared_distance = 0.0
         shared_leaf_count = 0
         topology_mismatch_leaf_count = 0
-        for name, child_geometry in self.field_geometries:
+        for index, (name, child_geometry) in enumerate(self.field_geometries):
+            left_name, left_value = left_entries[index]
+            right_name, right_value = right_entries[index]
+            if left_name != name or right_name != name:
+                msg = "record candidate keys must exactly match the declared fields"
+                raise ValueError(msg)
+            if isinstance(child_geometry, CategoricalSpaceGeometry):
+                squared_distance += child_geometry.squared_distance(
+                    left_value,
+                    right_value,
+                )
+                shared_leaf_count += 1
+                continue
             child_parts = child_geometry.distance_parts(
-                left_record[name],
-                right_record[name],
+                left_value,
+                right_value,
             )
             squared_distance += child_parts.overlap_squared_distance
             shared_leaf_count += child_parts.shared_leaf_count
