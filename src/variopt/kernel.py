@@ -18,6 +18,7 @@ from .artifacts import (
 )
 from .execution import EvaluationBudget, ExecutionResources
 from .problem import Problem
+from .randomness import RandomStateSnapshot
 from .spaces import LeafPath
 
 BoundaryT = TypeVar("BoundaryT")
@@ -113,6 +114,10 @@ class ProposalLocalSearchContext(ProposalKernelHint):
     prioritized_leaf_paths : tuple[LeafPath, ...], default=()
         Optional ordered subset of leaf paths to prioritize during structured
         local search.
+    random_state_snapshot : RandomStateSnapshot | None, optional
+        Optional episode-local random-state snapshot. Checkpointable run methods
+        can provide this to make stochastic local-search episodes reproducible
+        from serialized run-method state.
 
     Notes
     -----
@@ -123,6 +128,7 @@ class ProposalLocalSearchContext(ProposalKernelHint):
     enabled: bool = True
     local_budget: int | None = None
     prioritized_leaf_paths: tuple[LeafPath, ...] = ()
+    random_state_snapshot: RandomStateSnapshot | None = None
 
     def __post_init__(self) -> None:
         """Validate and normalize the local-search context.
@@ -136,6 +142,13 @@ class ProposalLocalSearchContext(ProposalKernelHint):
         if self.local_budget is not None and self.local_budget <= 0:
             msg = "local_budget must be positive when provided"
             raise ValueError(msg)
+
+        if (
+            self.random_state_snapshot is not None
+            and type(self.random_state_snapshot) is not RandomStateSnapshot
+        ):
+            msg = "random_state_snapshot must be a RandomStateSnapshot when provided"
+            raise TypeError(msg)
 
         normalized_leaf_paths = tuple(
             tuple(path) for path in self.prioritized_leaf_paths
