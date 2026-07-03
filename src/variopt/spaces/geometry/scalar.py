@@ -67,6 +67,17 @@ class RealSpaceGeometry:
         ValueError
             If either value lies outside the declared bounds.
         """
+        return StructuredDistanceParts(
+            overlap_squared_distance=self.squared_distance(left, right),
+            shared_leaf_count=1,
+        )
+
+    def squared_distance(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> float:
+        """Return one normalized squared distance for one real leaf."""
         left_value = require_real_candidate(
             value=left,
             message="real-space diversity requires numeric left leaf values",
@@ -83,10 +94,7 @@ class RealSpaceGeometry:
             raise ValueError(msg)
 
         if self.space.low == self.space.high:
-            return StructuredDistanceParts(
-                overlap_squared_distance=0.0,
-                shared_leaf_count=1,
-            )
+            return 0.0
 
         if self.space.scale == "log":
             coordinate_span = log(self.space.high) - log(self.space.low)
@@ -95,10 +103,7 @@ class RealSpaceGeometry:
             coordinate_span = self.space.high - self.space.low
             leaf_distance = abs(left_value - right_value) / coordinate_span
 
-        return StructuredDistanceParts(
-            overlap_squared_distance=leaf_distance * leaf_distance,
-            shared_leaf_count=1,
-        )
+        return leaf_distance * leaf_distance
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +144,17 @@ class IntegerSpaceGeometry:
         ValueError
             If either value lies outside the declared bounds.
         """
+        return StructuredDistanceParts(
+            overlap_squared_distance=self.squared_distance(left, right),
+            shared_leaf_count=1,
+        )
+
+    def squared_distance(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> float:
+        """Return one normalized squared distance for one integer leaf."""
         left_value = require_integer_candidate(
             value=left,
             message="integer-space diversity requires canonical integer left leaf values",
@@ -155,10 +171,7 @@ class IntegerSpaceGeometry:
             raise ValueError(msg)
 
         if self.space.low == self.space.high:
-            return StructuredDistanceParts(
-                overlap_squared_distance=0.0,
-                shared_leaf_count=1,
-            )
+            return 0.0
 
         if self.space.scale == "log":
             coordinate_span = log(float(self.space.high)) - log(float(self.space.low))
@@ -167,10 +180,7 @@ class IntegerSpaceGeometry:
             coordinate_span = float(self.space.high - self.space.low)
             leaf_distance = abs(float(left_value - right_value)) / coordinate_span
 
-        return StructuredDistanceParts(
-            overlap_squared_distance=leaf_distance * leaf_distance,
-            shared_leaf_count=1,
-        )
+        return leaf_distance * leaf_distance
 
 
 @dataclass(frozen=True, slots=True)

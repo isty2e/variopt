@@ -16,6 +16,7 @@ from variopt import (
     PermutationSpace,
     RealSpace,
     RecordSpace,
+    TupleSpace,
 )
 from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.spaces import (
@@ -324,6 +325,13 @@ class StructuredSpaceDiversityMetricTests:
         with pytest.raises(ValueError, match="keys must exactly match"):
             _ = metric.distance(left, right)
 
+    def test_tuple_space_distance_rejects_equal_noncanonical_leaf(self) -> None:
+        space = TupleSpace(CategoricalSpace((0, 1)), RealSpace(0.0, 1.0))
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        with pytest.raises(TypeError):
+            _ = metric.distance((True, 0.0), (1, 1.0))
+
     def test_array_space_distance_combines_element_leaf_distances_by_rms(self) -> None:
         space = ArraySpace(RealSpace(0.0, 10.0), length=3)
         metric = StructuredSpaceDiversityMetric(space=space)
@@ -335,6 +343,17 @@ class StructuredSpaceDiversityMetricTests:
 
         expected = math.sqrt((0.5 * 0.5 + 0.5 * 0.5 + 0.0) / 3.0)
         assert approx_equal(distance, expected)
+
+    def test_categorical_array_distance_uses_mismatch_fraction(self) -> None:
+        space = ArraySpace(CategoricalSpace(("a", "b")), length=4)
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        distance = metric.distance(
+            space.normalize(("a", "a", "b", "b")),
+            space.normalize(("a", "b", "a", "b")),
+        )
+
+        assert approx_equal(distance, math.sqrt(0.5))
 
     def test_binary_array_distance_uses_position_mismatch_fraction(self) -> None:
         space = ArraySpace(IntegerSpace(0, 1), length=4)

@@ -12,7 +12,13 @@ from .leaf import (
     require_record_candidate,
 )
 from .parts import StructuredDistanceParts
-from .scalar import CategoricalSpaceGeometry
+from .scalar import CategoricalSpaceGeometry, IntegerSpaceGeometry, RealSpaceGeometry
+
+_SCALAR_LEAF_GEOMETRY_TYPES = (
+    CategoricalSpaceGeometry,
+    IntegerSpaceGeometry,
+    RealSpaceGeometry,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +78,13 @@ class TupleSpaceGeometry:
         shared_leaf_count = 0
         topology_mismatch_leaf_count = 0
         for index, child_geometry in enumerate(self.child_geometries):
+            if isinstance(child_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
+                squared_distance += child_geometry.squared_distance(
+                    left_tuple[index],
+                    right_tuple[index],
+                )
+                shared_leaf_count += 1
+                continue
             child_parts = child_geometry.distance_parts(
                 left_tuple[index],
                 right_tuple[index],
@@ -150,7 +163,7 @@ class RecordSpaceGeometry:
             if left_name != name or right_name != name:
                 msg = "record candidate keys must exactly match the declared fields"
                 raise ValueError(msg)
-            if isinstance(child_geometry, CategoricalSpaceGeometry):
+            if isinstance(child_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
                 squared_distance += child_geometry.squared_distance(
                     left_value,
                     right_value,
@@ -227,8 +240,21 @@ class ArraySpaceGeometry:
         squared_distance = 0.0
         shared_leaf_count = 0
         topology_mismatch_leaf_count = 0
+        element_geometry = self.element_geometry
+        if isinstance(element_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
+            for index in range(self.length):
+                squared_distance += element_geometry.squared_distance(
+                    left_tuple[index],
+                    right_tuple[index],
+                )
+                shared_leaf_count += 1
+            return StructuredDistanceParts(
+                overlap_squared_distance=squared_distance,
+                shared_leaf_count=shared_leaf_count,
+            )
+
         for index in range(self.length):
-            child_parts = self.element_geometry.distance_parts(
+            child_parts = element_geometry.distance_parts(
                 left_tuple[index],
                 right_tuple[index],
             )

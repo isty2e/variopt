@@ -151,22 +151,22 @@ def normalized_squared_leaf_distance(
         If ``space`` is not a supported built-in leaf space.
     """
     if isinstance(space, RealSpace):
-        return RealSpaceGeometry(space).distance_parts(
+        return RealSpaceGeometry(space).squared_distance(
             left,
             right,
-        ).overlap_squared_distance
+        )
 
     if isinstance(space, IntegerSpace):
-        return IntegerSpaceGeometry(space).distance_parts(
+        return IntegerSpaceGeometry(space).squared_distance(
             left,
             right,
-        ).overlap_squared_distance
+        )
 
     if is_categorical_leaf_space(space):
-        return CategoricalSpaceGeometry(space).distance_parts(
+        return CategoricalSpaceGeometry(space).squared_distance(
             left,
             right,
-        ).overlap_squared_distance
+        )
 
     msg = f"unsupported structured leaf space for diversity: {type(space)!r}"
     raise TypeError(msg)
