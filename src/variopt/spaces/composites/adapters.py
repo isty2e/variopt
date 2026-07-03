@@ -301,6 +301,102 @@ class CompositeRecordSpace(Protocol):
         ...
 
 
+class ValidatedCompositeSequenceSpace(CompositeSequenceSpace, Protocol):
+    """Sequence composite that can traverse a caller-validated candidate."""
+
+    def leaf_value_at_validated_path(
+        self,
+        candidate: tuple[SpaceCandidateValue, ...],
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one child leaf without repeating full-candidate validation.
+
+        Parameters
+        ----------
+        candidate : tuple[SpaceCandidateValue, ...]
+            Canonical sequence candidate already validated by the current
+            operation.
+        path : LeafPath
+            Child-relative leaf path to inspect.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+        """
+        ...
+
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: tuple[SpaceCandidateValue, ...],
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> tuple[SpaceCandidateValue, ...]:
+        """Apply leaf replacements without repeating full-candidate validation.
+
+        Parameters
+        ----------
+        candidate : tuple[SpaceCandidateValue, ...]
+            Canonical sequence candidate already validated by the current
+            operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Leaf-relative replacement mapping.
+
+        Returns
+        -------
+        tuple[SpaceCandidateValue, ...]
+            Updated canonical child candidate.
+        """
+        ...
+
+
+class ValidatedCompositeRecordSpace(CompositeRecordSpace, Protocol):
+    """Record composite that can traverse a caller-validated candidate."""
+
+    def leaf_value_at_validated_path(
+        self,
+        candidate: RecordCandidate,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one child leaf without repeating full-candidate validation.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate already validated by the current
+            operation.
+        path : LeafPath
+            Child-relative leaf path to inspect.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+        """
+        ...
+
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: RecordCandidate,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> RecordCandidate:
+        """Apply leaf replacements without repeating full-candidate validation.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate already validated by the current
+            operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Leaf-relative replacement mapping.
+
+        Returns
+        -------
+        RecordCandidate
+            Updated canonical child candidate.
+        """
+        ...
+
+
 CategoricalScalarSpace: TypeAlias = CategoricalSpace[SpaceScalarValue]
 CompositeLeafChildSpace: TypeAlias = (
     RealSpace
@@ -416,6 +512,50 @@ def require_sequence_composite_space(
         msg = "expected a sequence-shaped composite child space"
         raise TypeError(msg)
     return space
+
+
+def is_validated_record_composite_space(
+    space: CompositeRecordSpace,
+) -> TypeGuard[ValidatedCompositeRecordSpace]:
+    """Return whether a record composite exposes validated traversal hooks.
+
+    Parameters
+    ----------
+    space : CompositeRecordSpace
+        Record-shaped composite child space.
+
+    Returns
+    -------
+    TypeGuard[ValidatedCompositeRecordSpace]
+        ``True`` when ``space`` can reuse caller-side candidate validation for
+        leaf traversal and replacement.
+    """
+    return hasattr(space, "leaf_value_at_validated_path") and hasattr(
+        space,
+        "replace_leaf_values_in_validated_candidate",
+    )
+
+
+def is_validated_sequence_composite_space(
+    space: CompositeSequenceSpace,
+) -> TypeGuard[ValidatedCompositeSequenceSpace]:
+    """Return whether a sequence composite exposes validated traversal hooks.
+
+    Parameters
+    ----------
+    space : CompositeSequenceSpace
+        Sequence-shaped composite child space.
+
+    Returns
+    -------
+    TypeGuard[ValidatedCompositeSequenceSpace]
+        ``True`` when ``space`` can reuse caller-side candidate validation for
+        leaf traversal and replacement.
+    """
+    return hasattr(space, "leaf_value_at_validated_path") and hasattr(
+        space,
+        "replace_leaf_values_in_validated_candidate",
+    )
 
 
 def require_real_boundary_value(value: SpaceBoundaryValue) -> float | int:
@@ -1034,6 +1174,79 @@ def leaf_value_at_child_space(
     raise TypeError(msg)
 
 
+def leaf_value_at_validated_child_space(
+    space: CompositeChildSpace,
+    candidate: SpaceCandidateValue,
+    path: LeafPath,
+) -> SpaceCandidateValue:
+    """Return one child leaf for a candidate validated by the caller.
+
+    Parameters
+    ----------
+    space : CompositeChildSpace
+        Child space that owns the leaf path.
+    candidate : SpaceCandidateValue
+        Canonical child candidate already validated as part of the parent
+        candidate.
+    path : LeafPath
+        Leaf path relative to ``space``.
+
+    Returns
+    -------
+    SpaceCandidateValue
+        Canonical leaf value stored at ``path``.
+
+    Notes
+    -----
+    Built-in child spaces use their validated traversal hooks. Custom composite
+    child spaces without those hooks fall back to the public method so their own
+    validation and topology contracts remain authoritative.
+    """
+    if isinstance(space, RealSpace):
+        return space.leaf_value_at_validated_path(require_real_candidate(candidate), path)
+
+    if isinstance(space, IntegerSpace):
+        return space.leaf_value_at_validated_path(
+            require_integer_candidate(candidate),
+            path,
+        )
+
+    if is_categorical_child_space(space):
+        return space.leaf_value_at_validated_path(
+            require_scalar_candidate(candidate),
+            path,
+        )
+
+    if isinstance(space, PermutationSpace):
+        return space.leaf_value_at_validated_path(
+            require_permutation_candidate(candidate),
+            path,
+        )
+
+    if is_record_composite_space(space):
+        record_space = require_record_composite_space(space)
+        record_candidate = require_record_candidate(candidate)
+        if is_validated_record_composite_space(record_space):
+            return record_space.leaf_value_at_validated_path(
+                record_candidate,
+                path,
+            )
+        return record_space.leaf_value_at_path(record_candidate, path)
+
+    if is_sequence_composite_space(space):
+        sequence_space = require_sequence_composite_space(space)
+        sequence_candidate = require_sequence_candidate(candidate)
+        if is_validated_sequence_composite_space(sequence_space):
+            return sequence_space.leaf_value_at_validated_path(
+                sequence_candidate,
+                path,
+            )
+        return sequence_space.leaf_value_at_path(sequence_candidate, path)
+
+    msg = "unsupported composite child space"
+    raise TypeError(msg)
+
+
 def replace_leaf_values_in_child_space(
     space: CompositeChildSpace,
     candidate: SpaceCandidateValue,
@@ -1090,6 +1303,82 @@ def replace_leaf_values_in_child_space(
             require_sequence_candidate(candidate),
             replacements,
         )
+
+    msg = "unsupported composite child space"
+    raise TypeError(msg)
+
+
+def replace_leaf_values_in_validated_child_space(
+    space: CompositeChildSpace,
+    candidate: SpaceCandidateValue,
+    replacements: Mapping[LeafPath, SpaceCandidateValue],
+) -> SpaceCandidateValue:
+    """Apply child leaf replacements after parent-side candidate validation.
+
+    Parameters
+    ----------
+    space : CompositeChildSpace
+        Child space that owns the candidate.
+    candidate : SpaceCandidateValue
+        Canonical child candidate already validated as part of the parent
+        candidate.
+    replacements : Mapping[LeafPath, SpaceCandidateValue]
+        Leaf-relative replacement mapping.
+
+    Returns
+    -------
+    SpaceCandidateValue
+        Updated canonical child candidate.
+
+    Notes
+    -----
+    Replacement values still flow through their owning leaf-space contracts.
+    Only full validation of unchanged child structure is skipped for built-in
+    spaces that expose validated traversal hooks.
+    """
+    if isinstance(space, RealSpace):
+        return space.replace_leaf_values_in_validated_candidate(
+            require_real_candidate(candidate),
+            replacements,
+        )
+
+    if isinstance(space, IntegerSpace):
+        return space.replace_leaf_values_in_validated_candidate(
+            require_integer_candidate(candidate),
+            replacements,
+        )
+
+    if is_categorical_child_space(space):
+        return space.replace_leaf_values_in_validated_candidate(
+            require_scalar_candidate(candidate),
+            replacements,
+        )
+
+    if isinstance(space, PermutationSpace):
+        return space.replace_leaf_values_in_validated_candidate(
+            require_permutation_candidate(candidate),
+            replacements,
+        )
+
+    if is_record_composite_space(space):
+        record_space = require_record_composite_space(space)
+        record_candidate = require_record_candidate(candidate)
+        if is_validated_record_composite_space(record_space):
+            return record_space.replace_leaf_values_in_validated_candidate(
+                record_candidate,
+                replacements,
+            )
+        return record_space.replace_leaf_values(record_candidate, replacements)
+
+    if is_sequence_composite_space(space):
+        sequence_space = require_sequence_composite_space(space)
+        sequence_candidate = require_sequence_candidate(candidate)
+        if is_validated_sequence_composite_space(sequence_space):
+            return sequence_space.replace_leaf_values_in_validated_candidate(
+                sequence_candidate,
+                replacements,
+            )
+        return sequence_space.replace_leaf_values(sequence_candidate, replacements)
 
     msg = "unsupported composite child space"
     raise TypeError(msg)

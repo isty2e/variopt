@@ -221,6 +221,32 @@ class StructuredSearchSpace(
         self.validate(candidate)
         return self.leaf_paths()
 
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: CandidateT,
+    ) -> tuple[LeafPath, ...]:
+        """Return active leaf paths for a candidate already validated by the caller.
+
+        Parameters
+        ----------
+        candidate : CandidateT
+            Canonical candidate that has already passed this space's validation
+            in the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Active leaf paths in canonical order.
+
+        Notes
+        -----
+        The default implementation preserves the conservative public path for
+        custom spaces. Built-in spaces override this hook when they can reuse the
+        caller's validation boundary without changing candidate-conditioned
+        topology semantics.
+        """
+        return self.active_leaf_paths(candidate)
+
     def is_active_leaf_path(
         self,
         candidate: CandidateT,
@@ -278,6 +304,35 @@ class StructuredSearchSpace(
             Canonical leaf value stored at ``path``.
         """
 
+    def leaf_value_at_validated_path(
+        self,
+        candidate: CandidateT,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one leaf value for a candidate already validated by the caller.
+
+        Parameters
+        ----------
+        candidate : CandidateT
+            Canonical candidate that has already passed this space's validation
+            in the current operation.
+        path : LeafPath
+            Declared leaf path to inspect.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+
+        Notes
+        -----
+        This hook is an operation-local fast path. The base implementation keeps
+        custom spaces on the public validation path; built-in spaces override it
+        only where they can preserve the same leaf semantics without repeating
+        full-candidate validation.
+        """
+        return self.leaf_value_at_path(candidate, path)
+
     @abstractmethod
     def replace_leaf_values(
         self,
@@ -298,3 +353,31 @@ class StructuredSearchSpace(
         CandidateT
             Canonical candidate with the supplied leaf values replaced.
         """
+
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: CandidateT,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> CandidateT:
+        """Return replacements for a candidate already validated by the caller.
+
+        Parameters
+        ----------
+        candidate : CandidateT
+            Canonical candidate that has already passed this space's validation
+            in the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by declared leaf path.
+
+        Returns
+        -------
+        CandidateT
+            Canonical candidate with the supplied leaf values replaced.
+
+        Notes
+        -----
+        Replacement values still flow through the owning leaf-space validation
+        and normalization rules. This hook only avoids revalidating unchanged
+        candidate structure that the caller already validated.
+        """
+        return self.replace_leaf_values(candidate, replacements)

@@ -44,7 +44,8 @@ def random_reset_mutation(
     CandidateT
         Mutated child with selected leaves redrawn from their declared spaces.
     """
-    editable_paths = space.active_leaf_paths(candidate)
+    space.validate(candidate)
+    editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
         max_exchange_fraction=max_exchange_fraction,
@@ -59,7 +60,7 @@ def random_reset_mutation(
         path: sample_leaf_value(space.leaf_space_at_path(path), random_state)
         for path in selected_paths
     }
-    return space.replace_leaf_values(candidate, replacements)
+    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)
 
 
 def random_reset_mutation_on_paths(
@@ -97,11 +98,12 @@ def random_reset_mutation_on_paths(
         msg = "selected_paths must not be empty"
         raise ValueError(msg)
 
+    space.validate(candidate)
     replacements = {
         path: sample_leaf_value(space.leaf_space_at_path(path), random_state)
         for path in selected_paths
     }
-    return space.replace_leaf_values(candidate, replacements)
+    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)
 
 
 def bounded_mutation(
@@ -129,7 +131,8 @@ def bounded_mutation(
     CandidateT
         Mutated child with selected leaves perturbed relative to the parent.
     """
-    editable_paths = space.active_leaf_paths(candidate)
+    space.validate(candidate)
+    editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
         max_exchange_fraction=max_perturbation_fraction,
@@ -143,13 +146,13 @@ def bounded_mutation(
     replacements = {
         path: mutate_leaf_value(
             space=space.leaf_space_at_path(path),
-            value=space.leaf_value_at_path(candidate, path),
+            value=space.leaf_value_at_validated_path(candidate, path),
             max_perturbation_fraction=max_perturbation_fraction,
             random_state=random_state,
         )
         for path in selected_paths
     }
-    return space.replace_leaf_values(candidate, replacements)
+    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)
 
 
 def bounded_mutation_on_paths(
@@ -189,13 +192,14 @@ def bounded_mutation_on_paths(
         msg = "selected_paths must not be empty"
         raise ValueError(msg)
 
+    space.validate(candidate)
     replacements = {
         path: mutate_leaf_value(
             space=space.leaf_space_at_path(path),
-            value=space.leaf_value_at_path(candidate, path),
+            value=space.leaf_value_at_validated_path(candidate, path),
             max_perturbation_fraction=max_perturbation_fraction,
             random_state=random_state,
         )
         for path in selected_paths
     }
-    return space.replace_leaf_values(candidate, replacements)
+    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)

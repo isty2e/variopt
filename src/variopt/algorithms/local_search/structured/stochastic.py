@@ -156,7 +156,8 @@ class StructuredStochasticNeighborhoodKernel(
         reserved_count: int,
     ) -> EvaluationOutcome[StructuredCandidateT]:
         """Run one bounded stochastic local-search episode for one proposal."""
-        runtime.neighborhood.space.validate(proposal.candidate)
+        space = runtime.neighborhood.space
+        space.validate(proposal.candidate)
         context = self._proposal_context(runtime=runtime, proposal_index=proposal_index)
         proposal_evaluation_spec = runtime.proposal_evaluation_spec(
             proposal_index=proposal_index,
@@ -205,7 +206,7 @@ class StructuredStochasticNeighborhoodKernel(
                 if not runtime.can_evaluate(reserved_count=reserved_count):
                     budget_exhausted = True
                     break
-                proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
+                proposed_candidate = space.replace_leaf_values_in_validated_candidate(
                     current_candidate,
                     {move.path: move.replacement},
                 )

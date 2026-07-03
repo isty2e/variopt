@@ -30,6 +30,9 @@ from variopt.algorithms.population.csa import (
     RandomResetMutation,
     UniformCrossover,
 )
+from variopt.algorithms.population.csa.operators.mutation import (
+    bounded_mutation_on_paths,
+)
 from variopt.evaluators import SequentialEvaluator
 from variopt.spaces import (
     LeafPath,
@@ -178,6 +181,33 @@ class OperatorTests:
         assert len(child) == 4
         assert all(value in {1, 9} for value in child)
         assert child != (1, 1, 1, 1)
+
+    def test_bounded_mutation_on_paths_does_not_revalidate_per_leaf_read(self) -> None:
+        validate_count = 0
+
+        class CountingIntegerSpace(IntegerSpace):
+            """Integer space that counts validation calls."""
+
+            @override
+            def validate(self, candidate: int) -> None:
+                nonlocal validate_count
+                validate_count += 1
+                super().validate(candidate)
+
+        leaf_space = CountingIntegerSpace(0, 9)
+        space = ArraySpace(leaf_space, length=4)
+        candidate = space.normalize([1, 2, 3, 4])
+
+        validate_count = 0
+        _ = bounded_mutation_on_paths(
+            space=space,
+            candidate=candidate,
+            selected_paths=((0,), (1,), (2,)),
+            max_perturbation_fraction=0.2,
+            random_state=rng(0),
+        )
+
+        assert validate_count == 10
 
     def test_uniform_crossover_rejects_active_topology_mismatch(self) -> None:
         space = ConditionalNumericPairSpace(

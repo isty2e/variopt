@@ -116,7 +116,10 @@ def emit_structured_mutation_candidate(
         Structured mutation child together with optional planned attribution.
     """
     structured_space = operator.structured_candidate_space
-    editable_paths = structured_space.active_leaf_paths(seed_candidate)
+    structured_space.validate(seed_candidate)
+    editable_paths = structured_space.active_leaf_paths_for_validated_candidate(
+        seed_candidate,
+    )
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
         max_exchange_fraction=operator.max_selected_path_fraction,

@@ -40,6 +40,12 @@ produces `RecordCandidate` mapping values with named fields; a `TupleSpace`
 produces `tuple` candidates; an `ArraySpace` produces fixed-length
 homogeneous sequences.
 
+Built-in structured spaces also expose validated-candidate leaf traversal hooks.
+These are operation-local fast paths for optimizers and kernels that already
+validated the whole candidate before scanning or replacing many leaves. Public
+leaf methods remain the safe boundary for ordinary caller code, and replacement
+values still flow through their owning leaf-space validation rules.
+
 ## Custom Spaces
 
 Any class that implements the [`SearchSpace`][variopt.SearchSpace] protocol
@@ -47,3 +53,6 @@ works with `Problem`, `Study`, and all evaluators. For structured spaces
 that want geometry-aware fast paths, implement the
 [`CompiledStructuredGeometryProvider`][variopt.spaces.CompiledStructuredGeometryProvider]
 sidecar protocol — see the [API reference](../reference/api/spaces.md).
+Custom structured spaces that do not override validated-candidate leaf hooks
+keep the conservative public traversal behavior, so their own validation and
+candidate-conditioned topology contracts remain authoritative.

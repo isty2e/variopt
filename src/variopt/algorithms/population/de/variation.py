@@ -101,14 +101,23 @@ def differential_evolution_variation(
     TypeError
         If any editable leaf space or leaf value is non-numeric.
     """
-    editable_paths = space.active_leaf_paths(target_parent)
-    if editable_paths != space.active_leaf_paths(base_parent):
+    space.validate(target_parent)
+    space.validate(base_parent)
+    space.validate(differential_parent_a)
+    space.validate(differential_parent_b)
+
+    editable_paths = space.active_leaf_paths_for_validated_candidate(target_parent)
+    if editable_paths != space.active_leaf_paths_for_validated_candidate(base_parent):
         msg = "differential evolution variation requires parents with matching active topology"
         raise ValueError(msg)
-    if editable_paths != space.active_leaf_paths(differential_parent_a):
+    if editable_paths != space.active_leaf_paths_for_validated_candidate(
+        differential_parent_a,
+    ):
         msg = "differential evolution variation requires parents with matching active topology"
         raise ValueError(msg)
-    if editable_paths != space.active_leaf_paths(differential_parent_b):
+    if editable_paths != space.active_leaf_paths_for_validated_candidate(
+        differential_parent_b,
+    ):
         msg = "differential evolution variation requires parents with matching active topology"
         raise ValueError(msg)
 
@@ -120,13 +129,13 @@ def differential_evolution_variation(
         path: differential_leaf_value(
             space=require_numeric_leaf_space(space.leaf_space_at_path(path)),
             base_value=require_numeric_leaf_value(
-                space.leaf_value_at_path(base_parent, path),
+                space.leaf_value_at_validated_path(base_parent, path),
             ),
             differential_value_a=require_numeric_leaf_value(
-                space.leaf_value_at_path(differential_parent_a, path),
+                space.leaf_value_at_validated_path(differential_parent_a, path),
             ),
             differential_value_b=require_numeric_leaf_value(
-                space.leaf_value_at_path(differential_parent_b, path),
+                space.leaf_value_at_validated_path(differential_parent_b, path),
             ),
             mutation_factor=mutation_factor,
         )
@@ -147,7 +156,10 @@ def differential_evolution_variation(
     )
 
     replacements = {path: donor_replacements[path] for path in selected_paths}
-    return space.replace_leaf_values(target_parent, replacements)
+    return space.replace_leaf_values_in_validated_candidate(
+        target_parent,
+        replacements,
+    )
 
 
 def choose_paths_without_replacement(

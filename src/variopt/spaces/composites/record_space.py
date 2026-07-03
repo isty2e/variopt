@@ -11,9 +11,9 @@ from .adapters import (
     CompositeChildSpace,
     child_candidates_equal,
     group_child_replacements,
-    leaf_value_at_child_space,
+    leaf_value_at_validated_child_space,
     normalize_child_space,
-    replace_leaf_values_in_child_space,
+    replace_leaf_values_in_validated_child_space,
     sample_child_space,
     validate_child_space,
 )
@@ -206,6 +206,25 @@ class RecordSpace(
         return tuple(paths)
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: RecordCandidate,
+    ) -> tuple[LeafPath, ...]:
+        """Return all record leaves for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Canonical leaf paths prefixed by record field name.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at a record path.
 
@@ -255,6 +274,28 @@ class RecordSpace(
             Canonical leaf value stored at ``path``.
         """
         self.validate(candidate)
+        return self.leaf_value_at_validated_path(candidate, path)
+
+    @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: RecordCandidate,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one record leaf for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate already validated by the current operation.
+        path : LeafPath
+            Leaf path whose first segment identifies the record field.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+        """
         if len(path) == 0:
             msg = "record paths must include at least one segment"
             raise TypeError(msg)
@@ -269,7 +310,7 @@ class RecordSpace(
             msg = f"path {path!r} references an unknown record field"
             raise TypeError(msg)
         child_space = self._fields[field_index][1]
-        return leaf_value_at_child_space(
+        return leaf_value_at_validated_child_space(
             child_space,
             candidate.entries[field_index][1],
             path[1:],
@@ -296,6 +337,31 @@ class RecordSpace(
             Updated canonical record candidate.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: RecordCandidate,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> RecordCandidate:
+        """Return replacements for an already validated record candidate.
+
+        Parameters
+        ----------
+        candidate : RecordCandidate
+            Canonical record candidate already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by field-prefixed leaf paths.
+
+        Returns
+        -------
+        RecordCandidate
+            Updated canonical record candidate.
+        """
         grouped_replacements = group_child_replacements(replacements)
         if len(grouped_replacements) == 0:
             return candidate
@@ -314,7 +380,7 @@ class RecordSpace(
             replaced_entries.append(
                 (
                     name,
-                    replace_leaf_values_in_child_space(
+                    replace_leaf_values_in_validated_child_space(
                         child_space,
                         candidate.entries[index][1],
                         child_replacements,

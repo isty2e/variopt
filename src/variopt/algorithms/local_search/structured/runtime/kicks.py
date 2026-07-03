@@ -45,8 +45,10 @@ def sample_structured_kick_candidate(
         Kicked candidate, or ``None`` when no admissible kick exists.
     """
     eligible_leaf_moves: list[tuple[LeafPath, tuple[SpaceCandidateValue, ...]]] = []
+    space = runtime.neighborhood.space
+    space.validate(candidate)
     for path, leaf_space in leaf_schedule:
-        current_leaf_value = runtime.neighborhood.space.leaf_value_at_path(
+        current_leaf_value = space.leaf_value_at_validated_path(
             candidate,
             path,
         )
@@ -82,7 +84,7 @@ def sample_structured_kick_candidate(
         )[0]
         replacements[path] = leaf_neighbors[replacement_index]
 
-    return runtime.neighborhood.space.replace_leaf_values(candidate, replacements)
+    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)
 
 
 def accepts_strict_improvement(

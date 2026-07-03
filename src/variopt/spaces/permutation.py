@@ -156,6 +156,25 @@ class PermutationSpace(
         return tuple((index,) for index in range(self.size))
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: tuple[int, ...],
+    ) -> tuple[LeafPath, ...]:
+        """Return all permutation positions for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[int, ...]
+            Canonical permutation already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            One singleton index path per permutation position.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at a permutation position.
 
@@ -207,6 +226,34 @@ class PermutationSpace(
         return candidate[path[0]]
 
     @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: tuple[int, ...],
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one position value for an already validated permutation.
+
+        Parameters
+        ----------
+        candidate : tuple[int, ...]
+            Canonical permutation already validated by the current operation.
+        path : LeafPath
+            Singleton index path identifying a permutation position.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Integer value stored at ``path``.
+        """
+        if len(path) != 1 or type(path[0]) is not int:
+            msg = f"path {path!r} is invalid for permutation candidate traversal"
+            raise TypeError(msg)
+        if path[0] < 0 or path[0] >= self.size:
+            msg = f"path {path!r} references an out-of-bounds permutation index"
+            raise TypeError(msg)
+        return candidate[path[0]]
+
+    @override
     def replace_leaf_values(
         self,
         candidate: tuple[int, ...],
@@ -227,6 +274,31 @@ class PermutationSpace(
             Canonical permutation after applying the replacements.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: tuple[int, ...],
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> tuple[int, ...]:
+        """Return replacements for an already validated permutation.
+
+        Parameters
+        ----------
+        candidate : tuple[int, ...]
+            Canonical permutation already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by singleton index paths.
+
+        Returns
+        -------
+        tuple[int, ...]
+            Canonical permutation after applying the replacements.
+        """
         values = list(candidate)
         for path, replacement in replacements.items():
             if len(path) != 1 or type(path[0]) is not int:

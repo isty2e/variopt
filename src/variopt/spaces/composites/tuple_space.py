@@ -11,9 +11,9 @@ from .adapters import (
     CompositeChildSpace,
     child_candidates_equal,
     group_child_replacements,
-    leaf_value_at_child_space,
+    leaf_value_at_validated_child_space,
     normalize_child_space,
-    replace_leaf_values_in_child_space,
+    replace_leaf_values_in_validated_child_space,
     sample_child_space,
     validate_child_space,
 )
@@ -181,6 +181,25 @@ class TupleSpace(
         return tuple(paths)
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: tuple[SpaceCandidateValue, ...],
+    ) -> tuple[LeafPath, ...]:
+        """Return all tuple leaves for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[SpaceCandidateValue, ...]
+            Canonical tuple candidate already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Canonical leaf paths prefixed by tuple index.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at a tuple path.
 
@@ -229,6 +248,28 @@ class TupleSpace(
             Canonical leaf value stored at ``path``.
         """
         self.validate(candidate)
+        return self.leaf_value_at_validated_path(candidate, path)
+
+    @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: tuple[SpaceCandidateValue, ...],
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return one tuple leaf for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[SpaceCandidateValue, ...]
+            Canonical tuple candidate already validated by the current operation.
+        path : LeafPath
+            Leaf path whose first segment identifies the tuple position.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            Canonical leaf value stored at ``path``.
+        """
         if len(path) == 0:
             msg = "tuple paths must include at least one segment"
             raise TypeError(msg)
@@ -241,7 +282,7 @@ class TupleSpace(
         if segment < 0 or segment >= len(self._spaces):
             msg = f"path {path!r} references an out-of-bounds tuple index"
             raise TypeError(msg)
-        return leaf_value_at_child_space(
+        return leaf_value_at_validated_child_space(
             self._spaces[segment],
             candidate[segment],
             path[1:],
@@ -268,6 +309,31 @@ class TupleSpace(
             Updated canonical tuple candidate.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: tuple[SpaceCandidateValue, ...],
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> tuple[SpaceCandidateValue, ...]:
+        """Return replacements for an already validated tuple candidate.
+
+        Parameters
+        ----------
+        candidate : tuple[SpaceCandidateValue, ...]
+            Canonical tuple candidate already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by tuple-prefixed leaf paths.
+
+        Returns
+        -------
+        tuple[SpaceCandidateValue, ...]
+            Updated canonical tuple candidate.
+        """
         grouped_replacements = group_child_replacements(replacements)
         if len(grouped_replacements) == 0:
             return candidate
@@ -285,7 +351,7 @@ class TupleSpace(
             child_replacements = grouped_replacements.get(index)
             if child_replacements is None:
                 continue
-            replaced_children[index] = replace_leaf_values_in_child_space(
+            replaced_children[index] = replace_leaf_values_in_validated_child_space(
                 child_space,
                 candidate[index],
                 child_replacements,

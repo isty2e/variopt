@@ -58,8 +58,10 @@ def sample_structured_discrete_neighborhood(
     """
     moves: list[StructuredDiscreteMove] = []
     covers_full_neighborhood = True
+    space = runtime.neighborhood.space
+    space.validate(current_candidate)
     for path, leaf_space in leaf_schedule:
-        current_leaf_value = runtime.neighborhood.space.leaf_value_at_path(
+        current_leaf_value = space.leaf_value_at_validated_path(
             current_candidate,
             path,
         )
@@ -134,15 +136,17 @@ def first_improving_single_leaf_outcome(
         stopped because no evaluation budget remained.
     """
     evaluated_neighbor_count = 0
+    space = runtime.neighborhood.space
+    space.validate(candidate)
     for path, leaf_space in leaf_schedule:
-        current_leaf_value = runtime.neighborhood.space.leaf_value_at_path(
+        current_leaf_value = space.leaf_value_at_validated_path(
             candidate,
             path,
         )
         for replacement in discrete_leaf_neighbors(leaf_space, current_leaf_value):
             if not runtime.can_evaluate(reserved_count=reserved_count):
                 return None, evaluated_neighbor_count, True
-            proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
+            proposed_candidate = space.replace_leaf_values_in_validated_candidate(
                 candidate,
                 {path: replacement},
             )
@@ -199,9 +203,11 @@ def first_improving_pair_move_outcome(
         return None, 0, False
 
     evaluated_neighbor_count = 0
+    space = runtime.neighborhood.space
+    space.validate(candidate)
     for left_index in range(len(limited_schedule) - 1):
         left_path, left_space = limited_schedule[left_index]
-        left_current_value = runtime.neighborhood.space.leaf_value_at_path(
+        left_current_value = space.leaf_value_at_validated_path(
             candidate,
             left_path,
         )
@@ -211,7 +217,7 @@ def first_improving_pair_move_outcome(
 
         for right_index in range(left_index + 1, len(limited_schedule)):
             right_path, right_space = limited_schedule[right_index]
-            right_current_value = runtime.neighborhood.space.leaf_value_at_path(
+            right_current_value = space.leaf_value_at_validated_path(
                 candidate,
                 right_path,
             )
@@ -226,7 +232,7 @@ def first_improving_pair_move_outcome(
                 for right_replacement in right_neighbors:
                     if not runtime.can_evaluate(reserved_count=reserved_count):
                         return None, evaluated_neighbor_count, True
-                    proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
+                    proposed_candidate = space.replace_leaf_values_in_validated_candidate(
                         candidate,
                         {
                             left_path: left_replacement,
@@ -339,9 +345,11 @@ def run_structured_variable_neighborhood_stage_once(
                     terminal_message="evaluation budget exhausted before local convergence",
                     budget_exhausted=True,
                 )
-            proposed_candidate = runtime.neighborhood.space.replace_leaf_values(
-                candidate,
-                {move.path: move.replacement},
+            proposed_candidate = (
+                runtime.neighborhood.space.replace_leaf_values_in_validated_candidate(
+                    candidate,
+                    {move.path: move.replacement},
+                )
             )
             proposed_outcome = runtime.evaluate_candidate(
                 candidate=proposed_candidate,

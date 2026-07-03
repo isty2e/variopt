@@ -280,6 +280,25 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
         return ((),)
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: float,
+    ) -> tuple[LeafPath, ...]:
+        """Return the active root leaf for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : float
+            Canonical candidate already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Singleton tuple containing the root leaf path ``()``.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at the supplied path.
 
@@ -322,6 +341,31 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
             msg = f"path {path!r} is invalid for a real-valued leaf candidate"
             raise TypeError(msg)
         self.validate(candidate)
+        return self.leaf_value_at_validated_path(candidate, path)
+
+    @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: float,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return the root value for an already validated real candidate.
+
+        Parameters
+        ----------
+        candidate : float
+            Canonical candidate already validated by the current operation.
+        path : LeafPath
+            Leaf path to inspect.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            The canonical root value.
+        """
+        if path != ():
+            msg = f"path {path!r} is invalid for a real-valued leaf candidate"
+            raise TypeError(msg)
         return candidate
 
     @override
@@ -345,6 +389,31 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
             Updated canonical candidate.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: float,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> float:
+        """Return root replacement for an already validated real candidate.
+
+        Parameters
+        ----------
+        candidate : float
+            Canonical candidate already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by leaf path.
+
+        Returns
+        -------
+        float
+            Updated canonical candidate.
+        """
         if () not in replacements:
             return candidate
 
@@ -530,6 +599,25 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
         return ((),)
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: int,
+    ) -> tuple[LeafPath, ...]:
+        """Return the active root leaf for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : int
+            Canonical candidate already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Singleton tuple containing the root leaf path ``()``.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at the supplied path.
 
@@ -572,6 +660,31 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
             msg = f"path {path!r} is invalid for an integer leaf candidate"
             raise TypeError(msg)
         self.validate(candidate)
+        return self.leaf_value_at_validated_path(candidate, path)
+
+    @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: int,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return the root value for an already validated integer candidate.
+
+        Parameters
+        ----------
+        candidate : int
+            Canonical candidate already validated by the current operation.
+        path : LeafPath
+            Leaf path to inspect.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            The canonical root value.
+        """
+        if path != ():
+            msg = f"path {path!r} is invalid for an integer leaf candidate"
+            raise TypeError(msg)
         return candidate
 
     @override
@@ -595,6 +708,31 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
             Updated canonical candidate.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: int,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> int:
+        """Return root replacement for an already validated integer candidate.
+
+        Parameters
+        ----------
+        candidate : int
+            Canonical candidate already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by leaf path.
+
+        Returns
+        -------
+        int
+            Updated canonical candidate.
+        """
         if () not in replacements:
             return candidate
 
@@ -755,6 +893,25 @@ class CategoricalSpace(
         return ((),)
 
     @override
+    def active_leaf_paths_for_validated_candidate(
+        self,
+        candidate: CategoricalT,
+    ) -> tuple[LeafPath, ...]:
+        """Return the active root leaf for an already validated candidate.
+
+        Parameters
+        ----------
+        candidate : CategoricalT
+            Canonical candidate already validated by the current operation.
+
+        Returns
+        -------
+        tuple[LeafPath, ...]
+            Singleton tuple containing the root leaf path ``()``.
+        """
+        return self.leaf_paths()
+
+    @override
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:
         """Return the leaf space at the supplied path.
 
@@ -797,6 +954,31 @@ class CategoricalSpace(
             msg = f"path {path!r} is invalid for a categorical leaf candidate"
             raise TypeError(msg)
         self.validate(candidate)
+        return self.leaf_value_at_validated_path(candidate, path)
+
+    @override
+    def leaf_value_at_validated_path(
+        self,
+        candidate: CategoricalT,
+        path: LeafPath,
+    ) -> SpaceCandidateValue:
+        """Return the root value for an already validated categorical candidate.
+
+        Parameters
+        ----------
+        candidate : CategoricalT
+            Canonical candidate already validated by the current operation.
+        path : LeafPath
+            Leaf path to inspect.
+
+        Returns
+        -------
+        SpaceCandidateValue
+            The canonical root value.
+        """
+        if path != ():
+            msg = f"path {path!r} is invalid for a categorical leaf candidate"
+            raise TypeError(msg)
         return candidate
 
     @override
@@ -820,6 +1002,31 @@ class CategoricalSpace(
             Updated canonical categorical value.
         """
         self.validate(candidate)
+        return self.replace_leaf_values_in_validated_candidate(
+            candidate,
+            replacements,
+        )
+
+    @override
+    def replace_leaf_values_in_validated_candidate(
+        self,
+        candidate: CategoricalT,
+        replacements: Mapping[LeafPath, SpaceCandidateValue],
+    ) -> CategoricalT:
+        """Return root replacement for an already validated categorical candidate.
+
+        Parameters
+        ----------
+        candidate : CategoricalT
+            Canonical candidate already validated by the current operation.
+        replacements : Mapping[LeafPath, SpaceCandidateValue]
+            Replacement mapping keyed by leaf path.
+
+        Returns
+        -------
+        CategoricalT
+            Updated canonical categorical value.
+        """
         if () not in replacements:
             return candidate
 
