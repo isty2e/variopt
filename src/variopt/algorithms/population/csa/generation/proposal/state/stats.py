@@ -11,6 +11,7 @@ from .......json_types import (
     JSONValue,
     require_json_finite_float,
     require_json_int,
+    require_json_int_or_str,
     require_json_list,
     require_json_str,
 )
@@ -22,21 +23,16 @@ def _leaf_path_to_json(path: LeafPath) -> list[JSONValue]:
     return [segment for segment in path]
 
 
-def _leaf_path_from_json(value: JSONValue) -> LeafPath:
-    if not isinstance(value, list):
-        msg = "leaf path snapshot must be a list"
-        raise TypeError(msg)
-
+def _leaf_path_from_json(value: JSONValue, *, field_name: str = "leaf path") -> LeafPath:
+    raw_segments = require_json_list(value, field_name=field_name)
     segments: list[int | str] = []
-    for raw_segment in value:
-        if isinstance(raw_segment, int) and not isinstance(raw_segment, bool):
-            segments.append(raw_segment)
-            continue
-        if isinstance(raw_segment, str):
-            segments.append(raw_segment)
-            continue
-        msg = "leaf path snapshot segments must be strings or integers"
-        raise TypeError(msg)
+    for raw_position, raw_segment in enumerate(raw_segments):
+        segments.append(
+            require_json_int_or_str(
+                raw_segment,
+                field_name=f"{field_name}[{raw_position}]",
+            ),
+        )
     return tuple(segments)
 
 
@@ -44,11 +40,16 @@ def _leaf_paths_to_json(leaf_paths: tuple[LeafPath, ...]) -> list[JSONValue]:
     return [_leaf_path_to_json(path) for path in leaf_paths]
 
 
-def _leaf_paths_from_json(value: JSONValue) -> tuple[LeafPath, ...]:
-    if not isinstance(value, list):
-        msg = "leaf path family snapshot must be a list"
-        raise TypeError(msg)
-    return tuple(_leaf_path_from_json(raw_path) for raw_path in value)
+def _leaf_paths_from_json(
+    value: JSONValue,
+    *,
+    field_name: str = "leaf path family",
+) -> tuple[LeafPath, ...]:
+    raw_paths = require_json_list(value, field_name=field_name)
+    return tuple(
+        _leaf_path_from_json(raw_path, field_name=f"{field_name}[{raw_position}]")
+        for raw_position, raw_path in enumerate(raw_paths)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +226,7 @@ class ProposalNumericSubspaceCovarianceStat:
             outer_product_sum.append(tuple(row))
 
         return cls(
-            leaf_paths=_leaf_paths_from_json(raw_leaf_paths),
+            leaf_paths=_leaf_paths_from_json(raw_leaf_paths, field_name="leaf_paths"),
             observation_count=observation_count,
             discounted_weight=discounted_weight,
             discounted_displacement_sum=tuple(displacement_sum),
@@ -736,7 +737,7 @@ class ProposalLeafStat:
             field_name="recent_failure_streak",
         )
         return cls(
-            path=_leaf_path_from_json(data.get("path")),
+            path=_leaf_path_from_json(data.get("path"), field_name="path"),
             observation_count=observation_count,
             discounted_score_credit=discounted_score_credit,
             last_update_index=last_update_index,

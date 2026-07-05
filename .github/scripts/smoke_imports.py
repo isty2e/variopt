@@ -173,9 +173,30 @@ def collect_joblib_private_failures() -> tuple[SmokeFailure, ...]:
     return tuple(failures)
 
 
+def configure_mpi4py_smoke_runtime() -> SmokeFailure | None:
+    """Disable MPI auto-finalize for import-only smoke checks."""
+    mpi4py = import_module_or_failure("mpi4py")
+    if isinstance(mpi4py, SmokeFailure):
+        return mpi4py
+
+    rc: object = getattr(mpi4py, "rc", None)
+    if rc is None:
+        return SmokeFailure(
+            target="mpi4py.rc",
+            detail="runtime configuration is unavailable",
+        )
+    setattr(rc, "finalize", False)
+    return None
+
+
 def collect_mpi_failures() -> tuple[SmokeFailure, ...]:
     """Return optional MPI installed-world import failures."""
     failures: list[SmokeFailure] = []
+    runtime_failure = configure_mpi4py_smoke_runtime()
+    if runtime_failure is not None:
+        failures.append(runtime_failure)
+        return tuple(failures)
+
     mpi4py_futures: ModuleType | None = None
     for module_name in MPI_INSTALL_MODULES:
         module = import_module_or_failure(module_name)

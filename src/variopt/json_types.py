@@ -68,12 +68,29 @@ def require_json_str(value: JSONValue, *, field_name: str) -> str:
     return value
 
 
+def require_json_optional_str(value: JSONValue, *, field_name: str) -> str | None:
+    """Return one optional JSON string or raise."""
+    if value is None:
+        return None
+    return require_json_str(value, field_name=field_name)
+
+
 def require_json_int(value: JSONValue, *, field_name: str) -> int:
     """Return one JSON integer or raise."""
     if type(value) is not int:
         msg = f"{field_name} must be a JSON integer"
         raise TypeError(msg)
     return value
+
+
+def require_json_int_or_str(value: JSONValue, *, field_name: str) -> int | str:
+    """Return one JSON integer-or-string value or raise."""
+    if type(value) is int:
+        return value
+    if isinstance(value, str):
+        return value
+    msg = f"{field_name} must be a JSON integer or string"
+    raise TypeError(msg)
 
 
 def require_json_bool(value: JSONValue, *, field_name: str) -> bool:

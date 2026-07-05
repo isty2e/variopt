@@ -6,7 +6,7 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....json_types import JSONDict, JSONValue
+from .....json_types import JSONDict, JSONValue, require_json_mapping
 from .....typevars import CandidateT
 from ..scoring.acceptance import CSAAcceptancePolicy
 from ..scoring.acceptance_state import CSAAcceptanceState
@@ -71,21 +71,21 @@ class CSAScoringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        raw_acceptance_state = data.get("acceptance_state")
-        raw_model_state = data.get("model_state")
-        if not isinstance(raw_acceptance_state, dict):
-            msg = "scoring-state snapshot requires acceptance_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_model_state, dict):
-            msg = "scoring-state snapshot requires model_state mapping"
-            raise TypeError(msg)
+        acceptance_state_data = require_json_mapping(
+            data.get("acceptance_state"),
+            field_name="acceptance_state",
+        )
+        model_state_data = require_json_mapping(
+            data.get("model_state"),
+            field_name="model_state",
+        )
         return cls(
             acceptance_state=CSAAcceptanceState.from_dict(
-                raw_acceptance_state,
+                acceptance_state_data,
                 policy=acceptance_policy,
             ),
             model_state=CSAScoreModelState[CandidateT].from_dict(
-                raw_model_state,
+                model_state_data,
                 score_model=score_model,
             ),
         )

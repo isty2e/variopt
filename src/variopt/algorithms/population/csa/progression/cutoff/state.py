@@ -11,7 +11,7 @@ from ......json_types import (
     JSONValue,
     require_json_bool,
     require_json_int,
-    require_json_optional_float,
+    require_json_optional_finite_float,
 )
 
 
@@ -190,19 +190,19 @@ class CSACutoffState:
             data.get("refresh_in_progress"),
             field_name="refresh_in_progress",
         )
-        distance_cutoff = require_json_optional_float(
+        distance_cutoff = require_json_optional_finite_float(
             data.get("distance_cutoff"),
             field_name="distance_cutoff",
         )
-        minimum_distance_cutoff = require_json_optional_float(
+        minimum_distance_cutoff = require_json_optional_finite_float(
             data.get("minimum_distance_cutoff"),
             field_name="minimum_distance_cutoff",
         )
-        cutoff_recover_limit = require_json_optional_float(
+        cutoff_recover_limit = require_json_optional_finite_float(
             data.get("cutoff_recover_limit"),
             field_name="cutoff_recover_limit",
         )
-        previous_score_gap = require_json_optional_float(
+        previous_score_gap = require_json_optional_finite_float(
             data.get("previous_score_gap"),
             field_name="previous_score_gap",
         )

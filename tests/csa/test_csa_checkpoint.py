@@ -482,6 +482,17 @@ class CSAEngineCheckpointTests:
                 discounted_score_credit=float("nan"),
             )
 
+        with pytest.raises(TypeError, match=r"path\[0\] must be a JSON integer or string"):
+            _ = ProposalLeafStat.from_dict(
+                {
+                    "path": [True],
+                    "observation_count": 0,
+                    "discounted_score_credit": 0.0,
+                    "last_update_index": 0,
+                    "recent_failure_streak": 0,
+                },
+            )
+
         with pytest.raises(TypeError, match="discounted_weight must be a JSON number"):
             _ = ProposalNumericSubspaceCovarianceStat.from_dict(
                 {
@@ -561,6 +572,16 @@ class CSAEngineCheckpointTests:
                 },
             )
 
+        with pytest.raises(TypeError, match=r"bank_status\[0\] must be a JSON boolean"):
+            _ = SeedSelectionState.from_dict(
+                {
+                    "used_entry_indices": [],
+                    "bank_status": [1],
+                    "active_seed_indices": [],
+                    "next_seed_offset": 0,
+                },
+            )
+
         with pytest.raises(TypeError, match="update_index must be a JSON integer"):
             _ = CSAProposalState.from_dict(
                 {
@@ -587,6 +608,184 @@ class CSAEngineCheckpointTests:
                 acceptance_policy=state.scoring_state.acceptance_state.policy,
                 score_model=state.scoring_state.model_state.score_model,
             )
+
+    def test_checkpoint_snapshots_reject_malformed_json_containers(self) -> None:
+        with pytest.raises(TypeError, match="entries must be a JSON array"):
+            _ = Bank[int].from_dict(
+                {"capacity": 1, "entries": {}},
+                candidate_from_dict=_int_candidate_from_dict,
+            )
+
+        with pytest.raises(TypeError, match=r"entries\[0\] must be a JSON object"):
+            _ = Bank[int].from_dict(
+                {"capacity": 1, "entries": [0]},
+                candidate_from_dict=_int_candidate_from_dict,
+            )
+
+        with pytest.raises(TypeError, match=r"family_stats\[0\] must be a JSON object"):
+            _ = CSAProposalState.from_dict(
+                {
+                    "pending_attributions": [],
+                    "family_stats": [0],
+                    "leaf_stats": [],
+                    "local_displacement_leaf_stats": [],
+                    "numeric_covariance_stats": [],
+                    "update_index": 0,
+                },
+                policy=CSAProposalPolicy(),
+            )
+
+        state = build_populated_engine_state()
+        engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        engine_snapshot["random_state"] = []
+        with pytest.raises(TypeError, match="random_state must be a JSON object"):
+            _ = CSAEngineState[int].from_dict(
+                engine_snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
+
+    def test_checkpoint_snapshot_domain_guards_run_before_deep_shape_checks(self) -> None:
+        state = build_populated_engine_state()
+        engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        engine_snapshot["format"] = "other"
+        engine_snapshot["random_state"] = []
+        with pytest.raises(ValueError, match="unsupported CSA checkpoint format"):
+            _ = CSAEngineState[int].from_dict(
+                engine_snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
+
+        version_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        version_snapshot["version"] = 2
+        version_snapshot["banking_state"] = []
+        with pytest.raises(ValueError, match="unsupported CSA checkpoint version"):
+            _ = CSAEngineState[int].from_dict(
+                version_snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
+
+        with pytest.raises(ValueError, match="reference refresh"):
+            _ = CSABankingState[int].from_dict(
+                {
+                    "bank": {"capacity": 1, "entries": []},
+                    "reference_bank": {"capacity": 1, "entries": []},
+                    "refresh_state": {},
+                    "growth_state": [],
+                    "clustering_state": [],
+                },
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=CSABankGrowthPolicy(),
+                clustering_policy=CSAClusteringPolicy(),
+            )
+
+        with pytest.raises(ValueError, match="pending attribution"):
+            _ = CSAProposalState.from_dict(
+                {
+                    "pending_attributions": [{"proposal_id": "csa-1"}],
+                    "family_stats": {},
+                    "leaf_stats": {},
+                    "local_displacement_leaf_stats": {},
+                    "numeric_covariance_stats": {},
+                    "update_index": True,
+                },
+                policy=CSAProposalPolicy(),
+            )
+
+    def test_checkpoint_snapshot_nested_container_boundaries_use_field_paths(self) -> None:
+        with pytest.raises(TypeError, match=r"leaf_paths\[0\] must be a JSON array"):
+            _ = ProposalNumericSubspaceCovarianceStat.from_dict(
+                {
+                    "leaf_paths": [0],
+                    "observation_count": 0,
+                    "discounted_weight": 0.0,
+                    "discounted_displacement_sum": [],
+                    "discounted_outer_product_sum": [],
+                    "last_update_index": 0,
+                },
+            )
+
+        with pytest.raises(TypeError, match=r"entries\[0\] must be a JSON object"):
+            _ = ReferenceBank[int].from_dict(
+                {"capacity": 1, "entries": [0], "initialized": False},
+                candidate_from_dict=_int_candidate_from_dict,
+            )
+
+        with pytest.raises(TypeError, match="initialized must be a JSON boolean"):
+            _ = ReferenceBank[int].from_dict(
+                {"capacity": 1, "entries": [], "initialized": 1},
+                candidate_from_dict=_int_candidate_from_dict,
+            )
+
+        with pytest.raises(TypeError, match="leaf_stats must be a JSON array"):
+            _ = CSAProposalState.from_dict(
+                {
+                    "pending_attributions": [],
+                    "family_stats": [],
+                    "leaf_stats": {},
+                    "local_displacement_leaf_stats": [],
+                    "numeric_covariance_stats": [],
+                    "update_index": 0,
+                },
+                policy=CSAProposalPolicy(),
+            )
+
+    @pytest.mark.parametrize(
+        ("field_name", "field_value", "expected_error", "match"),
+        [
+            ("distance_cutoff", True, TypeError, "distance_cutoff must be a JSON number"),
+            ("distance_cutoff", float("inf"), ValueError, "distance_cutoff must be finite"),
+            (
+                "minimum_distance_cutoff",
+                float("nan"),
+                ValueError,
+                "minimum_distance_cutoff must be finite",
+            ),
+            (
+                "cutoff_recover_limit",
+                float("inf"),
+                ValueError,
+                "cutoff_recover_limit must be finite",
+            ),
+            (
+                "previous_score_gap",
+                float("nan"),
+                ValueError,
+                "previous_score_gap must be finite",
+            ),
+        ],
+    )
+    def test_cutoff_state_snapshot_rejects_invalid_optional_numbers(
+        self,
+        field_name: str,
+        field_value: JSONValue,
+        expected_error: type[Exception],
+        match: str,
+    ) -> None:
+        snapshot = CSACutoffState(
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=0.5,
+            cutoff_recover_limit=1.0,
+            previous_score_gap=0.25,
+        ).to_dict()
+        snapshot[field_name] = field_value
+
+        with pytest.raises(expected_error, match=match):
+            _ = CSACutoffState.from_dict(snapshot)
 
     def test_checkpoint_serializes_adaptation_state_not_refinement_payload(
         self,

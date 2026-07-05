@@ -14,6 +14,9 @@ from .....json_types import (
     JSONValue,
     require_json_finite_float,
     require_json_int,
+    require_json_list,
+    require_json_mapping,
+    require_json_optional_str,
 )
 from .....randomness import random_state_permutation_indices
 from .....typevars import CandidateT
@@ -97,11 +100,11 @@ class BankEntry(FrozenGenericSlotsCompat, Generic[CandidateT]):
             If the snapshot carries invalid field types.
         """
         value = data.get("value")
-        proposal_id = data.get("proposal_id")
         finite_value = require_json_finite_float(value, field_name="value")
-        if proposal_id is not None and not isinstance(proposal_id, str):
-            msg = "bank entry snapshot requires proposal_id to be a string or null"
-            raise TypeError(msg)
+        proposal_id = require_json_optional_str(
+            data.get("proposal_id"),
+            field_name="proposal_id",
+        )
         return cls(
             candidate=candidate_from_dict(data.get("candidate")),
             value=finite_value,
@@ -187,18 +190,16 @@ class Bank(FrozenGenericSlotsCompat, Generic[CandidateT]):
             If the snapshot carries invalid field types.
         """
         capacity = require_json_int(data.get("capacity"), field_name="capacity")
-        raw_entries = data.get("entries")
-        if not isinstance(raw_entries, list):
-            msg = "bank snapshot requires entry list"
-            raise TypeError(msg)
+        raw_entries = require_json_list(data.get("entries"), field_name="entries")
         entries: list[BankEntry[CandidateT]] = []
-        for raw_entry in raw_entries:
-            if not isinstance(raw_entry, dict):
-                msg = "bank snapshot entries must be mappings"
-                raise TypeError(msg)
+        for raw_position, raw_entry in enumerate(raw_entries):
+            entry_data = require_json_mapping(
+                raw_entry,
+                field_name=f"entries[{raw_position}]",
+            )
             entries.append(
                 BankEntry[CandidateT].from_dict(
-                    raw_entry,
+                    entry_data,
                     candidate_from_dict=candidate_from_dict,
                 ),
             )

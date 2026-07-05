@@ -779,6 +779,12 @@ class CSABankingTests(CSAOptimizerTestCase):
                 candidate_from_dict=candidate_from_dict,
             )
 
+        with pytest.raises(TypeError, match="proposal_id must be a JSON string"):
+            _ = BankEntry[int].from_dict(
+                {"candidate": 0, "value": 0.0, "proposal_id": 1},
+                candidate_from_dict=candidate_from_dict,
+            )
+
     def test_reference_bank_legacy_snapshot_derives_initialized_state(self) -> None:
         def candidate_from_dict(value: JSONValue) -> int:
             if type(value) is not int:

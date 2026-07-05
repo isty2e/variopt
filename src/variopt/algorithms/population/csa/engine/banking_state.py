@@ -6,7 +6,7 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....json_types import JSONDict, JSONValue
+from .....json_types import JSONDict, JSONValue, require_json_mapping
 from .....typevars import CandidateT
 from ..banking.bank import Bank
 from ..banking.clustering import CSAClusteringState
@@ -111,42 +111,39 @@ class CSABankingState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ValueError
             If the snapshot attempts to restore an active refresh pool.
         """
-        raw_bank = data.get("bank")
-        raw_reference_bank = data.get("reference_bank")
+        bank_data = require_json_mapping(data.get("bank"), field_name="bank")
+        reference_bank_data = require_json_mapping(
+            data.get("reference_bank"),
+            field_name="reference_bank",
+        )
         raw_refresh_state = data.get("refresh_state")
-        raw_growth_state = data.get("growth_state")
-        raw_clustering_state = data.get("clustering_state")
-        if not isinstance(raw_bank, dict):
-            msg = "banking-state snapshot requires bank mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_reference_bank, dict):
-            msg = "banking-state snapshot requires reference_bank mapping"
-            raise TypeError(msg)
         if raw_refresh_state is not None:
             msg = "banking-state checkpoints require reference refresh to be idle"
             raise ValueError(msg)
-        if not isinstance(raw_growth_state, dict):
-            msg = "banking-state snapshot requires growth_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_clustering_state, dict):
-            msg = "banking-state snapshot requires clustering_state mapping"
-            raise TypeError(msg)
+        growth_state_data = require_json_mapping(
+            data.get("growth_state"),
+            field_name="growth_state",
+        )
+        clustering_state_data = require_json_mapping(
+            data.get("clustering_state"),
+            field_name="clustering_state",
+        )
         return cls(
             bank=Bank[CandidateT].from_dict(
-                raw_bank,
+                bank_data,
                 candidate_from_dict=candidate_from_dict,
             ),
             reference_bank=ReferenceBank[CandidateT].from_dict(
-                raw_reference_bank,
+                reference_bank_data,
                 candidate_from_dict=candidate_from_dict,
             ),
             refresh_state=None,
             growth_state=CSABankGrowthState[CandidateT].from_dict(
-                raw_growth_state,
+                growth_state_data,
                 policy=growth_policy,
             ),
             clustering_state=CSAClusteringState[CandidateT].from_dict(
-                raw_clustering_state,
+                clustering_state_data,
                 policy=clustering_policy,
             ),
         )

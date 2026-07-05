@@ -9,7 +9,14 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Observation
-from .....json_types import JSONDict, JSONValue, require_json_bool, require_json_int
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_bool,
+    require_json_int,
+    require_json_list,
+    require_json_mapping,
+)
 from .....typevars import CandidateT
 from .bank import Bank, BankEntry
 
@@ -120,28 +127,26 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
             If the snapshot carries invalid field types.
         """
         capacity = require_json_int(data.get("capacity"), field_name="capacity")
-        raw_entries = data.get("entries")
+        raw_entries = require_json_list(data.get("entries"), field_name="entries")
         raw_initialized = data.get("initialized")
-        if not isinstance(raw_entries, list):
-            msg = "reference bank snapshot requires entry list"
-            raise TypeError(msg)
         initialized = (
             None
             if raw_initialized is None
             else require_json_bool(
                 raw_initialized,
-                field_name="reference bank initialized",
+                field_name="initialized",
             )
         )
 
         entries: list[BankEntry[CandidateT]] = []
-        for raw_entry in raw_entries:
-            if not isinstance(raw_entry, dict):
-                msg = "reference bank snapshot entries must be mappings"
-                raise TypeError(msg)
+        for raw_position, raw_entry in enumerate(raw_entries):
+            entry_data = require_json_mapping(
+                raw_entry,
+                field_name=f"entries[{raw_position}]",
+            )
             entries.append(
                 BankEntry[CandidateT].from_dict(
-                    raw_entry,
+                    entry_data,
                     candidate_from_dict=candidate_from_dict,
                 ),
             )
