@@ -3,7 +3,7 @@
 import pickle
 from dataclasses import dataclass, fields, replace
 from inspect import signature
-from typing import cast
+from typing import Protocol, cast
 
 import numpy as np
 import pytest
@@ -68,6 +68,23 @@ class SpaceOwnedEqualityCandidate:
 
 class FloatSubclass(float):
     """Runtime float subclass used to verify scalar canonicalization."""
+
+
+class TerminalSurfacePickleHooks(Protocol):
+    """Dynamically installed pickle hooks for terminal-surface tests."""
+
+    def __getstate__(self) -> list[object | None]:
+        """Return the installed terminal-surface pickle state."""
+        ...
+
+    def __setstate__(self, state: list[object | None]) -> None:
+        """Restore one installed terminal-surface pickle state."""
+        ...
+
+
+def terminal_surface_pickle_hooks(surface: object) -> TerminalSurfacePickleHooks:
+    """Return dynamically installed terminal-surface pickle hooks for tests."""
+    return cast(TerminalSurfacePickleHooks, surface)
 
 
 def space_owned_candidates_equal(
@@ -2707,6 +2724,58 @@ class RuntimeArtifactsTests:
 
         assert restored_result == result
         assert restored_result.failures == (failure,)
+
+    def test_terminal_surface_setstate_rejects_legacy_short_state(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        result = RunResult[int].from_observations((observation,))
+        pickle_hooks = terminal_surface_pickle_hooks(result)
+        current_state = pickle_hooks.__getstate__()
+
+        with pytest.raises(TypeError, match="field count mismatch"):
+            pickle_hooks.__setstate__(current_state[:-1])
+
+    def test_terminal_surface_setstate_rejects_future_long_state(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        result = RunResult[int].from_observations((observation,))
+        pickle_hooks = terminal_surface_pickle_hooks(result)
+        current_state = pickle_hooks.__getstate__()
+
+        with pytest.raises(TypeError, match="field count mismatch"):
+            pickle_hooks.__setstate__(current_state + ["future-field"])
+
+    def test_terminal_surface_pickle_state_matches_current_field_shape(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=proposal,
+            candidate=4,
+            objective_values=(16.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        surfaces = (
+            RunResult[int].from_observations((observation,)),
+            RunReport[int, Observation[int]].from_records((observation,)),
+            NondominatedRunSurface[int].from_records((vector_record,)),
+        )
+
+        for surface in surfaces:
+            pickle_hooks = terminal_surface_pickle_hooks(surface)
+            assert len(pickle_hooks.__getstate__()) == len(fields(surface))
 
     def test_run_report_preserves_record_aligned_refinements(self) -> None:
         proposal_one = Proposal(candidate=4, proposal_id="p-1")

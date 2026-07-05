@@ -6,6 +6,7 @@ on:
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
+      - ".github/scripts/**"
       - ".github/workflows/ci.yml"
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - "src/**"
       - "tests/**"
       - "pyproject.toml"
+      - ".github/scripts/**"
       - ".github/workflows/ci.yml"
 
 jobs:
@@ -22,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -33,10 +35,71 @@ jobs:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
       - name: Lint
-        run: uv run --python ${{ matrix.python-version }} --extra test ruff check pyproject.toml src tests
+        run: uv run --python ${{ matrix.python-version }} --extra test ruff check pyproject.toml src tests .github/scripts
       - name: Type check
-        run: uv run --python ${{ matrix.python-version }} --extra test basedpyright src tests
+        run: uv run --python ${{ matrix.python-version }} --extra test basedpyright src tests .github/scripts
       - name: Test
         run: uv run --python ${{ matrix.python-version }} --extra test pytest tests -q
       - name: Build package
         run: uv build
+
+  package-smoke:
+    name: installed wheel smoke
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - name: Build wheel
+        run: uv build --wheel
+      - name: Smoke installed base wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_path="$(ls dist/*.whl)"
+          smoke_dir="${RUNNER_TEMP}/variopt-base-smoke"
+          python -m venv "${smoke_dir}"
+          "${smoke_dir}/bin/python" -m pip install --upgrade pip
+          "${smoke_dir}/bin/python" -m pip install "${wheel_path}"
+          cd "${RUNNER_TEMP}"
+          "${smoke_dir}/bin/python" "${GITHUB_WORKSPACE}/.github/scripts/smoke_imports.py" \
+            --surface base \
+            --surface joblib-private
+
+  mpi-smoke:
+    name: optional mpi installed wheel smoke
+    runs-on: ubuntu-latest
+    needs: package-smoke
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - name: Install MPI runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+      - name: Build wheel
+        run: uv build --wheel
+      - name: Smoke installed MPI extra
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_path="$(ls dist/*.whl)"
+          smoke_dir="${RUNNER_TEMP}/variopt-mpi-smoke"
+          python -m venv "${smoke_dir}"
+          "${smoke_dir}/bin/python" -m pip install --upgrade pip
+          "${smoke_dir}/bin/python" -m pip install "${wheel_path}[mpi]"
+          cd "${RUNNER_TEMP}"
+          "${smoke_dir}/bin/python" "${GITHUB_WORKSPACE}/.github/scripts/smoke_imports.py" \
+            --surface mpi

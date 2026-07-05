@@ -714,6 +714,7 @@ class AsyncJoblibEvaluator(
         request_inputs: Sequence[AsyncJoblibRequestInput[CandidateT]],
     ) -> None:
         """Replace the running attempt for an already active logical batch."""
+        self._abort_active_batch_attempt(active_batch)
         attempt = self._start_controlled_attempt(
             problem=active_batch.problem,
             request_inputs=request_inputs,
@@ -794,6 +795,7 @@ class AsyncJoblibEvaluator(
         request_inputs: Sequence[AsyncJoblibRequestInput[CandidateT]],
     ) -> None:
         """Replace the running native attempt-batch stream."""
+        self._abort_active_batch_attempt(active_batch)
         attempt = self._start_controlled_joblib_attempt(
             problem=active_batch.problem,
             request_inputs=request_inputs,
@@ -902,8 +904,6 @@ class AsyncJoblibEvaluator(
         if len(remaining_inputs) == 0:
             return False
 
-        self._abort_active_batch_attempt(active_batch)
-
         active_batch.infrastructure_retry_count += 1
         try:
             self._replace_active_batch_attempt(
@@ -943,8 +943,6 @@ class AsyncJoblibEvaluator(
         )
         if len(remaining_inputs) == 0:
             return False
-
-        self._abort_active_batch_attempt(active_batch)
 
         active_batch.infrastructure_retry_count += 1
         try:

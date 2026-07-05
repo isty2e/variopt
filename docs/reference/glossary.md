@@ -24,7 +24,7 @@ attempt slots instead. See [`EvaluationOutcome`][variopt.EvaluationOutcome].
 ## EvaluationFailure
 
 A request-aligned record of a user-code evaluation failure. It keeps the
-canonical `EvaluationRequest`, a JSON- and pickle-friendly
+canonical `EvaluationRequest`, a structured-serialization-friendly
 `EvaluationExceptionSnapshot`, and the logical evaluation cost consumed by the
 failed attempt. It does not contain the raw exception object and is not a fake
 successful payload. See [`EvaluationFailure`][variopt.EvaluationFailure].
@@ -207,10 +207,11 @@ and prioritized structured leaf paths. See
 ## RunMethod
 
 The search-state owner. Proposes candidates via `ask`, consumes successful
-request-aligned records via `tell`, may opt into legacy successful-outcome
-metadata through `tell_outcomes`, consumes dense materialized record-attempt
+request-aligned records via `tell`, consumes dense materialized record-attempt
 batches through `tell_attempts`, and owns the persistent search-state object.
-Population optimizers
+`Study` orchestration uses `tell_attempts` at the feedback boundary; the default
+implementation delegates success-only batches to `tell` and rejects batches
+containing recorded failures. Population optimizers
 (`CSAOptimizer`, `DifferentialEvolutionOptimizer`,
 `GeneticAlgorithmOptimizer`) are `RunMethod` implementations. See
 [`RunMethod`][variopt.RunMethod].

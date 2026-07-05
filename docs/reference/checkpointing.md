@@ -12,7 +12,10 @@ seed, objective, and execution model continues exactly from the saved
 boundary.
 
 The checkpoint payload is JSON-safe and is intended to be written through JSON
-or another structured serialization format.
+or another structured serialization format. The supported durable persistence
+surface is the explicit `to_dict()` / `from_dict()` checkpoint contract; Python
+`pickle` round trips are runtime compatibility conveniences only and are not a
+cross-version or crash-recovery checkpoint format.
 
 ## Usage
 
@@ -105,6 +108,7 @@ The checkpoint intentionally does not capture:
 
 - live evaluator or worker state
 - exact-async suspended sessions
+- exact-async resume handles
 - in-flight proposal batches
 - `Study.run(...)` reports or `Study.optimize(...)` results
 - trace or telemetry reducer state
@@ -132,6 +136,7 @@ result summaries is caller-owned for now.
 
     - mid-step checkpoint/resume
     - exact-async suspended-session checkpointing
+    - exact-async resume-handle crash recovery
     - terminal report/result serialization
     - generic `Study`-level persistence across arbitrary run methods
 

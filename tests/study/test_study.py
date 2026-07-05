@@ -1699,6 +1699,77 @@ class StudyTests:
         assert exception.checkpoint_safe_report is None
         assert exception.checkpoint_safe_state is None
 
+    def test_run_report_projection_failure_preserves_original_hard_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = HardFailingEvaluator(fail_on_call=3)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RepeatingSubqueryKernel(),
+        )
+
+        with pytest.raises(RuntimeError, match="hard evaluator failure 3") as exc_info:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=1,
+                count_evaluation_cost=False,
+            )
+
+        assert type(exc_info.value) is RuntimeError
+        report_failure = exc_info.value.__cause__
+        assert type(report_failure) is ValueError
+        assert str(report_failure) == (
+            "evaluation_count must be at least the terminal attempt cost"
+        )
+
+    def test_run_checkpoint_projection_failure_preserves_original_hard_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = HardFailingEvaluator(fail_on_call=3)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RepeatingSubqueryKernel(),
+        )
+
+        with pytest.raises(RuntimeError, match="hard evaluator failure 3") as exc_info:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=1,
+                count_evaluation_cost=False,
+                stop_at_checkpoint_boundary=True,
+            )
+
+        assert type(exc_info.value) is RuntimeError
+        report_failure = exc_info.value.__cause__
+        assert type(report_failure) is ValueError
+        assert str(report_failure) == (
+            "evaluation_count must be at least the terminal attempt cost"
+        )
+
     def test_run_does_not_wrap_keyboard_interrupt(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),

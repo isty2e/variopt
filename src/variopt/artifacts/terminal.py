@@ -1334,56 +1334,68 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         )
 
 
-def terminal_surface_getstate(self: FrozenGenericSlotsCompat) -> list[object | None]:
-    state: list[object | None] = []
-    for dataclass_field in fields(self):
-        if dataclass_field.name in {
-            "_validated_frontier_source_successes",
-            "_validated_frontier_successes",
-        }:
-            state.append(())
-            continue
-        state.append(getattr(self, dataclass_field.name, None))
-    return state
+def run_report_getstate(
+    self: RunReport[CandidateT, RunRecordT],
+) -> list[object | None]:
+    return [
+        None,
+        self.successes,
+        self.evaluation_count,
+        self.trace,
+        self.failures,
+    ]
+
+
+def run_result_getstate(self: RunResult[CandidateT]) -> list[object | None]:
+    return [
+        None,
+        self.best_success,
+        self.successes,
+        self.evaluation_count,
+        self.trace,
+        self.failures,
+    ]
+
+
+def nondominated_run_surface_getstate(
+    self: NondominatedRunSurface[CandidateT],
+) -> list[object | None]:
+    return [
+        None,
+        self.nondominated_successes,
+        self.successes,
+        self.evaluation_count,
+        self.trace,
+        self.failures,
+        (),
+        (),
+    ]
 
 
 def terminal_surface_setstate(
     self: FrozenGenericSlotsCompat,
     state: list[object | None],
 ) -> None:
-    restored_names: set[str] = set()
     dataclass_fields = fields(self)
-    for dataclass_field, value in zip(dataclass_fields, state):
-        restored_names.add(dataclass_field.name)
-        if dataclass_field.name == "_candidate_equal":
-            object.__setattr__(self, dataclass_field.name, None)
-            continue
+    if len(state) != len(dataclass_fields):
+        msg = (
+            "terminal artifact pickle state field count mismatch: "
+            f"expected {len(dataclass_fields)}, got {len(state)}"
+        )
+        raise TypeError(msg)
+
+    for dataclass_field, value in zip(dataclass_fields, state, strict=True):
         object.__setattr__(self, dataclass_field.name, value)
 
-    for dataclass_field in dataclass_fields:
-        if dataclass_field.name in restored_names:
-            continue
-        if dataclass_field.name == "_candidate_equal":
-            object.__setattr__(self, dataclass_field.name, None)
-        elif dataclass_field.name == "_candidate_equal_required":
-            object.__setattr__(self, dataclass_field.name, False)
-        elif dataclass_field.name in {"failures", "_validated_refinement_pairs"}:
-            object.__setattr__(self, dataclass_field.name, ())
-        elif dataclass_field.name in {
-            "_validated_frontier_source_records",
-            "_validated_frontier_records",
-        }:
-            object.__setattr__(self, dataclass_field.name, ())
-        else:
-            object.__setattr__(self, dataclass_field.name, None)
 
-
-setattr(RunReport, "__getstate__", terminal_surface_getstate)
+setattr(RunReport, "__getstate__", run_report_getstate)
 setattr(RunReport, "__setstate__", terminal_surface_setstate)
-setattr(RunResult, "__getstate__", terminal_surface_getstate)
+setattr(RunResult, "__getstate__", run_result_getstate)
 setattr(RunResult, "__setstate__", terminal_surface_setstate)
-setattr(NondominatedRunSurface, "__getstate__", terminal_surface_getstate)
+setattr(NondominatedRunSurface, "__getstate__", nondominated_run_surface_getstate)
 setattr(NondominatedRunSurface, "__setstate__", terminal_surface_setstate)
 
-del terminal_surface_getstate
+del run_report_getstate
+del run_result_getstate
+del nondominated_run_surface_getstate
 del terminal_surface_setstate

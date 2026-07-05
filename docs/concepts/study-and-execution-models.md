@@ -57,7 +57,9 @@ So the practical default today is:
 `StudyExactAsyncStepSession` and `StudyExactAsyncStepResumeHandle` are the
 study-side lifecycle objects for one exact-async step. Most users do not need
 them directly; they exist for explicit polling, suspension, and resumption
-around evaluators that support the corresponding async lifecycle.
+around evaluators that support the corresponding async lifecycle. They are live
+evaluator/session handles, not durable checkpoint artifacts; do not serialize
+them for crash recovery.
 
 ## Exact-Async Example
 
@@ -125,9 +127,9 @@ storage therefore keep payload attempts, not terminal feedback records.
 
 Run methods consume the materialized record attempts through
 `tell_attempts(...)`; the default implementation still delegates success-only
-batches to record-based `tell(...)`. The older `tell_outcomes(...)` hook remains
-for successful `EvaluationOutcome` compatibility streams and is not an
-outcome-only fallback for `Study` orchestration.
+batches to record-based `tell(...)`. `Study` orchestration does not call
+outcome-only hooks; custom run methods that need failure-aware proposal cleanup
+must implement `tell_attempts(...)`.
 
 Among the built-in population methods, `CSAOptimizer` consumes recorded failed
 attempts by draining the failed proposal ids from pending CSA lifecycle state

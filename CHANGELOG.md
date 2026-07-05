@@ -16,6 +16,11 @@ format. Stability guarantees for the public surface are documented in the
   request-free protocol payloads plus `EvaluationSuccess`/terminal artifacts, or
   the concrete `Observation` and `ObjectiveVectorRecord` compatibility
   projections where those concrete views are required.
+- `KernelDiagnostics` and `KernelStatus` are supported through the root facade
+  and `variopt.artifacts` only. Imports such as
+  `from variopt.kernel import KernelDiagnostics` now fail; use
+  `from variopt import KernelDiagnostics, KernelStatus` or
+  `from variopt.artifacts import KernelDiagnostics, KernelStatus` instead.
 - `Study.run(...)` and `Study.optimize(...)` now default
   `count_evaluation_cost=True`. Evaluation budgets are charged against reported
   logical evaluation cost, including inner local-search evaluations, rather than
@@ -32,6 +37,12 @@ format. Stability guarantees for the public surface are documented in the
   rejects equal-but-different scalar runtime types, and non-finite categorical
   float choices or non-canonical structured scalar values are rejected at the
   relevant space boundary.
+- CSA checkpoint JSON codecs now fail loudly on malformed numeric payloads.
+  Boolean values are no longer accepted where checkpoint fields require JSON
+  integers or numbers, and non-finite bank/growth/clustering numeric values are
+  rejected instead of being restored as runtime state. Durable checkpointing is
+  the explicit JSON-safe `to_dict()` / `from_dict()` surface; pickle is not a
+  supported persistence or compatibility boundary.
 - `Study` orchestration now requires native attempt-aware evaluator capability.
   Custom evaluators used through `Study` must expose `evaluate_attempts(...)`
   for synchronous execution, or attempt-batch session hooks for async execution.
@@ -58,14 +69,23 @@ format. Stability guarantees for the public surface are documented in the
   built-in CSA, DE, local-search, geometry, and projection hot loops to avoid
   repeated full-candidate validation after an operation-level validation
   boundary.
-- Added `EvaluationFailure`, `EvaluationExceptionSnapshot`, and
-  `EvaluationAttemptBatch` artifacts for request-aligned recording of user-code
-  evaluation failures without mixing them into successful records.
+- Added `EvaluationAttempt`, `EvaluationSuccess`, `EvaluationFailure`,
+  `EvaluationExceptionSnapshot`, and `EvaluationAttemptBatch` artifacts for
+  request-aligned recording of successful evaluations and user-code evaluation
+  failures without mixing failures into successful records.
+- Added request-free `ObservationPayload` and `ObjectiveVectorPayload`
+  artifacts plus `materialize_success_record(...)`,
+  `materialize_success_records(...)`, and
+  `materialize_attempt_batch_records(...)` helpers for projecting successful
+  payload attempts into request-aligned feedback records.
 - Added `RunMethod.tell_attempts(...)` and
   `UnsupportedEvaluationFailureError` so optimizers can distinguish success-only
   attempt batches from recorded evaluation failures at the assimilation boundary.
 - Added `RunExecutionFailed` so hard study execution failures carry partial
   report/state and checkpoint-safe report/state projections when available.
+- CI now covers Python 3.10 through 3.13, smokes built wheel imports from an
+  installed environment, checks joblib/loky private retry surfaces for drift,
+  and verifies the optional MPI extra can be installed and imported.
 - Built-in sequential, joblib, async joblib, and MPI evaluators now expose
   `evaluate_attempts(...)` hooks that return `EvaluationAttemptBatch` values and
   preserve user-code evaluation failures separately from successful outcomes.
@@ -92,6 +112,8 @@ format. Stability guarantees for the public surface are documented in the
 - Stale-async runs with `stop_at_checkpoint_boundary=True` no longer open
   refill sessions after reaching the requested checkpoint-safe boundary; any
   already-active sessions are cancelled before returning the safe report/state.
+- Terminal artifact pickle restoration now rejects mismatched current-state
+  field counts instead of filling unknown or future fields with `None`.
 - `CSAOptimizer` now consumes recorded failed attempts from pending proposal,
   generation, and proposal-attribution lifecycle state without inserting failed
   candidates into CSA banks or adaptive score evidence. GA and DE-family

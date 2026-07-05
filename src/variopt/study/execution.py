@@ -51,7 +51,7 @@ from .common import (
     validate_materialized_attempts,
 )
 from .exact_async.orchestration import evaluate_batch_exact_async
-from .failures import RunExecutionFailed
+from .failures import RunExecutionFailed, build_run_report_or_raise_cause
 from .validation import validate_execution_request
 
 BoundaryT = TypeVar("BoundaryT")
@@ -369,8 +369,12 @@ def _raise_run_execution_failed(
     checkpoint_safe_report: RunReport[CandidateT, StudyRecordT] | None = None
     checkpoint_safe_state: RunMethodStateT | None = None
     if safe_snapshot is not None:
-        checkpoint_safe_report = _run_report_from_snapshot(
-            snapshot=safe_snapshot,
+        checkpoint_safe_report = build_run_report_or_raise_cause(
+            cause=cause,
+            successes=safe_snapshot.successes,
+            evaluation_count=safe_snapshot.evaluation_count,
+            trace=safe_snapshot.trace,
+            failures=safe_snapshot.failures,
             candidate_equal=candidate_equal,
         )
         checkpoint_safe_state = safe_snapshot.state
@@ -380,10 +384,11 @@ def _raise_run_execution_failed(
         RunMethodStateT,
         StudyRecordT,
     ](
-        partial_report=_build_run_report(
+        partial_report=build_run_report_or_raise_cause(
+            cause=cause,
             successes=successes,
             failures=failures,
-            trace_events=trace_events,
+            trace=Trace(events=trace_events),
             evaluation_count=evaluation_count,
             candidate_equal=candidate_equal,
         ),

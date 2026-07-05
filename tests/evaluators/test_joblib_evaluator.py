@@ -27,6 +27,7 @@ from variopt import (
     RunMethod,
     Study,
 )
+from variopt.artifacts import EvaluationSuccess
 from variopt.artifacts.records import RequestAlignedEvaluationRecord
 from variopt.evaluation_pipeline import evaluate_request_outcome
 from variopt.evaluators import (
@@ -413,6 +414,45 @@ class AbortInspectionAsyncJoblibEvaluator(
     def has_active_batch(self, handle: EvaluationBatchHandle) -> bool:
         return handle.batch_id in self._active_batches
 
+    def replace_active_batch_attempt(
+        self,
+        *,
+        active_batch: ActiveAsyncJoblibBatch[
+            int,
+            int,
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+            Observation[int],
+        ],
+        request_inputs: Sequence[AsyncJoblibRequestInput[int]],
+    ) -> None:
+        self._replace_active_batch_attempt(
+            active_batch=active_batch,
+            request_inputs=request_inputs,
+        )
+
+    def replace_active_attempt_batch_attempt(
+        self,
+        *,
+        active_batch: ActiveAsyncJoblibBatch[
+            int,
+            int,
+            EvaluationAttemptBatch[int, Observation[int]],
+            Observation[int],
+        ],
+        request_inputs: Sequence[AsyncJoblibRequestInput[int]],
+    ) -> None:
+        self._replace_active_attempt_batch_attempt(
+            active_batch=active_batch,
+            request_inputs=request_inputs,
+        )
+
+
+@dataclass(slots=True)
+class AbortEventLog:
+    """Mutable event log for abort-order assertions."""
+
+    events: list[str]
+
 
 def _requests(
     proposals: Sequence[Proposal[int]],
@@ -453,6 +493,41 @@ def _active_observation_joblib_batch(
         AsyncJoblibCompletedResult[
             EvaluationOutcome[int, RequestAlignedEvaluationRecord]
         ]
+        | AsyncJoblibFailedResult
+        | AsyncJoblibExhaustedResult
+    ] = Queue()
+    return ActiveAsyncJoblibBatch(
+        problem=problem,
+        request_inputs=request_inputs,
+        execution_resources=ExecutionResources(
+            parallel_owner="evaluator",
+            nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+        ),
+        result_generator=result_generator,
+        result_queue=result_queue,
+        result_worker=current_thread(),
+        abort_attempt=abort_attempt,
+    )
+
+
+def _active_attempt_joblib_batch(
+    *,
+    problem: Problem[int, int, Observation[int]],
+    request_inputs: tuple[AsyncJoblibRequestInput[int], ...],
+    result_generator: Generator[
+        tuple[int, EvaluationAttemptBatch[int, Observation[int]]],
+        None,
+        None,
+    ],
+    abort_attempt: Callable[[], None] | None = None,
+) -> ActiveAsyncJoblibBatch[
+    int,
+    int,
+    EvaluationAttemptBatch[int, Observation[int]],
+    Observation[int],
+]:
+    result_queue: Queue[
+        AsyncJoblibCompletedResult[EvaluationAttemptBatch[int, Observation[int]]]
         | AsyncJoblibFailedResult
         | AsyncJoblibExhaustedResult
     ] = Queue()
@@ -1090,6 +1165,151 @@ class AsyncJoblibEvaluatorTests:
             evaluator.cancel(handle)
 
         assert not evaluator.has_active_batch(handle)
+
+    def test_replacement_aborts_old_stream_before_starting_new_attempt(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        old_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        event_log = AbortEventLog(events=[])
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            yield 0, old_outcome
+
+        old_generator = result_generator()
+        _ = next(old_generator)
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=old_generator,
+        )
+
+        def abort_attempt() -> None:
+            event_log.events.append("abort")
+            assert active_batch.result_generator is old_generator
+
+        active_batch.abort_attempt = abort_attempt
+        evaluator = AbortInspectionAsyncJoblibEvaluator(backend="threading", n_jobs=1)
+
+        evaluator.replace_active_batch_attempt(
+            active_batch=active_batch,
+            request_inputs=request_inputs,
+        )
+
+        assert event_log.events == ["abort"]
+        assert active_batch.result_generator is not old_generator
+
+    def test_replacement_falls_back_to_close_when_abort_hook_fails(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        old_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        event_log = AbortEventLog(events=[])
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            try:
+                yield 0, old_outcome
+            finally:
+                event_log.events.append("close")
+
+        old_generator = result_generator()
+        _ = next(old_generator)
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=old_generator,
+        )
+
+        def abort_attempt() -> None:
+            event_log.events.append("abort")
+            assert active_batch.result_generator is old_generator
+            msg = "abort hook failed"
+            raise RuntimeError(msg)
+
+        active_batch.abort_attempt = abort_attempt
+        evaluator = AbortInspectionAsyncJoblibEvaluator(backend="threading", n_jobs=1)
+
+        with pytest.warns(
+            RuntimeWarning,
+            match="fallback generator close was used",
+        ):
+            evaluator.replace_active_batch_attempt(
+                active_batch=active_batch,
+                request_inputs=request_inputs,
+            )
+
+        assert event_log.events == ["abort", "close"]
+        assert active_batch.result_generator is not old_generator
+
+    def test_attempt_replacement_aborts_old_stream_before_starting_new_attempt(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        observation = _make_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        ).record
+        old_attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(
+                    EvaluationSuccess(
+                        request=requests[0],
+                        payload=observation,
+                    ),
+                ),
+            )
+        )
+        event_log = AbortEventLog(events=[])
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationAttemptBatch[int, Observation[int]]],
+            None,
+            None,
+        ]:
+            yield 0, old_attempts
+
+        old_generator = result_generator()
+        _ = next(old_generator)
+        active_batch = _active_attempt_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=old_generator,
+        )
+
+        def abort_attempt() -> None:
+            event_log.events.append("abort")
+            assert active_batch.result_generator is old_generator
+
+        active_batch.abort_attempt = abort_attempt
+        evaluator = AbortInspectionAsyncJoblibEvaluator(backend="threading", n_jobs=1)
+
+        evaluator.replace_active_attempt_batch_attempt(
+            active_batch=active_batch,
+            request_inputs=request_inputs,
+        )
+
+        assert event_log.events == ["abort"]
+        assert active_batch.result_generator is not old_generator
 
     def test_open_session_exposes_resumable_capability(self) -> None:
         problem = _legacy_observation_problem(DelayedSquareObjective())
