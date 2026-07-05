@@ -10,6 +10,7 @@ from threading import current_thread
 from types import ModuleType
 from typing import Literal, TypeGuard, TypeVar, cast, final
 
+import numpy as np
 import pytest
 from typing_extensions import override
 
@@ -33,6 +34,7 @@ from variopt.evaluation_pipeline import evaluate_request_outcome
 from variopt.evaluators import (
     AsyncJoblibEvaluator,
     BatchExecutionFailed,
+    CompletionGroup,
     EvaluationBatchHandle,
     EvaluationBatchResumeHandle,
     EvaluationBatchSessionState,
@@ -231,6 +233,39 @@ def _require_resumable_session(
     return session
 
 
+class ImmediateBaseSession(EvaluationBatchSession[int]):
+    """Concrete base-session fixture for default wait contract tests."""
+
+    _handle: EvaluationBatchHandle
+    _completion_groups: tuple[CompletionGroup[int], ...]
+    poll_count: int
+    cancel_count: int
+
+    def __init__(
+        self,
+        *,
+        completion_groups: tuple[CompletionGroup[int], ...],
+    ) -> None:
+        self._handle = EvaluationBatchHandle(batch_id="base-session", request_count=1)
+        self._completion_groups = completion_groups
+        self.poll_count = 0
+        self.cancel_count = 0
+
+    @property
+    @override
+    def handle(self) -> EvaluationBatchHandle:
+        return self._handle
+
+    @override
+    def poll(self) -> tuple[CompletionGroup[int], ...]:
+        self.poll_count += 1
+        return self._completion_groups
+
+    @override
+    def cancel(self) -> None:
+        self.cancel_count += 1
+
+
 class SquareObjective(Objective[int]):
     """Toy objective used to test evaluator behavior."""
 
@@ -413,6 +448,21 @@ class AbortInspectionAsyncJoblibEvaluator(
 
     def has_active_batch(self, handle: EvaluationBatchHandle) -> bool:
         return handle.batch_id in self._active_batches
+
+    def install_active_attempt_batch(
+        self,
+        handle: EvaluationBatchHandle,
+        active_batch: ActiveAsyncJoblibBatch[
+            int,
+            int,
+            EvaluationAttemptBatch[int, Observation[int]],
+            Observation[int],
+        ],
+    ) -> None:
+        self._active_attempt_batches[handle.batch_id] = active_batch
+
+    def has_active_attempt_batch(self, handle: EvaluationBatchHandle) -> bool:
+        return handle.batch_id in self._active_attempt_batches
 
     def replace_active_batch_attempt(
         self,
@@ -692,6 +742,52 @@ class JoblibEvaluatorTests:
 
 class AsyncJoblibEvaluatorTests:
     """Tests for the async joblib evaluator."""
+
+    @pytest.mark.parametrize(
+        ("timeout", "expected_error"),
+        (
+            (cast(float, True), TypeError),
+            (cast(float, cast(object, np.bool_(False))), TypeError),
+            (float("nan"), ValueError),
+            (float("inf"), ValueError),
+            (-0.001, ValueError),
+        ),
+    )
+    def test_base_session_wait_rejects_non_canonical_timeout(
+        self,
+        timeout: float,
+        expected_error: type[Exception],
+    ) -> None:
+        session = ImmediateBaseSession(
+            completion_groups=(CompletionGroup(start_index=0, outcomes=(1,)),),
+        )
+
+        with pytest.raises(expected_error, match="timeout must"):
+            _ = session.wait(timeout=timeout)
+
+        assert session.poll_count == 0
+
+    def test_base_session_wait_preserves_none_timeout(self) -> None:
+        session = ImmediateBaseSession(
+            completion_groups=(CompletionGroup(start_index=0, outcomes=(1,)),),
+        )
+
+        completion_groups = tuple(session.wait(timeout=None))
+
+        assert completion_groups == (CompletionGroup(start_index=0, outcomes=(1,)),)
+        assert session.poll_count == 1
+
+    def test_base_session_wait_accepts_canonical_numeric_timeout(self) -> None:
+        session = ImmediateBaseSession(
+            completion_groups=(CompletionGroup(start_index=0, outcomes=(1,)),),
+        )
+
+        completion_groups = tuple(
+            session.wait(timeout=cast(float, cast(object, np.float64(0.0)))),
+        )
+
+        assert completion_groups == (CompletionGroup(start_index=0, outcomes=(1,)),)
+        assert session.poll_count == 1
 
     def test_rejects_negative_infrastructure_retry_limit(self) -> None:
         with pytest.raises(ValueError):
@@ -1259,6 +1355,43 @@ class AsyncJoblibEvaluatorTests:
         assert event_log.events == ["abort", "close"]
         assert active_batch.result_generator is not old_generator
 
+    def test_duplicate_completion_aborts_active_stream(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        event_log = AbortEventLog(events=[])
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            yield 0, outcome
+
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+            abort_attempt=lambda: event_log.events.append("abort"),
+        )
+        active_batch.completed_indices.add(0)
+        active_batch.result_queue.put(
+            AsyncJoblibCompletedResult(index=0, outcome=outcome),
+        )
+        handle = EvaluationBatchHandle(batch_id="joblib-duplicate", request_count=1)
+        evaluator = AbortInspectionAsyncJoblibEvaluator(backend="threading", n_jobs=1)
+        evaluator.install_active_batch(handle, active_batch)
+
+        with pytest.raises(BatchExecutionFailed, match="infrastructure"):
+            _ = evaluator.poll(handle)
+
+        assert event_log.events == ["abort"]
+        assert not evaluator.has_active_batch(handle)
+
     def test_attempt_replacement_aborts_old_stream_before_starting_new_attempt(
         self,
     ) -> None:
@@ -1310,6 +1443,56 @@ class AsyncJoblibEvaluatorTests:
 
         assert event_log.events == ["abort"]
         assert active_batch.result_generator is not old_generator
+
+    def test_duplicate_attempt_completion_aborts_active_stream(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        observation = _make_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        ).record
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(
+                    EvaluationSuccess(
+                        request=requests[0],
+                        payload=observation,
+                    ),
+                ),
+            )
+        )
+        event_log = AbortEventLog(events=[])
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationAttemptBatch[int, Observation[int]]],
+            None,
+            None,
+        ]:
+            yield 0, attempts
+
+        active_batch = _active_attempt_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+            abort_attempt=lambda: event_log.events.append("abort"),
+        )
+        active_batch.completed_indices.add(0)
+        active_batch.result_queue.put(
+            AsyncJoblibCompletedResult(index=0, outcome=attempts),
+        )
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-attempt-duplicate",
+            request_count=1,
+        )
+        evaluator = AbortInspectionAsyncJoblibEvaluator(backend="threading", n_jobs=1)
+        evaluator.install_active_attempt_batch(handle, active_batch)
+
+        with pytest.raises(BatchExecutionFailed, match="infrastructure"):
+            _ = evaluator.poll_attempts(handle)
+
+        assert event_log.events == ["abort"]
+        assert not evaluator.has_active_attempt_batch(handle)
 
     def test_open_session_exposes_resumable_capability(self) -> None:
         problem = _legacy_observation_problem(DelayedSquareObjective())
@@ -1472,6 +1655,41 @@ class AsyncJoblibEvaluatorTests:
         assert attempts.failures[0].proposal_id == "p-2"
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
 
+    def test_invalid_attempt_resume_handle_does_not_consume_suspended_state(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(DelayedExplodingObjective())
+        evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](
+            backend="threading",
+            n_jobs=2,
+        )
+        requests = _requests(
+            (
+                Proposal(candidate=1, proposal_id="p-1"),
+                Proposal(candidate=4, proposal_id="p-2"),
+            )
+        )
+        session = evaluator.open_attempt_session(problem, requests)
+        pending_aware_session = _require_pending_aware_session(session)
+        resumable_session = _require_resumable_session(session)
+
+        _ = tuple(pending_aware_session.wait(timeout=5.0))
+        resume_handle = resumable_session.suspend()
+        bad_handle = EvaluationBatchResumeHandle(
+            batch_id=resume_handle.batch_id,
+            request_count=resume_handle.request_count + 1,
+            completed_count=resume_handle.completed_count,
+        )
+
+        with pytest.raises(ValueError, match="request_count"):
+            _ = evaluator.resume_attempt_session(bad_handle)
+
+        resumed_session = evaluator.resume_attempt_session(resume_handle)
+        pending_resumed_session = _require_pending_aware_session(resumed_session)
+
+        assert pending_resumed_session.state().lifecycle == "active"
+        assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
+
     def test_suspend_and_resume_session_preserves_remaining_work(self) -> None:
         problem = _legacy_observation_problem(DelayedSquareObjective())
         evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](backend="threading", n_jobs=2)
@@ -1521,6 +1739,41 @@ class AsyncJoblibEvaluatorTests:
                 for outcome in ordered_outcomes
                 if outcome is not None
             ) == (16.0, 1.0)
+
+    def test_invalid_resume_handle_does_not_consume_suspended_state(self) -> None:
+        problem = _legacy_observation_problem(DelayedSquareObjective())
+        evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](
+            backend="threading",
+            n_jobs=2,
+        )
+        session = evaluator.open_session(
+            problem,
+            _requests(
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=1, proposal_id="p-2"),
+                )
+            ),
+        )
+        pending_aware_session = _require_pending_aware_session(session)
+        resumable_session = _require_resumable_session(session)
+
+        _ = tuple(pending_aware_session.wait(timeout=5.0))
+        resume_handle = resumable_session.suspend()
+        bad_handle = EvaluationBatchResumeHandle(
+            batch_id=resume_handle.batch_id,
+            request_count=resume_handle.request_count + 1,
+            completed_count=resume_handle.completed_count,
+        )
+
+        with pytest.raises(ValueError, match="request_count"):
+            _ = evaluator.resume_session(bad_handle)
+
+        resumed_session = evaluator.resume_session(resume_handle)
+        pending_resumed_session = _require_pending_aware_session(resumed_session)
+
+        assert pending_resumed_session.state().lifecycle == "active"
+        assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
 
     def test_retries_infrastructure_failure_for_remaining_proposals(self) -> None:
         problem = _legacy_observation_problem(SquareObjective())

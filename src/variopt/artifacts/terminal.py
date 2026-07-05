@@ -867,6 +867,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             failures=failure_tuple,
+            candidate_equal=candidate_equal,
         )
 
 
@@ -1281,6 +1282,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             failures=failure_tuple,
+            candidate_equal=candidate_equal,
         )
 
     @classmethod
@@ -1331,7 +1333,15 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=report.evaluation_count,
             trace=report.trace,
             failures=report.failures,
+            candidate_equal=candidate_equal,
         )
+
+
+_TerminalSurfaceStateOwner = (
+    RunReport[object, RequestAlignedEvaluationRecord[object]]
+    | RunResult[object]
+    | NondominatedRunSurface[object]
+)
 
 
 def run_report_getstate(
@@ -1373,7 +1383,7 @@ def nondominated_run_surface_getstate(
 
 
 def terminal_surface_setstate(
-    self: FrozenGenericSlotsCompat,
+    self: _TerminalSurfaceStateOwner,
     state: list[object | None],
 ) -> None:
     dataclass_fields = fields(self)
@@ -1386,6 +1396,15 @@ def terminal_surface_setstate(
 
     for dataclass_field, value in zip(dataclass_fields, state, strict=True):
         object.__setattr__(self, dataclass_field.name, value)
+
+    if isinstance(self, RunReport):
+        self.__post_init__(None)
+    elif isinstance(self, RunResult):
+        self.__post_init__(None)
+    else:
+        object.__setattr__(self, "_validated_frontier_source_successes", ())
+        object.__setattr__(self, "_validated_frontier_successes", ())
+        self.__post_init__(None)
 
 
 setattr(RunReport, "__getstate__", run_report_getstate)

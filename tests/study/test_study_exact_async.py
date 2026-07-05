@@ -39,10 +39,18 @@ from variopt import (
     Study,
 )
 from variopt.artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationSuccess,
     ObservationPayload,
     ProposalEvaluationSpec,
 )
-from variopt.evaluators import EvaluationBatchSessionState, SequentialEvaluator
+from variopt.evaluators import (
+    CompletionGroup,
+    EvaluationBatchHandle,
+    EvaluationBatchSessionState,
+    SequentialEvaluator,
+)
+from variopt.evaluators.async_evaluator.sessions import EvaluationBatchSession
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
     SEQUENTIAL_EXECUTION_MODEL,
@@ -50,6 +58,7 @@ from variopt.execution import (
     ExecutionModel,
 )
 from variopt.study.common import build_evaluation_requests
+from variopt.study.exact_async.session import StudyExactAsyncStepSession
 
 ExactAsyncScalarStudy: TypeAlias = Study[
     int,
@@ -72,6 +81,66 @@ ExactAsyncSpaceOwnedEqualityStudy: TypeAlias = Study[
     ObservationPayload,
     Observation[SpaceOwnedEqualityCandidate],
 ]
+
+
+class InvalidCompletionAttemptSession(
+    EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]
+):
+    """Exact-async test session that emits preconfigured malformed groups."""
+
+    _handle: EvaluationBatchHandle
+    _completion_groups: tuple[
+        CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]],
+        ...,
+    ]
+    _cancel_raises: bool
+    cancel_count: int
+
+    def __init__(
+        self,
+        *,
+        handle: EvaluationBatchHandle,
+        completion_groups: tuple[
+            CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]],
+            ...,
+        ],
+        cancel_raises: bool = False,
+    ) -> None:
+        self._handle = handle
+        self._completion_groups = completion_groups
+        self._cancel_raises = cancel_raises
+        self.cancel_count = 0
+
+    @property
+    @override
+    def handle(self) -> EvaluationBatchHandle:
+        return self._handle
+
+    @override
+    def poll(
+        self,
+    ) -> tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...]:
+        return self._completion_groups
+
+    @override
+    def cancel(self) -> None:
+        self.cancel_count += 1
+        if self._cancel_raises:
+            msg = "forced cancel cleanup failure"
+            raise RuntimeError(msg)
+
+
+def _payload_attempt(
+    request: EvaluationRequest[int],
+) -> EvaluationAttemptBatch[int, ObservationPayload]:
+    return EvaluationAttemptBatch(
+        attempts=(
+            EvaluationSuccess(
+                request=request,
+                payload=ObservationPayload(value=1.0, score=1.0),
+            ),
+        ),
+    )
 
 
 class OutcomeAwareExactAsyncBatchQueueOptimizer(OutcomeAwareBatchQueueOptimizer):
@@ -568,6 +637,153 @@ class StudyExactAsyncTests:
                 observation.proposal.proposal_id
                 for observation in next_state.tell_history[0]
             ) == ("p-1", "p-2")
+
+    @pytest.mark.parametrize("method_name", ["poll", "wait"])
+    @pytest.mark.parametrize("malformation", ["overlap", "out_of_bounds"])
+    def test_exact_async_step_session_validation_failure_is_terminal(
+        self,
+        method_name: str,
+        malformation: str,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+        proposals, post_ask_state = optimizer.ask(
+            optimizer.create_initial_state(),
+            batch_size=2,
+        )
+        requests = build_evaluation_requests(
+            proposals,
+            proposal_evaluation_specs=None,
+        )
+        first_attempt = _payload_attempt(requests[0])
+        second_attempt = _payload_attempt(requests[1])
+
+        ordered_attempts: list[
+            EvaluationAttemptBatch[int, ObservationPayload] | None
+        ] = []
+        if malformation == "overlap":
+            ordered_attempts = [first_attempt, None]
+            completion_group = CompletionGroup(
+                start_index=0,
+                outcomes=(second_attempt,),
+            )
+            expected_message = "overlap"
+        else:
+            completion_group = CompletionGroup(
+                start_index=1,
+                outcomes=(first_attempt, second_attempt),
+            )
+            expected_message = "bounds"
+
+        batch_session = InvalidCompletionAttemptSession(
+            handle=EvaluationBatchHandle(
+                batch_id=f"invalid-{method_name}-{malformation}",
+                request_count=2,
+            ),
+            completion_groups=(completion_group,),
+        )
+        session = StudyExactAsyncStepSession[
+            int,
+            int,
+            BatchQueueOptimizerState,
+            ObservationPayload,
+            Observation[int],
+        ](
+            study=study,
+            requests=requests,
+            post_ask_state=post_ask_state,
+            batch_session=batch_session,
+            candidate_equal=study.problem.space.candidates_equal,
+            ordered_attempts=ordered_attempts,
+        )
+
+        with pytest.raises(ValueError, match=expected_message):
+            if method_name == "poll":
+                _ = session.poll()
+            else:
+                _ = session.wait(timeout=0.0)
+
+        assert batch_session.cancel_count == 1
+        assert session.state().lifecycle == "failed"
+        with pytest.raises(RuntimeError, match="no longer active"):
+            _ = session.poll()
+
+    def test_exact_async_step_session_cancel_failure_does_not_mask_validation_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+        proposals, post_ask_state = optimizer.ask(
+            optimizer.create_initial_state(),
+            batch_size=2,
+        )
+        requests = build_evaluation_requests(
+            proposals,
+            proposal_evaluation_specs=None,
+        )
+        attempt = _payload_attempt(requests[0])
+        batch_session = InvalidCompletionAttemptSession(
+            handle=EvaluationBatchHandle(
+                batch_id="invalid-cancel-failure",
+                request_count=2,
+            ),
+            completion_groups=(
+                CompletionGroup(
+                    start_index=1,
+                    outcomes=(attempt, attempt),
+                ),
+            ),
+            cancel_raises=True,
+        )
+        session = StudyExactAsyncStepSession[
+            int,
+            int,
+            BatchQueueOptimizerState,
+            ObservationPayload,
+            Observation[int],
+        ](
+            study=study,
+            requests=requests,
+            post_ask_state=post_ask_state,
+            batch_session=batch_session,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
+
+        with pytest.raises(ValueError, match="bounds"):
+            _ = session.poll()
+
+        assert batch_session.cancel_count == 1
+        assert session.state().lifecycle == "failed"
 
     def test_resume_handle_stores_payload_attempts_until_finish(self) -> None:
         problem = Problem(

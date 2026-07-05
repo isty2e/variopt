@@ -1,12 +1,14 @@
 """Tests for sync and general Study facade behavior."""
 
+import pickle
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Protocol, TypeAlias, TypeVar, runtime_checkable
+from typing import Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 import pytest
 from typing_extensions import override
 
+import variopt.study.execution as study_execution
 from tests.study_support import (
     BatchQueueOptimizer,
     BatchQueueOptimizerState,
@@ -74,8 +76,9 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from variopt.study.common import build_evaluation_requests
+from variopt.study.common import CheckpointSafeRunSnapshot, build_evaluation_requests
 from variopt.study.execution import evaluate_attempts_sync
+from variopt.study.failures import build_checkpoint_safe_report_or_raise_cause
 
 ScalarBatchStudy: TypeAlias = Study[
     int,
@@ -128,6 +131,34 @@ class FailureRecordingRunFailure(Protocol):
     checkpoint_safe_report: RunReport[int, Observation[int]] | None
     checkpoint_safe_state: FailureRecordingBatchQueueOptimizerState | None
     cause: Exception
+
+
+class TraceFactoryCounter:
+    """Trace factory fixture that records materialization calls."""
+
+    calls: list[tuple[TraceEvent, ...]]
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def __call__(
+        self,
+        *,
+        events: tuple[TraceEvent, ...] = (),
+    ) -> Trace:
+        self.calls.append(tuple(events))
+        return Trace(events=events)
+
+
+class UnpicklableRuntimeError(RuntimeError):
+    """RuntimeError carrying deliberately unpicklable local state."""
+
+    _callback: Callable[[], None]
+
+    def __init__(self) -> None:
+        """Create an exception that pickle must reject instead of stringifying."""
+        super().__init__("unpicklable cause")
+        self._callback = lambda: None
 
 
 class UnsafeCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
@@ -478,6 +509,217 @@ class RequestAwareObjective(Objective[int]):
 
 class StudyTests:
     """Coverage for sync and execution-model-agnostic Study behavior."""
+
+    def test_run_execution_failed_pickle_round_trip_preserves_partial_state(
+        self,
+    ) -> None:
+        proposal = Proposal(candidate=2, proposal_id="p-ok")
+        observation = Observation(
+            proposal=proposal,
+            candidate=2,
+            value=4.0,
+            score=4.0,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=observation.request,
+            payload=observation,
+        )
+        failure_request: EvaluationRequest[int] = EvaluationRequest(
+            proposal=Proposal(candidate=5, proposal_id="p-fail"),
+        )
+        failure: EvaluationFailure[int] = EvaluationFailure[int].from_exception(
+            request=failure_request,
+            exception=ValueError("objective failed"),
+        )
+        partial_report = RunReport[int, Observation[int]].from_successes(
+            successes=(success,),
+            evaluation_count=2,
+            trace=Trace(
+                events=(
+                    TraceEvent(
+                        kind="study.step",
+                        message="completed 2 attempt(s): 1 succeeded, 1 failed",
+                    ),
+                ),
+            ),
+            failures=(failure,),
+        )
+        checkpoint_safe_report = RunReport[int, Observation[int]].from_successes(
+            successes=(success,),
+            evaluation_count=1,
+            trace=Trace(
+                events=(
+                    TraceEvent(
+                        kind="study.step",
+                        message="completed 1 attempt(s): 1 succeeded, 0 failed",
+                    ),
+                ),
+            ),
+        )
+        partial_state = BatchQueueOptimizerState(remaining_batches=())
+        checkpoint_safe_state = BatchQueueOptimizerState(
+            remaining_batches=(),
+            tell_history=((observation,),),
+        )
+        cause = RuntimeError("forced hard failure")
+        exception = RunExecutionFailed[
+            int,
+            BatchQueueOptimizerState,
+            Observation[int],
+        ](
+            partial_report=partial_report,
+            partial_state=partial_state,
+            checkpoint_safe_report=checkpoint_safe_report,
+            checkpoint_safe_state=checkpoint_safe_state,
+            cause=cause,
+        )
+        exception.__cause__ = cause
+
+        restored = cast(
+            RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+            pickle.loads(pickle.dumps(exception)),
+        )
+
+        assert type(restored) is RunExecutionFailed
+        assert restored.partial_report == partial_report
+        assert restored.partial_state == partial_state
+        assert restored.checkpoint_safe_report == checkpoint_safe_report
+        assert restored.checkpoint_safe_state == checkpoint_safe_state
+        assert type(restored.cause) is RuntimeError
+        assert str(restored.cause) == "forced hard failure"
+        assert restored.__cause__ is restored.cause
+        assert str(restored) == "study execution failed: forced hard failure"
+
+    def test_run_execution_failed_pickle_round_trip_without_checkpoint_projection(
+        self,
+    ) -> None:
+        partial_state = BatchQueueOptimizerState(remaining_batches=())
+        context = LookupError("outer context")
+        exception = RunExecutionFailed[
+            int,
+            BatchQueueOptimizerState,
+            Observation[int],
+        ](
+            partial_report=RunReport[int, Observation[int]](evaluation_count=0),
+            partial_state=partial_state,
+            checkpoint_safe_report=None,
+            checkpoint_safe_state=None,
+            cause=RuntimeError("plain hard failure"),
+        )
+        exception.__context__ = context
+        exception.__suppress_context__ = True
+
+        restored = cast(
+            RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+            pickle.loads(pickle.dumps(exception)),
+        )
+
+        assert type(restored) is RunExecutionFailed
+        assert restored.partial_report.evaluation_count == 0
+        assert restored.partial_state == partial_state
+        assert restored.checkpoint_safe_report is None
+        assert restored.checkpoint_safe_state is None
+        assert type(restored.cause) is RuntimeError
+        assert str(restored.cause) == "plain hard failure"
+        assert type(restored.__context__) is LookupError
+        assert str(restored.__context__) == "outer context"
+        assert restored.__suppress_context__ is True
+
+    def test_run_execution_failed_pickle_round_trip_from_actual_optimize_failure(
+        self,
+    ) -> None:
+        objective = CountingObjective()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=99, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        try:
+            _ = study.optimize(max_evaluations=1)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+            captured_exception = cast(
+                RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+                raw_exception,
+            )
+        else:
+            pytest.fail("expected invalid candidate hard failure")
+
+        restored = cast(
+            RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+            pickle.loads(pickle.dumps(captured_exception)),
+        )
+
+        assert type(restored) is RunExecutionFailed
+        assert restored.partial_report == exception.partial_report
+        assert restored.partial_state == exception.partial_state
+        assert restored.checkpoint_safe_report == exception.checkpoint_safe_report
+        assert restored.checkpoint_safe_state == exception.checkpoint_safe_state
+        assert type(restored.cause) is ValueError
+        assert restored.__cause__ is restored.cause
+        assert objective.evaluation_count == 0
+
+    def test_run_execution_failed_pickle_rejects_unpicklable_cause(self) -> None:
+        exception = RunExecutionFailed[
+            int,
+            BatchQueueOptimizerState,
+            Observation[int],
+        ](
+            partial_report=RunReport[int, Observation[int]](evaluation_count=0),
+            partial_state=BatchQueueOptimizerState(remaining_batches=()),
+            checkpoint_safe_report=None,
+            checkpoint_safe_state=None,
+            cause=UnpicklableRuntimeError(),
+        )
+
+        with pytest.raises(AttributeError, match="lambda"):
+            _ = pickle.dumps(exception)
+
+    def test_checkpoint_safe_report_helper_rethrows_original_cause(self) -> None:
+        request = EvaluationRequest(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+        )
+        record = Observation.from_objective_value(
+            request=request,
+            candidate=request.candidate,
+            value=1.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=request,
+            payload=record,
+        )
+        snapshot: CheckpointSafeRunSnapshot[int] = CheckpointSafeRunSnapshot(
+            success_count=1,
+            failure_count=0,
+            trace_event_count=0,
+            evaluation_count=0,
+            state=3,
+        )
+        cause = RuntimeError("original hard failure")
+
+        def candidate_equal(left_candidate: int, right_candidate: int) -> bool:
+            return left_candidate == right_candidate
+
+        with pytest.raises(RuntimeError, match="original hard failure") as exc_info:
+            _ = build_checkpoint_safe_report_or_raise_cause(
+                cause=cause,
+                snapshot=snapshot,
+                successes=(success,),
+                failures=(),
+                trace_events=(),
+                candidate_equal=candidate_equal,
+            )
+
+        assert exc_info.value is cause
+        assert type(cause.__cause__) is ValueError
 
     def test_study_canonicalizes_missing_kernel_to_direct_kernel(self) -> None:
         problem = Problem(
@@ -1664,6 +1906,40 @@ class StudyTests:
         assert checkpoint_report.evaluation_count == 1
         assert checkpoint_state.tell_history == ((checkpoint_report.records[0],),)
 
+    def test_run_checkpoint_safe_snapshots_do_not_materialize_trace_each_step(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=index, proposal_id=f"p-{index}"),)
+                for index in range(5)
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+        trace_counter = TraceFactoryCounter()
+        monkeypatch.setattr(study_execution, "Trace", trace_counter)
+
+        report, final_state = study.run(
+            max_evaluations=5,
+            batch_size=1,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert len(report.records) == 5
+        assert final_state.tell_history[-1] == (report.records[-1],)
+        assert len(trace_counter.calls) == 1
+        assert len(trace_counter.calls[0]) == 5
+
     def test_run_hard_failure_before_safe_state_has_no_checkpoint_projection(
         self,
     ) -> None:
@@ -1815,6 +2091,106 @@ class StudyTests:
             for failure_batch in final_state.failure_history
             for failure_proposal_id in failure_batch
         ) == ("p-2",)
+
+    def test_optimize_fast_path_tell_failure_preserves_mixed_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-ok"),
+                    Proposal(candidate=5, proposal_id="p-fail"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.optimize(max_evaluations=2, batch_size=2)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected fast-path tell failure")
+
+        assert isinstance(exception.cause, RuntimeError)
+        assert str(exception.cause) == "forced sync tell failure"
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-ok",)
+        assert tuple(
+            success.request.proposal.proposal_id
+            for success in exception.partial_report.successes
+        ) == ("p-ok",)
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-fail",)
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 1 succeeded, 1 failed"
+        )
+
+    def test_optimize_fast_path_tell_failure_preserves_failure_only_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(2, 5)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-first"),
+                    Proposal(candidate=5, proposal_id="p-second"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.optimize(
+                max_evaluations=2,
+                batch_size=2,
+                count_evaluation_cost=False,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected fast-path tell failure")
+
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.successes == ()
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-first", "p-second")
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 0 succeeded, 2 failed"
+        )
 
     def test_optimize_direct_scalar_fast_path_returns_failure_only_result(self) -> None:
         problem = Problem(

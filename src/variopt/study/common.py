@@ -1,7 +1,8 @@
 """Shared helpers for study orchestration."""
 
 from collections.abc import Sequence
-from typing import Protocol, TypeAlias, TypeGuard, runtime_checkable
+from dataclasses import dataclass
+from typing import Generic, Protocol, TypeAlias, TypeGuard, runtime_checkable
 
 from typing_extensions import TypeVar
 
@@ -14,6 +15,9 @@ from ..artifacts import (
     ObservationPayload,
     Proposal,
     ProposalEvaluationSpec,
+    RunReport,
+    Trace,
+    TraceEvent,
 )
 from ..artifacts.attempts import MaterializableEvaluationPayload
 from ..artifacts.records import RequestAlignedEvaluationRecord
@@ -26,7 +30,7 @@ from ..execution import ExecutionResources
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..spaces.equality import scalar_candidate_equality
-from ..typevars import CandidateT
+from ..typevars import CandidateT, RunMethodStateT
 
 BoundaryT = TypeVar("BoundaryT")
 CompletionT = TypeVar("CompletionT")
@@ -39,6 +43,80 @@ StudyRecordT = TypeVar(
     "StudyRecordT",
     bound=RequestAlignedEvaluationRecord[object],
 )
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointSafeRunSnapshot(Generic[RunMethodStateT]):
+    """Checkpoint-safe cut point into append-only run histories.
+
+    Parameters
+    ----------
+    success_count : int
+        Number of successful attempts included in the snapshot.
+    failure_count : int
+        Number of failed attempts included in the snapshot.
+    trace_event_count : int
+        Number of trace events included in the snapshot.
+    evaluation_count : int
+        Logical evaluation count aligned with the checkpoint-safe state.
+    state : RunMethodStateT
+        Run-method state at the checkpoint-safe boundary.
+    """
+
+    success_count: int
+    failure_count: int
+    trace_event_count: int
+    evaluation_count: int
+    state: RunMethodStateT
+
+    def __post_init__(self) -> None:
+        """Validate non-negative checkpoint cut points."""
+        if self.success_count < 0:
+            msg = "success_count must be non-negative"
+            raise ValueError(msg)
+        if self.failure_count < 0:
+            msg = "failure_count must be non-negative"
+            raise ValueError(msg)
+        if self.trace_event_count < 0:
+            msg = "trace_event_count must be non-negative"
+            raise ValueError(msg)
+        if self.evaluation_count < 0:
+            msg = "evaluation_count must be non-negative"
+            raise ValueError(msg)
+
+    def to_report(
+        self,
+        *,
+        successes: Sequence[EvaluationSuccess[CandidateT, StudyRecordT]],
+        failures: Sequence[EvaluationFailure[CandidateT]],
+        trace_events: Sequence[TraceEvent],
+        candidate_equal: CandidateEquality[CandidateT],
+    ) -> RunReport[CandidateT, StudyRecordT]:
+        """Materialize a report from the captured history cut point.
+
+        Parameters
+        ----------
+        successes : Sequence[EvaluationSuccess[CandidateT, StudyRecordT]]
+            Append-only success history available at materialization time.
+        failures : Sequence[EvaluationFailure[CandidateT]]
+            Append-only failure history available at materialization time.
+        trace_events : Sequence[TraceEvent]
+            Append-only trace history available at materialization time.
+        candidate_equal : CandidateEquality[CandidateT]
+            Candidate equality predicate used to validate refinement alignment.
+
+        Returns
+        -------
+        RunReport[CandidateT, StudyRecordT]
+            Report projection aligned with this checkpoint-safe cut point.
+        """
+        return RunReport[CandidateT, StudyRecordT].from_successes(
+            successes=tuple(successes[: self.success_count]),
+            evaluation_count=self.evaluation_count,
+            trace=Trace(events=tuple(trace_events[: self.trace_event_count])),
+            failures=tuple(failures[: self.failure_count]),
+            candidate_equal=candidate_equal,
+        )
 
 
 @runtime_checkable

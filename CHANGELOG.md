@@ -43,6 +43,12 @@ format. Stability guarantees for the public surface are documented in the
   rejected instead of being restored as runtime state. Durable checkpointing is
   the explicit JSON-safe `to_dict()` / `from_dict()` surface; pickle is not a
   supported persistence or compatibility boundary.
+- Runtime artifact ingress now rejects malformed numeric and refinement
+  provenance payloads consistently. `Observation.from_objective_value(...)`,
+  `ObjectiveVectorRecord`, and async evaluator `wait(...)` boundaries reject
+  booleans-as-numbers and non-finite floats, and `CandidateRefinement` requires
+  `changed_leaf_paths` to be a sequence of tuple leaf paths with canonical
+  `int` or `str` segments.
 - `Study` orchestration now requires native attempt-aware evaluator capability.
   Custom evaluators used through `Study` must expose `evaluate_attempts(...)`
   for synchronous execution, or attempt-batch session hooks for async execution.
@@ -104,6 +110,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- Checkpoint-safe `Study.run(...)` execution now stores safe snapshots as
+  history cut points instead of eagerly rebuilding full success, failure, and
+  trace tuples at every safe step.
 - Stale-async `Study.run(...)` and `Study.optimize(...)` now reject negative
   `max_evaluations` before opening evaluator sessions, matching sync execution.
 - Stale-async `RunExecutionFailed.partial_report` now includes completed groups
@@ -113,7 +122,11 @@ format. Stability guarantees for the public surface are documented in the
   refill sessions after reaching the requested checkpoint-safe boundary; any
   already-active sessions are cancelled before returning the safe report/state.
 - Terminal artifact pickle restoration now rejects mismatched current-state
-  field counts instead of filling unknown or future fields with `None`.
+  field counts and exact-shape states that violate terminal accounting,
+  best-success, or nondominated-frontier invariants.
+- Hard-failure checkpoint-safe report construction now reuses the checkpoint
+  cut-point projection while preserving the original execution exception if
+  recovery report materialization fails.
 - `CSAOptimizer` now consumes recorded failed attempts from pending proposal,
   generation, and proposal-attribution lifecycle state without inserting failed
   candidates into CSA banks or adaptive score evidence. GA and DE-family

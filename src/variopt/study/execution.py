@@ -41,6 +41,7 @@ from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
+    CheckpointSafeRunSnapshot,
     StudyEvaluator,
     StudyPayloadT,
     StudyRecordT,
@@ -51,7 +52,11 @@ from .common import (
     validate_materialized_attempts,
 )
 from .exact_async.orchestration import evaluate_batch_exact_async
-from .failures import RunExecutionFailed, build_run_report_or_raise_cause
+from .failures import (
+    RunExecutionFailed,
+    build_checkpoint_safe_report_or_raise_cause,
+    build_run_report_or_raise_cause,
+)
 from .validation import validate_execution_request
 
 BoundaryT = TypeVar("BoundaryT")
@@ -89,19 +94,6 @@ class _StudyStepFeedback(
     attempts: EvaluationAttemptBatch[CandidateT, StudyRecordT]
     post_ask_state: RunMethodStateT
     evaluation_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class _CheckpointSafeRunSnapshot(
-    Generic[CandidateT, RunMethodStateT, StudyRecordT]
-):
-    """Last known checkpoint-safe run projection."""
-
-    successes: tuple[EvaluationSuccess[CandidateT, StudyRecordT], ...]
-    failures: tuple[EvaluationFailure[CandidateT], ...]
-    trace: Trace
-    evaluation_count: int
-    state: RunMethodStateT
 
 
 class StudyExecutionOwner(
@@ -330,25 +322,6 @@ def _build_run_report(
     )
 
 
-def _run_report_from_snapshot(
-    *,
-    snapshot: _CheckpointSafeRunSnapshot[
-        CandidateT,
-        RunMethodStateT,
-        StudyRecordT,
-    ],
-    candidate_equal: CandidateEquality[CandidateT],
-) -> RunReport[CandidateT, StudyRecordT]:
-    """Build one report projection from a checkpoint-safe snapshot."""
-    return RunReport[CandidateT, StudyRecordT].from_successes(
-        successes=snapshot.successes,
-        evaluation_count=snapshot.evaluation_count,
-        trace=snapshot.trace,
-        failures=snapshot.failures,
-        candidate_equal=candidate_equal,
-    )
-
-
 def _raise_run_execution_failed(
     *,
     cause: Exception,
@@ -357,24 +330,19 @@ def _raise_run_execution_failed(
     trace_events: tuple[TraceEvent, ...],
     evaluation_count: int,
     state: RunMethodStateT,
-    safe_snapshot: _CheckpointSafeRunSnapshot[
-        CandidateT,
-        RunMethodStateT,
-        StudyRecordT,
-    ]
-    | None,
+    safe_snapshot: CheckpointSafeRunSnapshot[RunMethodStateT] | None,
     candidate_equal: CandidateEquality[CandidateT],
 ) -> NoReturn:
     """Raise a hard run failure carrying current and checkpoint-safe projections."""
     checkpoint_safe_report: RunReport[CandidateT, StudyRecordT] | None = None
     checkpoint_safe_state: RunMethodStateT | None = None
     if safe_snapshot is not None:
-        checkpoint_safe_report = build_run_report_or_raise_cause(
+        checkpoint_safe_report = build_checkpoint_safe_report_or_raise_cause(
             cause=cause,
-            successes=safe_snapshot.successes,
-            evaluation_count=safe_snapshot.evaluation_count,
-            trace=safe_snapshot.trace,
-            failures=safe_snapshot.failures,
+            snapshot=safe_snapshot,
+            successes=successes,
+            failures=failures,
+            trace_events=trace_events,
             candidate_equal=candidate_equal,
         )
         checkpoint_safe_state = safe_snapshot.state
@@ -450,6 +418,11 @@ def _optimize_direct_scalar_sequential(
             record_budget_remaining=record_budget_remaining,
         )
         current_batch_size = min(batch_size, remaining)
+        evaluation_count_before_batch = _current_evaluation_count(
+            max_evaluations=max_evaluations,
+            evaluation_budget=evaluation_budget,
+            record_budget_remaining=record_budget_remaining,
+        )
         try:
             proposals, next_state = study.run_method.ask(
                 state,
@@ -545,7 +518,6 @@ def _optimize_direct_scalar_sequential(
             ] = EvaluationAttemptBatch(
                 attempts=tuple(batch_attempt_slots),
             )
-            next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
         except EvaluationBudgetExhausted:
             raise
         except Exception as exception:
@@ -563,6 +535,25 @@ def _optimize_direct_scalar_sequential(
                 safe_snapshot=None,
                 candidate_equal=study.problem.space.candidates_equal,
             )
+        batch_trace_event = _study_step_trace_event(
+            attempts=batch_attempts,
+            records=batch_observation_tuple,
+        )
+        try:
+            next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
+        except Exception as exception:
+            _raise_run_execution_failed(
+                cause=exception,
+                successes=tuple(successes) + batch_attempts.successes,
+                failures=tuple(failures) + batch_attempts.failures,
+                trace_events=tuple(trace_events) + (batch_trace_event,),
+                evaluation_count=(
+                    evaluation_count_before_batch + batch_attempts.evaluation_count
+                ),
+                state=next_state,
+                safe_snapshot=None,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
         state = next_run_state
         observations.extend(batch_observation_tuple)
         successes.extend(batch_successes)
@@ -570,17 +561,7 @@ def _optimize_direct_scalar_sequential(
         if evaluation_budget is None:
             record_budget_remaining -= batch_attempts.attempt_count
 
-        trace_events.append(
-            TraceEvent(
-                kind="study.step",
-                message=(
-                    f"completed {batch_attempts.attempt_count} attempt(s): "
-                    f"{len(batch_observation_tuple)} succeeded, "
-                    f"{len(batch_failures)} failed"
-                ),
-                value=trace_value_for_records(batch_observation_tuple),
-            ),
-        )
+        trace_events.append(batch_trace_event)
 
     return (
         RunResult[CandidateT].from_observations(
@@ -992,19 +973,14 @@ def run(
         else initial_state
     )
     safe_snapshot: (
-        _CheckpointSafeRunSnapshot[
-            CandidateT,
-            RunMethodStateT,
-            StudyRecordT,
-        ]
-        | None
+        CheckpointSafeRunSnapshot[RunMethodStateT] | None
     ) = None
     unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
-        safe_snapshot = _CheckpointSafeRunSnapshot(
-            successes=(),
-            failures=(),
-            trace=Trace(),
+        safe_snapshot = CheckpointSafeRunSnapshot(
+            success_count=0,
+            failure_count=0,
+            trace_event_count=0,
             evaluation_count=0,
             state=state,
         )
@@ -1029,8 +1005,10 @@ def run(
         except EvaluationBudgetExhausted:
             if stop_at_checkpoint_boundary and safe_snapshot is not None:
                 return (
-                    _run_report_from_snapshot(
-                        snapshot=safe_snapshot,
+                    safe_snapshot.to_report(
+                        successes=successes,
+                        failures=failures,
+                        trace_events=trace_events,
                         candidate_equal=study.problem.space.candidates_equal,
                     ),
                     safe_snapshot.state,
@@ -1095,10 +1073,10 @@ def run(
         )
         if stop_at_checkpoint_boundary:
             if study.run_method.is_checkpoint_safe_state(state):
-                safe_snapshot = _CheckpointSafeRunSnapshot(
-                    successes=tuple(successes),
-                    failures=tuple(failures),
-                    trace=Trace(events=tuple(trace_events)),
+                safe_snapshot = CheckpointSafeRunSnapshot(
+                    success_count=len(successes),
+                    failure_count=len(failures),
+                    trace_event_count=len(trace_events),
                     evaluation_count=reported_evaluation_count_total,
                     state=state,
                 )
@@ -1117,8 +1095,10 @@ def run(
             )
             raise RuntimeError(msg)
         return (
-            _run_report_from_snapshot(
-                snapshot=safe_snapshot,
+            safe_snapshot.to_report(
+                successes=successes,
+                failures=failures,
+                trace_events=trace_events,
                 candidate_equal=study.problem.space.candidates_equal,
             ),
             safe_snapshot.state,

@@ -167,7 +167,11 @@ class StudyExactAsyncStepSession(
             )
             raise
 
-        self._record_completion_groups(completion_groups)
+        try:
+            self._record_completion_groups(completion_groups)
+        except Exception:
+            self._fail_and_cancel_batch_session()
+            raise
         return completion_groups
 
     def wait(
@@ -210,7 +214,11 @@ class StudyExactAsyncStepSession(
             )
             raise
 
-        self._record_completion_groups(completion_groups)
+        try:
+            self._record_completion_groups(completion_groups)
+        except Exception:
+            self._fail_and_cancel_batch_session()
+            raise
         return completion_groups
 
     def cancel(self) -> None:
@@ -244,6 +252,15 @@ class StudyExactAsyncStepSession(
 
         if all(attempt is not None for attempt in self.ordered_attempts):
             self._lifecycle = "completed"
+
+    def _fail_and_cancel_batch_session(self) -> None:
+        """Mark the study session failed and best-effort cancel evaluator work."""
+        self._lifecycle = "failed"
+        try:
+            self.batch_session.cancel()
+        except Exception as cancel_exception:
+            # Preserve the validation failure as the user-visible cause.
+            _ = cancel_exception
 
     def suspend(
         self,

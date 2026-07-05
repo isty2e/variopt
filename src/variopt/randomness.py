@@ -3,13 +3,20 @@
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import blake2b
+from math import isfinite
 from typing import Protocol, TypeAlias, TypeVar, cast, overload
 
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import Self
 
-from .json_types import JSONDict, JSONValue
+from .json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_finite_float,
+    require_json_int,
+    require_json_str,
+)
 
 RandomSeed: TypeAlias = int | None
 ResultT = TypeVar("ResultT")
@@ -179,6 +186,23 @@ class RandomStateSnapshot:
             msg = "algorithm must not be empty"
             raise ValueError(msg)
 
+        if type(self.position) is not int:
+            msg = "position must be an integer"
+            raise TypeError(msg)
+
+        if type(self.has_gaussian) is not int:
+            msg = "has_gaussian must be an integer"
+            raise TypeError(msg)
+
+        if type(self.cached_gaussian) not in {int, float}:
+            msg = "cached_gaussian must be numeric"
+            raise TypeError(msg)
+        cached_gaussian = float(self.cached_gaussian)
+        if not isfinite(cached_gaussian):
+            msg = "cached_gaussian must be finite"
+            raise ValueError(msg)
+        object.__setattr__(self, "cached_gaussian", cached_gaussian)
+
         if len(self.key_bytes) == 0:
             msg = "key_bytes must not be empty"
             raise ValueError(msg)
@@ -291,38 +315,29 @@ class RandomStateSnapshot:
         TypeError
             If the supplied mapping carries invalid field types.
         """
-        algorithm = data.get("algorithm")
-        key_hex = data.get("key_hex")
-        position = data.get("position")
-        has_gaussian = data.get("has_gaussian")
-        cached_gaussian = data.get("cached_gaussian")
-
-        if not isinstance(algorithm, str):
-            msg = "random-state snapshot requires string algorithm"
-            raise TypeError(msg)
-
-        if not isinstance(key_hex, str):
-            msg = "random-state snapshot requires string key_hex"
-            raise TypeError(msg)
-
-        if not isinstance(position, int):
-            msg = "random-state snapshot requires integer position"
-            raise TypeError(msg)
-
-        if not isinstance(has_gaussian, int):
-            msg = "random-state snapshot requires integer has_gaussian"
-            raise TypeError(msg)
-
-        if not isinstance(cached_gaussian, (int, float)):
-            msg = "random-state snapshot requires numeric cached_gaussian"
-            raise TypeError(msg)
+        algorithm = require_json_str(data.get("algorithm"), field_name="algorithm")
+        key_hex = require_json_str(data.get("key_hex"), field_name="key_hex")
+        position = require_json_int(data.get("position"), field_name="position")
+        has_gaussian = require_json_int(
+            data.get("has_gaussian"),
+            field_name="has_gaussian",
+        )
+        cached_gaussian = require_json_finite_float(
+            data.get("cached_gaussian"),
+            field_name="cached_gaussian",
+        )
+        try:
+            key_bytes = bytes.fromhex(key_hex)
+        except ValueError as exc:
+            msg = "key_hex must encode hexadecimal bytes"
+            raise ValueError(msg) from exc
 
         return cls(
             algorithm=algorithm,
-            key_bytes=bytes.fromhex(key_hex),
+            key_bytes=key_bytes,
             position=position,
             has_gaussian=has_gaussian,
-            cached_gaussian=float(cached_gaussian),
+            cached_gaussian=cached_gaussian,
         )
 
     def advance(

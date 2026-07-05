@@ -70,7 +70,11 @@ from variopt.algorithms.population.csa.scoring.acceptance import (
 from variopt.algorithms.population.csa.scoring.acceptance_state import (
     CSAAcceptanceState,
 )
-from variopt.algorithms.population.csa.scoring.model import CSAScoreModel
+from variopt.algorithms.population.csa.scoring.model import (
+    CSAAdaptivePotential,
+    CSAAdaptivePotentialAxis,
+    CSAScoreModel,
+)
 from variopt.algorithms.population.csa.scoring.model_state import (
     CSAScoreModelState,
 )
@@ -282,6 +286,27 @@ def build_populated_engine_state() -> CSAEngineState[int]:
     )
 
 
+def _build_adaptive_score_model() -> CSAScoreModel[int]:
+    return CSAScoreModel(
+        adaptive_potential=CSAAdaptivePotential(
+            axes=(
+                CSAAdaptivePotentialAxis(
+                    reference_candidate=0,
+                    minimum_distance=0.0,
+                    maximum_distance=1.0,
+                    bin_count=2,
+                ),
+                CSAAdaptivePotentialAxis(
+                    reference_candidate=1,
+                    minimum_distance=0.0,
+                    maximum_distance=1.0,
+                    bin_count=2,
+                ),
+            ),
+        ),
+    )
+
+
 class CSAEngineCheckpointTests:
     """Regression tests for safe-boundary engine checkpoint snapshots."""
 
@@ -352,6 +377,71 @@ class CSAEngineCheckpointTests:
             _ = CSAScoreModelState[int](
                 score_model=score_model,
                 biased_potential_max=float("inf"),
+            )
+
+    def test_adaptive_potential_snapshot_restores_valid_potential(self) -> None:
+        score_model = _build_adaptive_score_model()
+
+        restored = CSAScoreModelState[int].from_dict(
+            {
+                "biased_potential_max": None,
+                "adaptive_potential_state": {
+                    "potential": [[1, 2.5], [3.25, 4]],
+                },
+            },
+            score_model=score_model,
+        )
+
+        assert restored.adaptive_potential_state is not None
+        assert restored.adaptive_potential_state.to_dict() == {
+            "potential": [[1.0, 2.5], [3.25, 4.0]],
+        }
+
+    @pytest.mark.parametrize(
+        ("potential", "expected_error", "match"),
+        [
+            (
+                [[True, 0.0], [0.0, 0.0]],
+                TypeError,
+                r"potential\[0\]\[0\]",
+            ),
+            (
+                [[float("nan"), 0.0], [0.0, 0.0]],
+                ValueError,
+                r"potential\[0\]\[0\]",
+            ),
+            (
+                [[float("inf"), 0.0], [0.0, 0.0]],
+                ValueError,
+                r"potential\[0\]\[0\]",
+            ),
+            (
+                [[0.0], [0.0, 0.0]],
+                ValueError,
+                r"potential\[0\]",
+            ),
+            (
+                [[0.0, 0.0]],
+                ValueError,
+                "potential",
+            ),
+        ],
+    )
+    def test_adaptive_potential_snapshot_rejects_malformed_potential(
+        self,
+        potential: JSONValue,
+        expected_error: type[Exception],
+        match: str,
+    ) -> None:
+        score_model = _build_adaptive_score_model()
+
+        with pytest.raises(expected_error, match=match):
+            _ = CSAScoreModelState[int].from_dict(
+                {
+                    "biased_potential_max": None,
+                    "adaptive_potential_state": {"potential": potential},
+                },
+                score_model=score_model,
             )
 
     def test_proposal_stat_snapshots_reject_bool_and_non_finite_numbers(self) -> None:
@@ -569,6 +659,53 @@ class CSAEngineCheckpointTests:
 
 class CSAOptimizerCheckpointTests:
     """Regression tests for public optimizer checkpoint helpers."""
+
+    @pytest.mark.parametrize("version", [True, 1.0])
+    def test_optimizer_checkpoint_rejects_non_integer_version(
+        self,
+        version: JSONValue,
+    ) -> None:
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=IntegerSpace(-10, 10),
+            bank_capacity=6,
+            profile=CSAProfile(seed_count=3),
+            random_state=7,
+        )
+        snapshot = optimizer.state_to_dict(optimizer.create_initial_state())
+        snapshot["version"] = version
+
+        with pytest.raises(TypeError, match="version must be a JSON integer"):
+            _ = optimizer.state_from_dict(snapshot)
+
+    @pytest.mark.parametrize(
+        ("field_name", "field_value", "expected_error", "match"),
+        [
+            ("position", True, TypeError, "position"),
+            ("has_gaussian", True, TypeError, "has_gaussian"),
+            ("cached_gaussian", float("inf"), ValueError, "cached_gaussian"),
+            ("key_hex", "not-hex", ValueError, "key_hex"),
+        ],
+    )
+    def test_optimizer_checkpoint_rejects_malformed_random_state(
+        self,
+        field_name: str,
+        field_value: JSONValue,
+        expected_error: type[Exception],
+        match: str,
+    ) -> None:
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=IntegerSpace(-10, 10),
+            bank_capacity=6,
+            profile=CSAProfile(seed_count=3),
+            random_state=7,
+        )
+        snapshot = optimizer.state_to_dict(optimizer.create_initial_state())
+        random_state_snapshot = snapshot["random_state"]
+        assert isinstance(random_state_snapshot, dict)
+        random_state_snapshot[field_name] = field_value
+
+        with pytest.raises(expected_error, match=match):
+            _ = optimizer.state_from_dict(snapshot)
 
     def test_structured_optimizer_checkpoint_round_trip_matches_uninterrupted_run(
         self,

@@ -427,36 +427,13 @@ class Observation(
             proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
-        normalized_value = _normalize_scalar_record_float(
-            value,
-            field_name="value",
-        )
-        normalized_score = _normalize_scalar_record_float(
-            score,
-            field_name="score",
-        )
-        normalized_elapsed_seconds = (
-            None
-            if elapsed_seconds is None
-            else _normalize_scalar_record_float(
-                elapsed_seconds,
-                field_name="elapsed_seconds",
-            )
-        )
-        if (
-            normalized_elapsed_seconds is not None
-            and normalized_elapsed_seconds < 0.0
-        ):
-            msg = "elapsed_seconds must be non-negative"
-            raise ValueError(msg)
-
         super(Observation, self).__init__(
             request=normalized_request,
             candidate=candidate,
         )
-        object.__setattr__(self, "value", normalized_value)
-        object.__setattr__(self, "score", normalized_score)
-        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
+        object.__setattr__(self, "value", value)
+        object.__setattr__(self, "score", score)
+        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -468,17 +445,28 @@ class Observation(
             If ``value`` or ``score`` is non-finite, or if ``elapsed_seconds``
             is negative.
         """
-        if not np.isfinite(self.value):
-            msg = "value must be finite"
-            raise ValueError(msg)
+        normalized_value = _normalize_scalar_record_float(
+            self.value,
+            field_name="value",
+        )
+        normalized_score = _normalize_scalar_record_float(
+            self.score,
+            field_name="score",
+        )
 
-        if not np.isfinite(self.score):
-            msg = "score must be finite"
-            raise ValueError(msg)
+        normalized_elapsed_seconds = None
+        if self.elapsed_seconds is not None:
+            normalized_elapsed_seconds = _normalize_scalar_record_float(
+                self.elapsed_seconds,
+                field_name="elapsed_seconds",
+            )
+            if normalized_elapsed_seconds < 0.0:
+                msg = "elapsed_seconds must be non-negative"
+                raise ValueError(msg)
 
-        if self.elapsed_seconds is not None and self.elapsed_seconds < 0.0:
-            msg = "elapsed_seconds must be non-negative"
-            raise ValueError(msg)
+        object.__setattr__(self, "value", normalized_value)
+        object.__setattr__(self, "score", normalized_score)
+        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
 
     @staticmethod
     def from_objective_value(
@@ -516,7 +504,10 @@ class Observation(
         Observation[ObservationCandidateT]
             Scalar observation with both raw value and canonical score.
         """
-        normalized_value = float(value)
+        normalized_value = _normalize_scalar_record_float(
+            value,
+            field_name="value",
+        )
         return Observation(
             request=request,
             proposal=proposal,
@@ -637,20 +628,12 @@ class ObjectiveVectorRecord(
             proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
-        normalized_objective_values = normalize_objective_vector(
-            values=objective_values,
-            field_name="objective_values",
-        )
-        normalized_objective_scores = normalize_objective_vector(
-            values=objective_scores,
-            field_name="objective_scores",
-        )
         super(ObjectiveVectorRecord, self).__init__(
             request=normalized_request,
             candidate=candidate,
         )
-        object.__setattr__(self, "objective_values", normalized_objective_values)
-        object.__setattr__(self, "objective_scores", normalized_objective_scores)
+        object.__setattr__(self, "objective_values", objective_values)
+        object.__setattr__(self, "objective_scores", objective_scores)
         object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
         self.__post_init__()
 
@@ -663,13 +646,32 @@ class ObjectiveVectorRecord(
             If the objective vectors have different lengths or if
             ``elapsed_seconds`` is negative.
         """
-        if len(self.objective_values) != len(self.objective_scores):
+        normalized_objective_values = normalize_objective_vector(
+            values=self.objective_values,
+            field_name="objective_values",
+        )
+        normalized_objective_scores = normalize_objective_vector(
+            values=self.objective_scores,
+            field_name="objective_scores",
+        )
+
+        if len(normalized_objective_values) != len(normalized_objective_scores):
             msg = "objective_values and objective_scores must have the same length"
             raise ValueError(msg)
 
-        if self.elapsed_seconds is not None and self.elapsed_seconds < 0.0:
-            msg = "elapsed_seconds must be non-negative"
-            raise ValueError(msg)
+        normalized_elapsed_seconds = None
+        if self.elapsed_seconds is not None:
+            normalized_elapsed_seconds = _normalize_scalar_record_float(
+                self.elapsed_seconds,
+                field_name="elapsed_seconds",
+            )
+            if normalized_elapsed_seconds < 0.0:
+                msg = "elapsed_seconds must be non-negative"
+                raise ValueError(msg)
+
+        object.__setattr__(self, "objective_values", normalized_objective_values)
+        object.__setattr__(self, "objective_scores", normalized_objective_scores)
+        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
 
     @staticmethod
     def from_objective_values(

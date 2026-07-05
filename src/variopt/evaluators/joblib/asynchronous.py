@@ -5,8 +5,6 @@ from concurrent.futures.process import BrokenProcessPool as FuturesBrokenProcess
 from dataclasses import dataclass, field
 from importlib import import_module
 from itertools import count
-from math import isfinite
-from numbers import Real
 from queue import Empty, Queue
 from threading import Thread, current_thread
 from time import monotonic
@@ -31,7 +29,7 @@ from ..async_evaluator.artifacts import (
     EvaluationBatchResumeHandle,
 )
 from ..async_evaluator.contracts import ResumableAsyncEvaluator
-from ..async_evaluator.sessions import EvaluationBatchSession
+from ..async_evaluator.sessions import EvaluationBatchSession, normalize_wait_timeout
 from .batches import (
     ActiveAsyncJoblibBatch,
     AsyncJoblibCompletedResult,
@@ -231,26 +229,6 @@ def _start_async_joblib_result_worker(
     )
     result_worker.start()
     return result_worker
-
-
-def _validate_wait_timeout(timeout: object | None) -> float | None:
-    """Return one canonical wait timeout or reject invalid values."""
-    if timeout is None:
-        return None
-
-    if type(timeout) is bool or not isinstance(timeout, Real):
-        msg = "timeout must be a real number"
-        raise TypeError(msg)
-
-    normalized_timeout = float(timeout)
-    if not isfinite(normalized_timeout):
-        msg = "timeout must be finite"
-        raise ValueError(msg)
-
-    if normalized_timeout < 0.0:
-        msg = "timeout must be non-negative"
-        raise ValueError(msg)
-    return normalized_timeout
 
 
 @dataclass(slots=True)
@@ -474,7 +452,7 @@ class AsyncJoblibEvaluator(
         EvaluationBatchSession[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
             Resumed batch session.
         """
-        suspended_batch = self._suspended_batches.pop(handle.batch_id, None)
+        suspended_batch = self._suspended_batches.get(handle.batch_id)
         if suspended_batch is None:
             msg = f"unknown suspended batch handle: {handle.batch_id}"
             raise ValueError(msg)
@@ -487,6 +465,7 @@ class AsyncJoblibEvaluator(
             msg = "resume handle completed_count does not match suspended batch"
             raise ValueError(msg)
 
+        _ = self._suspended_batches.pop(handle.batch_id, None)
         remaining_inputs = _remaining_async_joblib_request_inputs(
             suspended_batch.request_inputs,
             suspended_batch.completed_indices,
@@ -526,7 +505,7 @@ class AsyncJoblibEvaluator(
         EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]]
             Resumed attempt batch session.
         """
-        suspended_batch = self._suspended_attempt_batches.pop(handle.batch_id, None)
+        suspended_batch = self._suspended_attempt_batches.get(handle.batch_id)
         if suspended_batch is None:
             msg = f"unknown suspended attempt batch handle: {handle.batch_id}"
             raise ValueError(msg)
@@ -539,6 +518,7 @@ class AsyncJoblibEvaluator(
             msg = "resume handle completed_count does not match suspended attempt batch"
             raise ValueError(msg)
 
+        _ = self._suspended_attempt_batches.pop(handle.batch_id, None)
         remaining_inputs = _remaining_async_joblib_request_inputs(
             suspended_batch.request_inputs,
             suspended_batch.completed_indices,
@@ -1109,7 +1089,7 @@ class AsyncJoblibEvaluator(
             Newly completed groups in logical batch order, or an empty tuple
             when ``timeout`` expires before any completion is available.
         """
-        normalized_timeout = _validate_wait_timeout(timeout)
+        normalized_timeout = normalize_wait_timeout(timeout)
         return self._collect_next_completion_group(
             handle,
             block=True,
@@ -1144,7 +1124,7 @@ class AsyncJoblibEvaluator(
         ...,
     ]:
         """Wait for at least one native attempt-batch completion group."""
-        normalized_timeout = _validate_wait_timeout(timeout)
+        normalized_timeout = normalize_wait_timeout(timeout)
         return self._collect_next_attempt_completion_group(
             handle,
             block=True,
@@ -1335,7 +1315,9 @@ class AsyncJoblibEvaluator(
         """Convert one queued result event into a completion group."""
         proposal_index = result_event.index
         if proposal_index in active_batch.completed_indices:
-            _ = self._active_batches.pop(handle.batch_id, None)
+            duplicate_batch = self._active_batches.pop(handle.batch_id, None)
+            if duplicate_batch is not None:
+                self._abort_active_batch_attempt(duplicate_batch)
             msg = "async batch reported one request outcome more than once"
             raise BatchExecutionFailed(
                 handle=handle,
@@ -1376,7 +1358,9 @@ class AsyncJoblibEvaluator(
         """Convert one queued native attempt event into a completion group."""
         proposal_index = result_event.index
         if proposal_index in active_batch.completed_indices:
-            _ = self._active_attempt_batches.pop(handle.batch_id, None)
+            duplicate_batch = self._active_attempt_batches.pop(handle.batch_id, None)
+            if duplicate_batch is not None:
+                self._abort_active_batch_attempt(duplicate_batch)
             msg = "async batch reported one request attempt more than once"
             raise BatchExecutionFailed(
                 handle=handle,

@@ -1,7 +1,7 @@
 """Tests for runtime artifact values and terminal surfaces."""
 
 import pickle
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from inspect import signature
 from typing import Protocol, cast
 
@@ -85,6 +85,23 @@ class TerminalSurfacePickleHooks(Protocol):
 def terminal_surface_pickle_hooks(surface: object) -> TerminalSurfacePickleHooks:
     """Return dynamically installed terminal-surface pickle hooks for tests."""
     return cast(TerminalSurfacePickleHooks, surface)
+
+
+def terminal_surface_pickle_state_with_field(
+    surface: object,
+    *,
+    field_name: str,
+    value: object | None,
+) -> list[object | None]:
+    """Return a terminal-surface pickle state with one named field replaced."""
+    if not is_dataclass(surface):
+        msg = "surface must be a dataclass instance"
+        raise TypeError(msg)
+
+    pickle_state = terminal_surface_pickle_hooks(surface).__getstate__()
+    field_names = tuple(dataclass_field.name for dataclass_field in fields(surface))
+    pickle_state[field_names.index(field_name)] = value
+    return pickle_state
 
 
 def space_owned_candidates_equal(
@@ -1105,6 +1122,49 @@ class RuntimeArtifactsTests:
         assert observation.request.proposal is proposal
         assert observation.candidate == 4
 
+    @pytest.mark.parametrize(
+        ("value", "expected_error"),
+        (
+            (cast(float, True), TypeError),
+            (cast(float, cast(object, np.bool_(True))), TypeError),
+            (float("nan"), ValueError),
+            (float("inf"), ValueError),
+            (float("-inf"), ValueError),
+        ),
+    )
+    def test_observation_factory_rejects_non_canonical_objective_value(
+        self,
+        value: float,
+        expected_error: type[Exception],
+    ) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        with pytest.raises(expected_error, match="value must"):
+            _ = Observation.from_objective_value(
+                proposal=proposal,
+                candidate=4,
+                value=value,
+                direction=OptimizationDirection.MINIMIZE,
+            )
+
+    def test_observation_factory_normalizes_numeric_fields(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        observation = Observation.from_objective_value(
+            proposal=proposal,
+            candidate=4,
+            value=cast(float, cast(object, np.int64(4))),
+            direction=OptimizationDirection.MAXIMIZE,
+            elapsed_seconds=cast(float, cast(object, np.float64(0.25))),
+        )
+
+        assert observation.value == 4.0
+        assert type(observation.value) is float
+        assert observation.score == -4.0
+        assert type(observation.score) is float
+        assert observation.elapsed_seconds == 0.25
+        assert type(observation.elapsed_seconds) is float
+
     def test_objective_vector_record_is_vector_evaluation_record(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
         record = ObjectiveVectorRecord.from_objective_values(
@@ -1121,6 +1181,47 @@ class RuntimeArtifactsTests:
         assert record.candidate == 4
         assert record.objective_values == (16.0, 3.0)
         assert record.objective_scores == (16.0, -3.0)
+
+    @pytest.mark.parametrize(
+        ("elapsed_seconds", "expected_error"),
+        (
+            (cast(float, False), TypeError),
+            (cast(float, cast(object, np.bool_(False))), TypeError),
+            (float("nan"), ValueError),
+            (float("inf"), ValueError),
+            (float("-inf"), ValueError),
+            (-0.1, ValueError),
+        ),
+    )
+    def test_objective_vector_record_rejects_non_canonical_elapsed_seconds(
+        self,
+        elapsed_seconds: float,
+        expected_error: type[Exception],
+    ) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        with pytest.raises(expected_error, match="elapsed_seconds must"):
+            _ = ObjectiveVectorRecord(
+                proposal=proposal,
+                candidate=4,
+                objective_values=(16.0,),
+                objective_scores=(16.0,),
+                elapsed_seconds=elapsed_seconds,
+            )
+
+    def test_objective_vector_record_normalizes_elapsed_seconds(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        record = ObjectiveVectorRecord(
+            proposal=proposal,
+            candidate=4,
+            objective_values=(16.0,),
+            objective_scores=(16.0,),
+            elapsed_seconds=cast(float, cast(object, np.float64(0.5))),
+        )
+
+        assert record.elapsed_seconds == 0.5
+        assert type(record.elapsed_seconds) is float
 
     def test_observation_separates_proposal_and_evaluated_candidate(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
@@ -1160,6 +1261,41 @@ class RuntimeArtifactsTests:
                 refined_candidate=(3, 2),
                 changed_leaf_paths=((True,),),
             )
+
+    @pytest.mark.parametrize(
+        "changed_leaf_paths",
+        (
+            cast(tuple[tuple[int | str, ...], ...], cast(object, "abc")),
+            cast(tuple[tuple[int | str, ...], ...], cast(object, b"abc")),
+            cast(
+                tuple[tuple[int | str, ...], ...],
+                cast(object, bytearray(b"abc")),
+            ),
+            ("abc",),
+            (b"abc",),
+            (bytearray(b"abc"),),
+            cast(tuple[tuple[int | str, ...], ...], (["x", 1],)),
+        ),
+    )
+    def test_candidate_refinement_rejects_malformed_path_containers(
+        self,
+        changed_leaf_paths: tuple[tuple[int | str, ...], ...],
+    ) -> None:
+        with pytest.raises(TypeError, match="changed_leaf_paths"):
+            _ = CandidateRefinement(
+                source_candidate=(1, 2),
+                refined_candidate=(3, 2),
+                changed_leaf_paths=changed_leaf_paths,
+            )
+
+    def test_candidate_refinement_accepts_string_path_segments(self) -> None:
+        refinement = CandidateRefinement(
+            source_candidate={"x": (1, 2)},
+            refined_candidate={"x": (1, 3)},
+            changed_leaf_paths=(("x", 1),),
+        )
+
+        assert refinement.changed_leaf_paths == (("x", 1),)
 
     def test_evaluation_outcome_defaults_to_no_refinement_payload(self) -> None:
         observation = Observation(
@@ -2776,6 +2912,259 @@ class RuntimeArtifactsTests:
         for surface in surfaces:
             pickle_hooks = terminal_surface_pickle_hooks(surface)
             assert len(pickle_hooks.__getstate__()) == len(fields(surface))
+
+    def test_terminal_surface_setstate_rejects_negative_evaluation_count(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=proposal,
+            candidate=4,
+            objective_values=(16.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        surfaces = (
+            RunResult[int].from_observations((observation,)),
+            RunReport[int, Observation[int]].from_records((observation,)),
+            NondominatedRunSurface[int].from_records((vector_record,)),
+        )
+
+        for surface in surfaces:
+            pickle_hooks = terminal_surface_pickle_hooks(surface)
+            invalid_state = terminal_surface_pickle_state_with_field(
+                surface,
+                field_name="evaluation_count",
+                value=-1,
+            )
+
+            with pytest.raises(ValueError, match="evaluation_count"):
+                pickle_hooks.__setstate__(invalid_state)
+
+    def test_terminal_surface_setstate_rejects_attempt_cost_underflow(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=proposal,
+            candidate=4,
+            objective_values=(16.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        surfaces = (
+            RunResult[int].from_observations((observation,)),
+            RunReport[int, Observation[int]].from_records((observation,)),
+            NondominatedRunSurface[int].from_records((vector_record,)),
+        )
+
+        for surface in surfaces:
+            pickle_hooks = terminal_surface_pickle_hooks(surface)
+            invalid_state = terminal_surface_pickle_state_with_field(
+                surface,
+                field_name="evaluation_count",
+                value=0,
+            )
+
+            with pytest.raises(ValueError, match="terminal attempt cost"):
+                pickle_hooks.__setstate__(invalid_state)
+
+    def test_run_result_setstate_rejects_foreign_best_success(self) -> None:
+        request_one = make_int_request(4, "p-1")
+        request_two = make_int_request(2, "p-2")
+        result = RunResult[int].from_successes(
+            successes=(make_int_success(request_one),),
+        )
+        foreign_best_success = make_int_success(request_two)
+        pickle_hooks = terminal_surface_pickle_hooks(result)
+        invalid_state = terminal_surface_pickle_state_with_field(
+            result,
+            field_name="best_success",
+            value=foreign_best_success,
+        )
+
+        with pytest.raises(ValueError, match="best_success must come from successes"):
+            pickle_hooks.__setstate__(invalid_state)
+
+    def test_nondominated_surface_setstate_rejects_inconsistent_frontier(
+        self,
+    ) -> None:
+        frontier_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            objective_values=(1.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        dominated_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            objective_values=(2.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        surface = NondominatedRunSurface[int].from_records(
+            (frontier_record, dominated_record)
+        )
+        dominated_success = make_vector_record_success(dominated_record)
+        pickle_hooks = terminal_surface_pickle_hooks(surface)
+        invalid_state = terminal_surface_pickle_state_with_field(
+            surface,
+            field_name="nondominated_successes",
+            value=(dominated_success,),
+        )
+
+        with pytest.raises(ValueError, match="stable nondominated frontier"):
+            pickle_hooks.__setstate__(invalid_state)
+
+    def test_nondominated_surface_setstate_does_not_trust_prevalidated_cache(
+        self,
+    ) -> None:
+        frontier_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            objective_values=(1.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        dominated_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            objective_values=(2.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        surface = NondominatedRunSurface[int].from_records(
+            (frontier_record, dominated_record)
+        )
+        invalid_frontier = (surface.successes[1],)
+        pickle_hooks = terminal_surface_pickle_hooks(surface)
+        invalid_state = pickle_hooks.__getstate__()
+        field_names = tuple(dataclass_field.name for dataclass_field in fields(surface))
+        invalid_state[field_names.index("nondominated_successes")] = invalid_frontier
+        invalid_state[field_names.index("_validated_frontier_source_successes")] = (
+            surface.successes
+        )
+        invalid_state[field_names.index("_validated_frontier_successes")] = (
+            invalid_frontier
+        )
+
+        with pytest.raises(ValueError, match="stable nondominated frontier"):
+            pickle_hooks.__setstate__(invalid_state)
+
+    def test_terminal_surface_setstate_rejects_invalid_success_element(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=proposal,
+            candidate=4,
+            objective_values=(16.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        surfaces = (
+            RunResult[int].from_observations((observation,)),
+            RunReport[int, Observation[int]].from_records((observation,)),
+            NondominatedRunSurface[int].from_records((vector_record,)),
+        )
+
+        for surface in surfaces:
+            pickle_hooks = terminal_surface_pickle_hooks(surface)
+            invalid_state = terminal_surface_pickle_state_with_field(
+                surface,
+                field_name="successes",
+                value=("not-a-success",),
+            )
+
+            with pytest.raises(TypeError, match="EvaluationSuccess"):
+                pickle_hooks.__setstate__(invalid_state)
+
+    def test_terminal_surface_setstate_rejects_invalid_failure_element(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=proposal,
+            candidate=4,
+            objective_values=(16.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        surfaces = (
+            RunResult[int].from_observations((observation,)),
+            RunReport[int, Observation[int]].from_records((observation,)),
+            NondominatedRunSurface[int].from_records((vector_record,)),
+        )
+
+        for surface in surfaces:
+            pickle_hooks = terminal_surface_pickle_hooks(surface)
+            invalid_state = terminal_surface_pickle_state_with_field(
+                surface,
+                field_name="failures",
+                value=("not-a-failure",),
+            )
+
+            with pytest.raises(TypeError, match="EvaluationFailure"):
+                pickle_hooks.__setstate__(invalid_state)
+
+    def test_nondominated_surface_setstate_rejects_mixed_objective_dimensions(
+        self,
+    ) -> None:
+        record_two_dimensional = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            objective_values=(1.0, 1.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        record_three_dimensional = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            objective_values=(2.0, 2.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
+        )
+        surface = NondominatedRunSurface[int].from_records((record_two_dimensional,))
+        mixed_successes = surface.successes + (
+            make_vector_record_success(record_three_dimensional),
+        )
+        pickle_hooks = terminal_surface_pickle_hooks(surface)
+        invalid_state = terminal_surface_pickle_state_with_field(
+            surface,
+            field_name="successes",
+            value=mixed_successes,
+        )
+        field_names = tuple(dataclass_field.name for dataclass_field in fields(surface))
+        invalid_state[field_names.index("evaluation_count")] = len(mixed_successes)
+
+        with pytest.raises(ValueError, match="objective score vectors"):
+            pickle_hooks.__setstate__(invalid_state)
 
     def test_run_report_preserves_record_aligned_refinements(self) -> None:
         proposal_one = Proposal(candidate=4, proposal_id="p-1")

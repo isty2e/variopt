@@ -32,6 +32,7 @@ from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
+    CheckpointSafeRunSnapshot,
     StudyEvaluator,
     StudyPayloadT,
     StudyRecordT,
@@ -41,7 +42,11 @@ from .common import (
     validate_aligned_attempts,
     validate_materialized_attempts,
 )
-from .failures import RunExecutionFailed, build_run_report_or_raise_cause
+from .failures import (
+    RunExecutionFailed,
+    build_checkpoint_safe_report_or_raise_cause,
+    build_run_report_or_raise_cause,
+)
 from .validation import require_async_evaluator, validate_execution_request
 
 BoundaryT = TypeVar("BoundaryT")
@@ -104,33 +109,6 @@ class _StudyStaleAsyncOwner(
     ]:
         """Return the payload-to-record materializer for feedback attempts."""
         ...
-
-
-@dataclass(frozen=True, slots=True)
-class _StaleAsyncCheckpointSafeRunSnapshot(
-    Generic[CandidateT, RunMethodStateT, StudyRecordT]
-):
-    """Atomic checkpoint-safe stale-async run projection."""
-
-    successes: tuple[EvaluationSuccess[CandidateT, StudyRecordT], ...]
-    failures: tuple[EvaluationFailure[CandidateT], ...]
-    trace: Trace
-    evaluation_count: int
-    state: RunMethodStateT
-
-    def to_report(
-        self,
-        *,
-        candidate_equal: CandidateEquality[CandidateT],
-    ) -> RunReport[CandidateT, StudyRecordT]:
-        """Return the report projection aligned with this snapshot."""
-        return RunReport[CandidateT, StudyRecordT].from_successes(
-            successes=self.successes,
-            evaluation_count=self.evaluation_count,
-            trace=self.trace,
-            failures=self.failures,
-            candidate_equal=candidate_equal,
-        )
 
 
 @dataclass(slots=True)
@@ -428,19 +406,14 @@ def run_stale_async(
         else initial_state
     )
     safe_snapshot: (
-        _StaleAsyncCheckpointSafeRunSnapshot[
-            CandidateT,
-            RunMethodStateT,
-            StudyRecordT,
-        ]
-        | None
+        CheckpointSafeRunSnapshot[RunMethodStateT] | None
     ) = None
     unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
-        safe_snapshot = _StaleAsyncCheckpointSafeRunSnapshot(
-            successes=(),
-            failures=(),
-            trace=Trace(),
+        safe_snapshot = CheckpointSafeRunSnapshot(
+            success_count=0,
+            failure_count=0,
+            trace_event_count=0,
             evaluation_count=0,
             state=state,
         )
@@ -532,10 +505,10 @@ def run_stale_async(
                         stop_at_checkpoint_boundary
                         and study.run_method.is_checkpoint_safe_state(state)
                     ):
-                        safe_snapshot = _StaleAsyncCheckpointSafeRunSnapshot(
-                            successes=tuple(successes),
-                            failures=tuple(failures),
-                            trace=Trace(events=tuple(trace_events)),
+                        safe_snapshot = CheckpointSafeRunSnapshot(
+                            success_count=len(successes),
+                            failure_count=len(failures),
+                            trace_event_count=len(trace_events),
                             evaluation_count=(
                                 max_evaluations - record_budget_remaining
                                 if evaluation_budget is None
@@ -547,6 +520,9 @@ def run_stale_async(
                             _cancel_active_stale_async_sessions(active_sessions)
                             return (
                                 safe_snapshot.to_report(
+                                    successes=successes,
+                                    failures=failures,
+                                    trace_events=trace_events,
                                     candidate_equal=(
                                         study.problem.space.candidates_equal
                                     ),
@@ -594,6 +570,9 @@ def run_stale_async(
         if stop_at_checkpoint_boundary and safe_snapshot is not None:
             return (
                 safe_snapshot.to_report(
+                    successes=successes,
+                    failures=failures,
+                    trace_events=trace_events,
                     candidate_equal=study.problem.space.candidates_equal,
                 ),
                 safe_snapshot.state,
@@ -619,12 +598,12 @@ def run_stale_async(
         ] | None = None
         checkpoint_safe_state: RunMethodStateT | None = None
         if safe_snapshot is not None:
-            checkpoint_safe_report = build_run_report_or_raise_cause(
+            checkpoint_safe_report = build_checkpoint_safe_report_or_raise_cause(
                 cause=exception,
-                successes=safe_snapshot.successes,
-                evaluation_count=safe_snapshot.evaluation_count,
-                trace=safe_snapshot.trace,
-                failures=safe_snapshot.failures,
+                snapshot=safe_snapshot,
+                successes=successes,
+                failures=failures,
+                trace_events=trace_events,
                 candidate_equal=study.problem.space.candidates_equal,
             )
             checkpoint_safe_state = safe_snapshot.state
@@ -653,6 +632,9 @@ def run_stale_async(
             raise RuntimeError(msg)
         return (
             safe_snapshot.to_report(
+                successes=successes,
+                failures=failures,
+                trace_events=trace_events,
                 candidate_equal=study.problem.space.candidates_equal,
             ),
             safe_snapshot.state,

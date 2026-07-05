@@ -69,7 +69,15 @@ class _ScalarObservationView(Protocol[_ScalarObservationViewCandidateT]):
 
 @runtime_checkable
 class _RequestAlignedPayloadShape(Protocol):
-    """Runtime-checkable shape for request-aligned compatibility payloads."""
+    """Runtime-checkable shape for request-aligned compatibility payloads.
+
+    Notes
+    -----
+    This is intentionally structural. ``EvaluationSuccess`` accepts arbitrary
+    request-free protocol payloads, but any payload exposing both ``request`` and
+    ``candidate`` is treated as a request-aligned compatibility payload and must
+    belong to the success request.
+    """
 
     @property
     def request(self) -> object:
@@ -310,6 +318,13 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
     candidate_equal : CandidateEquality[CandidateT] | None, optional
         Explicit candidate equality predicate used to validate refinement
         alignment when raw scalar equality is not the search-space contract.
+
+    Notes
+    -----
+    Payload ownership is enforced at the request-aligned compatibility boundary.
+    Request-free payloads such as ``ObservationPayload`` and protocol payloads
+    are allowed to remain structural; materializers own conversion into
+    request-aligned feedback records before run-method assimilation.
     """
 
     request: EvaluationRequest[CandidateT]

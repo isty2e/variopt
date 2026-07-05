@@ -6,6 +6,7 @@ from typing import Protocol, TypeAlias, final, runtime_checkable
 import pytest
 from typing_extensions import override
 
+import variopt.study.stale_async as stale_async_execution
 from tests.study_support import (
     AttemptOutOfOrderAsyncEvaluator,
     FailingCandidateObjective,
@@ -98,6 +99,23 @@ class StaleAsyncRunFailure(Protocol):
     partial_report: RunReport[int, Observation[int]]
     partial_state: RollingStaleAsyncOptimizerState
     cause: Exception
+
+
+class StaleAsyncTraceFactoryCounter:
+    """Trace factory fixture that records stale-async materialization calls."""
+
+    calls: list[tuple[TraceEvent, ...]]
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def __call__(
+        self,
+        *,
+        events: tuple[TraceEvent, ...] = (),
+    ) -> Trace:
+        self.calls.append(tuple(events))
+        return Trace(events=events)
 
 
 class FailingSecondBatchAsyncEvaluator(OutOfOrderAsyncEvaluator):
@@ -885,6 +903,45 @@ class StudyStaleAsyncTests:
             "p-1",
             "spawn-p-2",
         )
+
+    def test_run_stale_async_checkpoint_snapshots_do_not_materialize_trace_each_step(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = SessionRecordingAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+        trace_counter = StaleAsyncTraceFactoryCounter()
+        monkeypatch.setattr(stale_async_execution, "Trace", trace_counter)
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+            "p-1",
+            "spawn-p-2",
+        )
+        assert final_state.ask_history == (2, 1)
+        assert len(trace_counter.calls) == 1
+        assert len(trace_counter.calls[0]) == 3
 
     def test_run_stale_async_safe_boundary_return_survives_cancel_failure(
         self,

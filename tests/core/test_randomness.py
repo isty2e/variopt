@@ -155,6 +155,50 @@ class RandomnessContractTests:
         assert seeds == ()
         assert next_snapshot == snapshot
 
+    def test_random_state_snapshot_from_dict_rejects_bool_position(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["position"] = True
+
+        with pytest.raises(TypeError, match="position"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    def test_random_state_snapshot_from_dict_rejects_bool_has_gaussian(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["has_gaussian"] = True
+
+        with pytest.raises(TypeError, match="has_gaussian"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    @pytest.mark.parametrize("cached_gaussian", [float("nan"), float("inf")])
+    def test_random_state_snapshot_from_dict_rejects_non_finite_cached_gaussian(
+        self,
+        cached_gaussian: float,
+    ) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["cached_gaussian"] = cached_gaussian
+
+        with pytest.raises(ValueError, match="cached_gaussian"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    def test_random_state_snapshot_from_dict_rejects_malformed_key_hex(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["key_hex"] = "not-hex"
+
+        with pytest.raises(ValueError, match="key_hex"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    def test_random_state_snapshot_rejects_runtime_bool_position(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7)
+
+        with pytest.raises(TypeError, match="position"):
+            _ = RandomStateSnapshot(
+                algorithm=snapshot.algorithm,
+                key_bytes=snapshot.key_bytes,
+                position=True,
+                has_gaussian=snapshot.has_gaussian,
+                cached_gaussian=snapshot.cached_gaussian,
+            )
+
     def test_derived_random_state_snapshot_is_stable_for_same_keys(self) -> None:
         snapshot = RandomStateSnapshot.from_seed(7)
 
