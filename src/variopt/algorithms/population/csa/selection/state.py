@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 
 from typing_extensions import Self
 
-from .....json_types import JSONDict, JSONValue, require_json_int
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_bool,
+    require_json_int,
+    require_json_list,
+)
 from ..indexing import remap_indices_after_removal
 
 EMPTY_IGNORED_INDICES: frozenset[int] = frozenset()
@@ -85,22 +91,22 @@ class SeedSelectionState:
         TypeError
             If the snapshot carries invalid field types.
         """
-        raw_used_entry_indices = data.get("used_entry_indices")
-        raw_bank_status = data.get("bank_status")
-        raw_active_seed_indices = data.get("active_seed_indices")
+        raw_used_entry_indices = require_json_list(
+            data.get("used_entry_indices"),
+            field_name="used_entry_indices",
+        )
+        raw_bank_status = require_json_list(
+            data.get("bank_status"),
+            field_name="bank_status",
+        )
+        raw_active_seed_indices = require_json_list(
+            data.get("active_seed_indices"),
+            field_name="active_seed_indices",
+        )
         next_seed_offset = require_json_int(
             data.get("next_seed_offset"),
             field_name="next_seed_offset",
         )
-        if not isinstance(raw_used_entry_indices, list):
-            msg = "seed-selection snapshot requires used_entry_indices list"
-            raise TypeError(msg)
-        if not isinstance(raw_bank_status, list):
-            msg = "seed-selection snapshot requires bank_status list"
-            raise TypeError(msg)
-        if not isinstance(raw_active_seed_indices, list):
-            msg = "seed-selection snapshot requires active_seed_indices list"
-            raise TypeError(msg)
         used_entry_indices: list[int] = []
         for raw_position, raw_index in enumerate(raw_used_entry_indices):
             used_entry_indices.append(
@@ -111,11 +117,13 @@ class SeedSelectionState:
             )
 
         bank_status: list[bool] = []
-        for raw_is_used in raw_bank_status:
-            if not isinstance(raw_is_used, bool):
-                msg = "seed-selection snapshot bank_status values must be booleans"
-                raise TypeError(msg)
-            bank_status.append(raw_is_used)
+        for raw_position, raw_is_used in enumerate(raw_bank_status):
+            bank_status.append(
+                require_json_bool(
+                    raw_is_used,
+                    field_name=f"bank_status[{raw_position}]",
+                ),
+            )
 
         active_seed_indices: list[int] = []
         for raw_position, raw_index in enumerate(raw_active_seed_indices):

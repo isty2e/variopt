@@ -6,7 +6,13 @@ from dataclasses import dataclass, replace
 
 from typing_extensions import Self
 
-from .......json_types import JSONDict, JSONValue, require_json_int
+from .......json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_int,
+    require_json_list,
+    require_json_mapping,
+)
 from .......spaces import LeafPath
 from ..policy import CSAProposalPolicy
 from .attribution import NumericSubspaceDisplacement, ProposalAttribution
@@ -133,61 +139,75 @@ class CSAProposalState:
         ValueError
             If the snapshot attempts to restore pending attributions.
         """
-        raw_pending_attributions = data.get("pending_attributions")
-        raw_family_stats = data.get("family_stats")
-        raw_leaf_stats = data.get("leaf_stats")
-        raw_local_displacement_leaf_stats = data.get("local_displacement_leaf_stats")
-        raw_numeric_covariance_stats = data.get("numeric_covariance_stats")
+        raw_pending_attributions = require_json_list(
+            data.get("pending_attributions"),
+            field_name="pending_attributions",
+        )
+        if len(raw_pending_attributions) != 0:
+            msg = "proposal-state checkpoints require an empty pending attribution queue"
+            raise ValueError(msg)
+        raw_family_stats = require_json_list(
+            data.get("family_stats"),
+            field_name="family_stats",
+        )
+        raw_leaf_stats = require_json_list(
+            data.get("leaf_stats"),
+            field_name="leaf_stats",
+        )
+        raw_local_displacement_leaf_stats = require_json_list(
+            data.get("local_displacement_leaf_stats"),
+            field_name="local_displacement_leaf_stats",
+        )
+        raw_numeric_covariance_stats = require_json_list(
+            data.get("numeric_covariance_stats"),
+            field_name="numeric_covariance_stats",
+        )
         update_index = require_json_int(
             data.get("update_index"),
             field_name="update_index",
         )
-        if not isinstance(raw_pending_attributions, list):
-            msg = "proposal-state snapshot requires pending_attributions list"
-            raise TypeError(msg)
-        if len(raw_pending_attributions) != 0:
-            msg = "proposal-state checkpoints require an empty pending attribution queue"
-            raise ValueError(msg)
-        if not isinstance(raw_family_stats, list):
-            msg = "proposal-state snapshot requires family_stats list"
-            raise TypeError(msg)
-        if not isinstance(raw_leaf_stats, list):
-            msg = "proposal-state snapshot requires leaf_stats list"
-            raise TypeError(msg)
-        if not isinstance(raw_local_displacement_leaf_stats, list):
-            msg = "proposal-state snapshot requires local_displacement_leaf_stats list"
-            raise TypeError(msg)
-        if not isinstance(raw_numeric_covariance_stats, list):
-            msg = "proposal-state snapshot requires numeric_covariance_stats list"
-            raise TypeError(msg)
         family_stats: list[ProposalFamilyStat] = []
-        for raw_family_stat in raw_family_stats:
-            if not isinstance(raw_family_stat, dict):
-                msg = "proposal-state family_stats entries must be mappings"
-                raise TypeError(msg)
-            family_stats.append(ProposalFamilyStat.from_dict(raw_family_stat))
+        for raw_position, raw_family_stat in enumerate(raw_family_stats):
+            family_stats.append(
+                ProposalFamilyStat.from_dict(
+                    require_json_mapping(
+                        raw_family_stat,
+                        field_name=f"family_stats[{raw_position}]",
+                    ),
+                ),
+            )
 
         leaf_stats: list[ProposalLeafStat] = []
-        for raw_leaf_stat in raw_leaf_stats:
-            if not isinstance(raw_leaf_stat, dict):
-                msg = "proposal-state leaf_stats entries must be mappings"
-                raise TypeError(msg)
-            leaf_stats.append(ProposalLeafStat.from_dict(raw_leaf_stat))
+        for raw_position, raw_leaf_stat in enumerate(raw_leaf_stats):
+            leaf_stats.append(
+                ProposalLeafStat.from_dict(
+                    require_json_mapping(
+                        raw_leaf_stat,
+                        field_name=f"leaf_stats[{raw_position}]",
+                    ),
+                ),
+            )
 
         local_displacement_leaf_stats: list[ProposalLeafStat] = []
-        for raw_leaf_stat in raw_local_displacement_leaf_stats:
-            if not isinstance(raw_leaf_stat, dict):
-                msg = "proposal-state local displacement leaf stats entries must be mappings"
-                raise TypeError(msg)
-            local_displacement_leaf_stats.append(ProposalLeafStat.from_dict(raw_leaf_stat))
+        for raw_position, raw_leaf_stat in enumerate(raw_local_displacement_leaf_stats):
+            local_displacement_leaf_stats.append(
+                ProposalLeafStat.from_dict(
+                    require_json_mapping(
+                        raw_leaf_stat,
+                        field_name=f"local_displacement_leaf_stats[{raw_position}]",
+                    ),
+                ),
+            )
 
         numeric_covariance_stats: list[ProposalNumericSubspaceCovarianceStat] = []
-        for raw_covariance_stat in raw_numeric_covariance_stats:
-            if not isinstance(raw_covariance_stat, dict):
-                msg = "proposal-state covariance-stat entries must be mappings"
-                raise TypeError(msg)
+        for raw_position, raw_covariance_stat in enumerate(raw_numeric_covariance_stats):
             numeric_covariance_stats.append(
-                ProposalNumericSubspaceCovarianceStat.from_dict(raw_covariance_stat),
+                ProposalNumericSubspaceCovarianceStat.from_dict(
+                    require_json_mapping(
+                        raw_covariance_stat,
+                        field_name=f"numeric_covariance_stats[{raw_position}]",
+                    ),
+                ),
             )
 
         return cls(

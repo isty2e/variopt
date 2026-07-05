@@ -10,7 +10,13 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Proposal
-from .....json_types import JSONDict, JSONValue, require_json_int, require_json_str
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_int,
+    require_json_mapping,
+    require_json_str,
+)
 from .....randomness import RandomStateSnapshot
 from .....typevars import CandidateT
 from ..banking.clustering.policy import CSAClusteringPolicy
@@ -270,57 +276,57 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         format_name = require_json_str(data.get("format"), field_name="format")
         version = require_json_int(data.get("version"), field_name="version")
-        raw_random_state = data.get("random_state")
-        raw_banking_state = data.get("banking_state")
-        raw_progression_state = data.get("progression_state")
-        raw_selection_state = data.get("selection_state")
-        raw_proposal_state = data.get("proposal_state")
-        raw_scoring_state = data.get("scoring_state")
-        proposal_index = require_json_int(
-            data.get("proposal_index"),
-            field_name="proposal_index",
-        )
         if format_name != _CSA_ENGINE_STATE_FORMAT:
             msg = "unsupported CSA checkpoint format"
             raise ValueError(msg)
         if version != _CSA_ENGINE_STATE_VERSION:
             msg = "unsupported CSA checkpoint version"
             raise ValueError(msg)
-        if not isinstance(raw_random_state, dict):
-            msg = "CSA checkpoint snapshot requires random_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_banking_state, dict):
-            msg = "CSA checkpoint snapshot requires banking_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_progression_state, dict):
-            msg = "CSA checkpoint snapshot requires progression_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_selection_state, dict):
-            msg = "CSA checkpoint snapshot requires selection_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_proposal_state, dict):
-            msg = "CSA checkpoint snapshot requires proposal_state mapping"
-            raise TypeError(msg)
-        if not isinstance(raw_scoring_state, dict):
-            msg = "CSA checkpoint snapshot requires scoring_state mapping"
-            raise TypeError(msg)
+        proposal_index = require_json_int(
+            data.get("proposal_index"),
+            field_name="proposal_index",
+        )
+        random_state_data = require_json_mapping(
+            data.get("random_state"),
+            field_name="random_state",
+        )
+        banking_state_data = require_json_mapping(
+            data.get("banking_state"),
+            field_name="banking_state",
+        )
+        progression_state_data = require_json_mapping(
+            data.get("progression_state"),
+            field_name="progression_state",
+        )
+        selection_state_data = require_json_mapping(
+            data.get("selection_state"),
+            field_name="selection_state",
+        )
+        proposal_state_data = require_json_mapping(
+            data.get("proposal_state"),
+            field_name="proposal_state",
+        )
+        scoring_state_data = require_json_mapping(
+            data.get("scoring_state"),
+            field_name="scoring_state",
+        )
         return cls(
-            random_state=RandomStateSnapshot.from_dict(raw_random_state),
+            random_state=RandomStateSnapshot.from_dict(random_state_data),
             banking_state=CSABankingState[CandidateT].from_dict(
-                raw_banking_state,
+                banking_state_data,
                 candidate_from_dict=candidate_from_dict,
                 growth_policy=growth_policy,
                 clustering_policy=clustering_policy,
             ),
-            progression_state=CSAProgressionState.from_dict(raw_progression_state),
-            selection_state=SeedSelectionState.from_dict(raw_selection_state),
+            progression_state=CSAProgressionState.from_dict(progression_state_data),
+            selection_state=SeedSelectionState.from_dict(selection_state_data),
             generation_state=GenerationRuntimeState[CandidateT](),
             proposal_state=CSAProposalState.from_dict(
-                raw_proposal_state,
+                proposal_state_data,
                 policy=proposal_policy,
             ),
             scoring_state=CSAScoringState[CandidateT].from_dict(
-                raw_scoring_state,
+                scoring_state_data,
                 acceptance_policy=acceptance_policy,
                 score_model=score_model,
             ),
