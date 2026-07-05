@@ -1,7 +1,7 @@
 """Private covariance-aware helpers for CSA proposal adaptation."""
 
 from collections.abc import Sequence
-from typing import TypeVar, cast
+from typing import Protocol, TypeVar, cast
 
 import numpy as np
 import numpy.typing as npt
@@ -22,12 +22,18 @@ FloatVector = npt.NDArray[np.float64]
 FloatMatrix = npt.NDArray[np.float64]
 
 
+class _FloatMatrixEigh(Protocol):
+    """Typed callable view of ``numpy.linalg.eigh`` for float matrices."""
+
+    def __call__(self, matrix: FloatMatrix) -> tuple[FloatVector, FloatMatrix]:
+        """Return eigenvalues and eigenvectors for ``matrix``."""
+        ...
+
+
 def _eigh_float_matrix(matrix: FloatMatrix) -> tuple[FloatVector, FloatMatrix]:
     """Return eigenvalues and eigenvectors for one float covariance matrix."""
-    raw_eigenvalues, raw_eigenvectors = cast(
-        tuple[FloatVector, FloatMatrix],
-        np.linalg.eigh(matrix),  # pyright: ignore[reportUnknownMemberType]
-    )
+    eigh_float_matrix = cast(_FloatMatrixEigh, getattr(np.linalg, "eigh"))
+    raw_eigenvalues, raw_eigenvectors = eigh_float_matrix(matrix)
     return (
         np.asarray(raw_eigenvalues, dtype=np.float64),
         np.asarray(raw_eigenvectors, dtype=np.float64),
@@ -36,10 +42,7 @@ def _eigh_float_matrix(matrix: FloatMatrix) -> tuple[FloatVector, FloatMatrix]:
 
 def _transpose_float_matrix(matrix: FloatMatrix) -> FloatMatrix:
     """Return the transpose of one float matrix."""
-    return cast(
-        FloatMatrix,
-        matrix.T,
-    )
+    return cast(FloatMatrix, getattr(matrix, "T"))
 
 
 def build_numeric_subspace_attribution(
