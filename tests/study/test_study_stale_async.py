@@ -1,15 +1,19 @@
 """Tests for stale-async Study execution."""
 
 from collections.abc import Sequence
-from typing import TypeAlias, final
+from typing import Protocol, TypeAlias, final, runtime_checkable
 
 import pytest
 from typing_extensions import override
 
 from tests.study_support import (
+    AttemptOutOfOrderAsyncEvaluator,
+    FailingCandidateObjective,
+    FailureRecordingBatchQueueOptimizer,
     OutOfOrderAsyncEvaluator,
     RecordingKernel,
     RollingStaleAsyncOptimizer,
+    RollingStaleAsyncOptimizerState,
     SessionRecordingAsyncEvaluator,
     ShiftedObservationProtocol,
     SpaceOwnedEqualityAsyncEvaluator,
@@ -25,6 +29,7 @@ from variopt import (
     Observation,
     Problem,
     Proposal,
+    RunReport,
     Study,
 )
 from variopt.artifacts import Trace, TraceEvent
@@ -39,6 +44,15 @@ from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
 
 StaleAsyncOutcome: TypeAlias = EvaluationOutcome[int, Observation[int]]
 StaleAsyncCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncOutcome]
+
+
+@runtime_checkable
+class StaleAsyncRunFailure(Protocol):
+    """Typed shape for hard-failure assertions over stale-async runs."""
+
+    partial_report: RunReport[int, Observation[int]]
+    partial_state: RollingStaleAsyncOptimizerState
+    cause: Exception
 
 
 class FailingSecondBatchAsyncEvaluator(OutOfOrderAsyncEvaluator):
@@ -311,6 +325,81 @@ class StudyStaleAsyncTests:
             for observation in observation_batch
         ) == ("p-2", "spawn-p-2", "p-1")
 
+    def test_run_stale_async_records_out_of_order_attempt_failures(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-1"),
+                    Proposal(candidate=5, proposal_id="p-2"),
+                    Proposal(candidate=1, proposal_id="p-3"),
+                ),
+            ],
+        )
+        evaluator = AttemptOutOfOrderAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            batch_size=3,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-3",
+            "p-1",
+        )
+        assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
+        assert report.evaluation_count == 3
+        assert tuple(
+            failure_proposal_id
+            for failure_batch in final_state.failure_history
+            for failure_proposal_id in failure_batch
+        ) == ("p-2",)
+        assert tuple(
+            record.proposal.proposal_id
+            for record_batch in final_state.tell_history
+            for record in record_batch
+        ) == ("p-3", "p-1")
+
+    def test_run_stale_async_tell_failure_excludes_unassimilated_attempts(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=2, proposal_id="p-1"),
+                Proposal(candidate=5, proposal_id="p-2"),
+            ),
+        )
+        evaluator = AttemptOutOfOrderAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        try:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=2,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            )
+        except RuntimeError as raw_exception:
+            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
+            assert isinstance(raw_exception, StaleAsyncRunFailure)
+            exception = raw_exception
+        else:
+            pytest.fail("expected stale-async tell failure")
+
+        assert exception.cause.__class__.__name__ == "UnsupportedEvaluationFailureError"
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.failures == ()
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.tell_history == ()
+
     def test_run_stale_async_cancels_refill_opened_before_mid_sweep_failure(
         self,
     ) -> None:
@@ -327,12 +416,18 @@ class StudyStaleAsyncTests:
         evaluator = FailingSecondBatchAsyncEvaluator()
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
-        with pytest.raises(BatchExecutionFailed, match="batch-1"):
+        try:
             _ = study.run(
                 max_evaluations=4,
                 batch_size=2,
                 execution_model=STALE_ASYNC_EXECUTION_MODEL,
             )
+        except RuntimeError as exception:
+            assert exception.__class__.__name__ == "RunExecutionFailed"
+            assert "batch-1" in str(exception)
+            assert isinstance(exception.__cause__, BatchExecutionFailed)
+        else:
+            pytest.fail("expected stale-async run failure")
 
         assert "batch-2" in evaluator.cancelled_batch_ids
 
@@ -352,12 +447,18 @@ class StudyStaleAsyncTests:
         evaluator = CancelFailingSecondBatchAsyncEvaluator()
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
-        with pytest.raises(BatchExecutionFailed, match="batch-1"):
+        try:
             _ = study.run(
                 max_evaluations=4,
                 batch_size=2,
                 execution_model=STALE_ASYNC_EXECUTION_MODEL,
             )
+        except RuntimeError as exception:
+            assert exception.__class__.__name__ == "RunExecutionFailed"
+            assert "batch-1" in str(exception)
+            assert isinstance(exception.__cause__, BatchExecutionFailed)
+        else:
+            pytest.fail("expected stale-async run failure")
 
         assert evaluator.cancelled_batch_ids == ("batch-0", "batch-1", "batch-2")
 

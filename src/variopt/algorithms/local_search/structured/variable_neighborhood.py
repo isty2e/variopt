@@ -17,7 +17,7 @@ from ....kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from ....outcomes import EvaluationOutcome
+from ....outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import (
@@ -29,6 +29,7 @@ from .neighborhood import (
 from .runtime.prepared import (
     PreparedStructuredLocalSearchRuntime,
     prepare_structured_local_search_runtime,
+    structured_episode_attempt_batch,
 )
 from .runtime.search import run_structured_variable_neighborhood_stage_once
 
@@ -42,12 +43,9 @@ class StructuredVariableNeighborhoodKernel(
             StructuredCandidateT,
             Observation[StructuredCandidateT],
         ],
-        tuple[
-            EvaluationOutcome[
-                StructuredCandidateT,
-                Observation[StructuredCandidateT],
-            ],
-            ...,
+        EvaluationAttemptBatch[
+            StructuredCandidateT,
+            Observation[StructuredCandidateT],
         ],
     ],
     Generic[BoundaryT, StructuredCandidateT],
@@ -108,16 +106,18 @@ class StructuredVariableNeighborhoodKernel(
             RandomStateSnapshot.from_seed(self.random_state),
         )
 
-    def _evaluate_candidate(
+    def _evaluate_candidate_attempt(
         self,
         *,
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         candidate: StructuredCandidateT,
+        proposal: Proposal[StructuredCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Evaluate one candidate through the supplied evaluator runner."""
-        return runtime.evaluate_candidate(
+        return runtime.evaluate_candidate_attempt(
             candidate=candidate,
+            proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
 
@@ -127,7 +127,7 @@ class StructuredVariableNeighborhoodKernel(
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal: Proposal[StructuredCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Evaluate one original proposal once without local search."""
         return runtime.evaluate_original_proposal(
             proposal=proposal,
@@ -173,9 +173,10 @@ class StructuredVariableNeighborhoodKernel(
         proposal: Proposal[StructuredCandidateT],
         random_state: np.random.RandomState,
         reserved_count: int,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Run one variable-neighborhood local-search episode for one proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
+        failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
         context = self._proposal_context(runtime=runtime, proposal_index=proposal_index)
         proposal_evaluation_spec = runtime.proposal_evaluation_spec(
             proposal_index=proposal_index,
@@ -190,11 +191,20 @@ class StructuredVariableNeighborhoodKernel(
         if context is not None and context.random_state_snapshot is not None:
             episode_random_state = context.random_state_snapshot.materialize()
 
-        current_outcome = self._evaluate_candidate(
+        current_attempt = self._evaluate_candidate_attempt(
             runtime=runtime,
             candidate=proposal.candidate,
+            proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
+        current_outcome = current_attempt.single_outcome_or_none()
+        if current_outcome is None:
+            failed_attempts.append(current_attempt)
+            return structured_episode_attempt_batch(
+                outcome=None,
+                failed_attempts=failed_attempts,
+            )
+
         current_record = current_outcome.record
         current_candidate = current_record.candidate
         current_value = current_record.value
@@ -220,6 +230,7 @@ class StructuredVariableNeighborhoodKernel(
                 reserved_count=reserved_count,
             )
             evaluation_count += stage_attempt.evaluation_count
+            failed_attempts.extend(stage_attempt.failed_attempts)
 
             if stage_attempt.improved_outcome is not None:
                 proposed_record = stage_attempt.improved_outcome.record
@@ -247,7 +258,7 @@ class StructuredVariableNeighborhoodKernel(
                         + " after exhausting the configured variable-neighborhood stages"
                     )
 
-                return EvaluationOutcome(
+                outcome = EvaluationOutcome(
                     record=Observation.from_objective_value(
                         proposal=proposal,
                         proposal_evaluation_spec=proposal_evaluation_spec,
@@ -265,6 +276,10 @@ class StructuredVariableNeighborhoodKernel(
                     refinement=refinement,
                     candidate_equal=runtime.query.problem.space.candidates_equal,
                 )
+                return structured_episode_attempt_batch(
+                    outcome=outcome,
+                    failed_attempts=failed_attempts,
+                )
 
             current_stage_index += 1
 
@@ -275,7 +290,7 @@ class StructuredVariableNeighborhoodKernel(
                 refined_candidate=current_candidate,
             )
 
-        return EvaluationOutcome(
+        outcome = EvaluationOutcome(
             record=Observation.from_objective_value(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
@@ -293,6 +308,10 @@ class StructuredVariableNeighborhoodKernel(
             refinement=refinement,
             candidate_equal=runtime.query.problem.space.candidates_equal,
         )
+        return structured_episode_attempt_batch(
+            outcome=outcome,
+            failed_attempts=failed_attempts,
+        )
 
     @override
     def run(
@@ -300,22 +319,22 @@ class StructuredVariableNeighborhoodKernel(
         query: ProposalBatchQuery[BoundaryT, StructuredCandidateT],
         runner: Callable[
             [ProposalBatchQuery[BoundaryT, StructuredCandidateT]],
-            tuple[EvaluationOutcome[StructuredCandidateT], ...],
+            EvaluationAttemptBatch[StructuredCandidateT],
         ],
-    ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Run variable-neighborhood search for each proposal in a batch.
 
         Parameters
         ----------
         query : ProposalBatchQuery[BoundaryT, StructuredCandidateT]
             Proposal batch and evaluation context to optimize.
-        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], tuple[EvaluationOutcome[StructuredCandidateT], ...]]
+        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], EvaluationAttemptBatch[StructuredCandidateT]]
             Evaluator runner used to score candidate moves.
 
         Returns
         -------
-        tuple[EvaluationOutcome[StructuredCandidateT], ...]
-            Local-search outcomes aligned to ``query.proposals``.
+        EvaluationAttemptBatch[StructuredCandidateT]
+            Locally improved attempts and recorded failed local-search trials.
         """
         runtime: PreparedStructuredLocalSearchRuntime[
             BoundaryT,
@@ -327,19 +346,21 @@ class StructuredVariableNeighborhoodKernel(
 
         def optimize_batch(
             random_state: np.random.RandomState,
-        ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
-            return tuple(
-                self._optimize_proposal(
-                    runtime=runtime,
-                    proposal_index=proposal_index,
-                    proposal=proposal,
-                    random_state=random_state,
-                    reserved_count=len(query.proposals) - proposal_index - 1,
+        ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+            return EvaluationAttemptBatch[StructuredCandidateT].concatenate(
+                tuple(
+                    self._optimize_proposal(
+                        runtime=runtime,
+                        proposal_index=proposal_index,
+                        proposal=proposal,
+                        random_state=random_state,
+                        reserved_count=len(query.proposals) - proposal_index - 1,
+                    )
+                    for proposal_index, proposal in enumerate(query.proposals)
                 )
-                for proposal_index, proposal in enumerate(query.proposals)
             )
 
-        outcomes, next_random_state_snapshot = self._random_state_snapshot.advance(
+        attempts, next_random_state_snapshot = self._random_state_snapshot.advance(
             optimize_batch,
         )
         object.__setattr__(
@@ -347,4 +368,4 @@ class StructuredVariableNeighborhoodKernel(
             "_random_state_snapshot",
             next_random_state_snapshot,
         )
-        return outcomes
+        return attempts

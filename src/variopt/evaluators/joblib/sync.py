@@ -8,8 +8,9 @@ import joblib  # pyright: ignore[reportMissingTypeStubs]
 from typing_extensions import override
 
 from ...artifacts import EvaluationRequest
+from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
-from ...outcomes import EvaluationOutcome
+from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
 from ..base import Evaluator
@@ -86,8 +87,6 @@ class JoblibEvaluator(
         tuple[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT], ...]
             Ordered outcomes aligned one-to-one with ``requests``.
         """
-        from ...evaluation_pipeline import evaluate_request_outcome
-
         parallel_factory = cast(
             JoblibListParallelFactory[
                 EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
@@ -109,3 +108,47 @@ class JoblibEvaluator(
             for request in requests
         )
         return tuple(outcomes)
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT],
+        requests: Sequence[EvaluationRequest[CandidateT]],
+    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]:
+        """Execute a request batch through joblib into a dense attempt batch.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+            Problem that defines evaluation semantics.
+        requests : Sequence[EvaluationRequest[CandidateT]]
+            Request batch to execute.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]
+            Dense attempt batch aligned to ``requests``.
+        """
+        parallel_factory = cast(
+            JoblibListParallelFactory[
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]
+            ],
+            getattr(joblib, "Parallel"),
+        )
+        delayed_factory = cast(
+            JoblibDelayedFactory,
+            getattr(joblib, "delayed"),
+        )
+        attempts = parallel_factory(
+            n_jobs=self.n_jobs,
+            backend=self.backend,
+        )(
+            delayed_factory(evaluate_request_attempt)(
+                problem=problem,
+                request=request,
+            )
+            for request in requests
+        )
+        return EvaluationAttemptBatch[
+            CandidateT,
+            JoblibEvaluationRecordT,
+        ].from_single_request_attempts(tuple(attempts))

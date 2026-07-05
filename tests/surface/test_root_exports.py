@@ -4,6 +4,8 @@
 import variopt
 from variopt.artifacts import (
     CandidateRefinement,
+    EvaluationExceptionSnapshot,
+    EvaluationFailure,
     EvaluationRequest,
     NondominatedRunSurface,
     Observation,
@@ -31,9 +33,9 @@ from variopt.kernel import (
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from variopt.methods import RunMethod
+from variopt.methods import RunMethod, UnsupportedEvaluationFailureError
 from variopt.objective import Objective
-from variopt.outcomes import EvaluationOutcome
+from variopt.outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from variopt.problem import Problem
 from variopt.sampling import CandidateSampler
 from variopt.spaces import (
@@ -42,7 +44,7 @@ from variopt.spaces import (
     SpaceBoundaryValue,
     SpaceCandidateValue,
 )
-from variopt.study import Study
+from variopt.study import RunExecutionFailed, Study
 
 
 class RootFacadeExportTests:
@@ -51,6 +53,9 @@ class RootFacadeExportTests:
     def test_root_facade_reexports_common_direct_use_and_contract_nouns(self) -> None:
         assert variopt.CandidateRefinement is CandidateRefinement
         assert variopt.CandidateEquality is CandidateEquality
+        assert variopt.EvaluationAttemptBatch is EvaluationAttemptBatch
+        assert variopt.EvaluationExceptionSnapshot is EvaluationExceptionSnapshot
+        assert variopt.EvaluationFailure is EvaluationFailure
         assert variopt.EvaluationOutcome is EvaluationOutcome
         assert variopt.EvaluationRequest is EvaluationRequest
         assert variopt.Evaluator is Evaluator
@@ -72,6 +77,7 @@ class RootFacadeExportTests:
         assert variopt.ProposalKernelHint is ProposalKernelHint
         assert variopt.ProposalLocalSearchContext is ProposalLocalSearchContext
         assert variopt.RunMethod is RunMethod
+        assert variopt.RunExecutionFailed is RunExecutionFailed
         assert variopt.RunReport is RunReport
         assert variopt.RunResult is RunResult
         assert variopt.SearchSpace is SearchSpace
@@ -79,6 +85,10 @@ class RootFacadeExportTests:
         assert variopt.STALE_ASYNC_EXECUTION_MODEL is STALE_ASYNC_EXECUTION_MODEL
         assert variopt.Study is Study
         assert variopt.SYNC_BATCH_EXECUTION_MODEL is SYNC_BATCH_EXECUTION_MODEL
+        assert (
+            variopt.UnsupportedEvaluationFailureError
+            is UnsupportedEvaluationFailureError
+        )
 
     def test_root_facade_omits_family_specific_helper_contracts(self) -> None:
         removed_names = (

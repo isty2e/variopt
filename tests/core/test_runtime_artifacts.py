@@ -15,6 +15,9 @@ from tests.problem_artifact_support import (
 )
 from variopt import (
     CandidateRefinement,
+    EvaluationAttemptBatch,
+    EvaluationExceptionSnapshot,
+    EvaluationFailure,
     EvaluationOutcome,
     EvaluationRecord,
     EvaluationRequest,
@@ -27,6 +30,7 @@ from variopt import (
     RunResult,
 )
 from variopt.artifacts import Trace, TraceEvent
+from variopt.kernel import DirectKernel
 
 
 class AmbiguousEqualityCandidate:
@@ -76,6 +80,60 @@ def make_truthy_vector_equality_candidate() -> object:
 
     candidate_type = type("TruthyVectorEqualityCandidate", (), {"__eq__": equality})
     return candidate_type()
+
+
+def test_direct_kernel_preserves_mixed_attempt_batch() -> None:
+    request_one: EvaluationRequest[int] = EvaluationRequest(
+        proposal=Proposal(candidate=1)
+    )
+    request_two: EvaluationRequest[int] = EvaluationRequest(
+        proposal=Proposal(candidate=2)
+    )
+    outcome = EvaluationOutcome(
+        observation=Observation.from_objective_value(
+            request=request_one,
+            candidate=1,
+            value=1.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+    )
+    failure = EvaluationFailure(
+        request=request_two,
+        exception=EvaluationExceptionSnapshot.from_exception(ValueError("boom")),
+    )
+    attempts: EvaluationAttemptBatch[int] = EvaluationAttemptBatch(
+        requests=(request_one, request_two),
+        outcomes=(outcome,),
+        outcome_indices=(0,),
+        failures=(failure,),
+        failure_indices=(1,),
+    )
+    kernel: DirectKernel[str, EvaluationAttemptBatch[int]] = DirectKernel()
+
+    def runner(query: str) -> EvaluationAttemptBatch[int]:
+        assert query == "query"
+        return attempts
+
+    assert kernel.run("query", runner) is attempts
+
+
+def make_int_request(candidate: int, proposal_id: str) -> EvaluationRequest[int]:
+    """Return a typed integer evaluation request."""
+    return EvaluationRequest(proposal=Proposal(candidate=candidate, proposal_id=proposal_id))
+
+
+def make_int_failure(
+    request: EvaluationRequest[int],
+    message: str = "bad",
+    *,
+    evaluation_count: int = 1,
+) -> EvaluationFailure[int]:
+    """Return a typed integer evaluation failure."""
+    return EvaluationFailure[int].from_exception(
+        request=request,
+        exception=ValueError(message),
+        evaluation_count=evaluation_count,
+    )
 
 
 class RuntimeArtifactConformanceTests(contract_cases.ArtifactConformanceCase[int]):
@@ -189,6 +247,577 @@ class RuntimeArtifactsTests:
 
         assert outcome.record == observation
         assert outcome.refinement is None
+
+    def test_evaluation_failure_snapshots_exception_without_raw_exception(self) -> None:
+        request = make_int_request(4, "p-1")
+
+        failure = EvaluationFailure[int].from_exception(
+            request=request,
+            exception=ValueError("bad candidate"),
+            evaluation_count=2,
+        )
+
+        assert failure.request is request
+        assert failure.candidate == 4
+        assert failure.proposal_id == "p-1"
+        assert failure.evaluation_count == 2
+        assert failure.exception.exception_module == "builtins"
+        assert failure.exception.exception_qualname == "ValueError"
+        assert failure.exception.exception_type == "builtins.ValueError"
+        assert failure.exception.message == "bad candidate"
+        assert not isinstance(failure.exception, ValueError)
+
+    def test_evaluation_failure_pickle_round_trip_preserves_snapshot(self) -> None:
+        request = make_int_request(4, "p-1")
+        failure = EvaluationFailure[int].from_exception(
+            request=request,
+            exception=RuntimeError("boom"),
+        )
+
+        restored_failure = cast(
+            EvaluationFailure[int],
+            pickle.loads(pickle.dumps(failure)),
+        )
+
+        assert restored_failure == failure
+        assert restored_failure.exception.exception_type == "builtins.RuntimeError"
+
+    def test_evaluation_failure_rejects_negative_evaluation_count(self) -> None:
+        request = make_int_request(4, "p-1")
+        snapshot = EvaluationExceptionSnapshot.from_exception(ValueError("bad"))
+
+        with pytest.raises(ValueError, match="non-negative"):
+            _ = EvaluationFailure(
+                request=request,
+                exception=snapshot,
+                evaluation_count=-1,
+            )
+
+    def test_exception_snapshot_rejects_empty_exception_type(self) -> None:
+        with pytest.raises(ValueError, match="exception_module"):
+            _ = EvaluationExceptionSnapshot(
+                exception_module="",
+                exception_qualname="ValueError",
+                message="bad",
+            )
+
+        with pytest.raises(ValueError, match="exception_qualname"):
+            _ = EvaluationExceptionSnapshot(
+                exception_module="builtins",
+                exception_qualname="",
+                message="bad",
+            )
+
+    def test_exception_snapshot_rejects_non_exception_base_exception(self) -> None:
+        with pytest.raises(TypeError, match="Exception instance"):
+            _ = EvaluationExceptionSnapshot.from_exception(KeyboardInterrupt())
+
+    def test_exception_snapshot_preserves_local_exception_qualname(self) -> None:
+        class LocalEvaluationError(Exception):
+            """Test-local recordable exception."""
+
+        snapshot = EvaluationExceptionSnapshot.from_exception(
+            LocalEvaluationError("local failure"),
+        )
+
+        assert snapshot.exception_module == __name__
+        assert snapshot.exception_qualname.endswith("LocalEvaluationError")
+        assert snapshot.message == "local failure"
+
+    def test_exception_snapshot_allows_empty_exception_message(self) -> None:
+        snapshot = EvaluationExceptionSnapshot.from_exception(ValueError())
+
+        assert snapshot.exception_type == "builtins.ValueError"
+        assert snapshot.message == ""
+
+    def test_evaluation_attempt_batch_accepts_empty_batch(self) -> None:
+        batch: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            requests=(),
+        )
+
+        assert batch.attempt_count == 0
+        assert batch.records == ()
+        assert batch.evaluation_count == 0
+        assert not batch.has_failures
+
+    def test_evaluation_attempt_batch_accepts_all_successes(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome_one = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        outcome_two = EvaluationOutcome(
+            observation=Observation(
+                request=request_two,
+                candidate=2,
+                value=2.0,
+                score=2.0,
+            ),
+            evaluation_count=2,
+        )
+
+        batch = EvaluationAttemptBatch(
+            requests=(request_one, request_two),
+            outcomes=(outcome_one, outcome_two),
+        )
+
+        assert batch.outcome_indices == (0, 1)
+        assert batch.failure_indices == ()
+        assert batch.records == (outcome_one.record, outcome_two.record)
+        assert batch.evaluation_count == 3
+        assert not batch.has_failures
+
+    def test_evaluation_attempt_batch_accepts_mixed_success_and_failure(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        failure = make_int_failure(request_two)
+
+        batch = EvaluationAttemptBatch(
+            requests=(request_one, request_two),
+            outcomes=(outcome,),
+            outcome_indices=(0,),
+            failures=(failure,),
+            failure_indices=(1,),
+        )
+
+        assert batch.attempt_count == 2
+        assert batch.outcomes == (outcome,)
+        assert batch.failures == (failure,)
+        assert batch.evaluation_count == 2
+        assert batch.has_failures
+
+    def test_evaluation_attempt_batch_accepts_all_failures(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        failure_one = make_int_failure(request_one, "bad one")
+        failure_two = make_int_failure(
+            request_two,
+            "bad two",
+            evaluation_count=2,
+        )
+
+        batch: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            requests=(request_one, request_two),
+            failures=(failure_one, failure_two),
+        )
+
+        assert batch.outcome_indices == ()
+        assert batch.failure_indices == (0, 1)
+        assert batch.records == ()
+        assert batch.evaluation_count == 3
+
+    def test_evaluation_attempt_batch_rejects_misaligned_request(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request_two,
+                candidate=2,
+                value=2.0,
+                score=2.0,
+            ),
+        )
+        failure = make_int_failure(request_two)
+
+        with pytest.raises(ValueError, match="outcome record request"):
+            _ = EvaluationAttemptBatch(
+                requests=(request_one, request_two),
+                outcomes=(outcome,),
+                outcome_indices=(0,),
+                failures=(failure,),
+                failure_indices=(1,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_value_equal_request_copy(self) -> None:
+        request = make_int_request(1, "p-1")
+        equal_but_foreign_request = make_int_request(1, "p-1")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=equal_but_foreign_request,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="outcome record request"):
+            _ = EvaluationAttemptBatch(
+                requests=(request,),
+                outcomes=(outcome,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_failure_reused_for_wrong_slot(
+        self,
+    ) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        failure = make_int_failure(request_one)
+
+        with pytest.raises(ValueError, match="failure request"):
+            _ = EvaluationAttemptBatch(
+                requests=(request_one, request_two),
+                outcomes=(outcome,),
+                outcome_indices=(0,),
+                failures=(failure,),
+                failure_indices=(1,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_duplicate_index(self) -> None:
+        request = make_int_request(1, "p-1")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        failure = make_int_failure(request)
+
+        with pytest.raises(ValueError, match="unique"):
+            _ = EvaluationAttemptBatch(
+                requests=(request,),
+                outcomes=(outcome,),
+                outcome_indices=(0,),
+                failures=(failure,),
+                failure_indices=(0,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_nonmonotonic_partition_indices(
+        self,
+    ) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome_one = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        outcome_two = EvaluationOutcome(
+            observation=Observation(
+                request=request_two,
+                candidate=2,
+                value=2.0,
+                score=2.0,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="strictly increasing"):
+            _ = EvaluationAttemptBatch(
+                requests=(request_one, request_two),
+                outcomes=(outcome_two, outcome_one),
+                outcome_indices=(1, 0),
+            )
+
+    def test_evaluation_attempt_batch_requires_indices_for_mixed_batches(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        failure = make_int_failure(request_two)
+
+        with pytest.raises(ValueError, match="outcome_indices"):
+            _ = EvaluationAttemptBatch(
+                requests=(request_one, request_two),
+                outcomes=(outcome,),
+                failures=(failure,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_bool_index(self) -> None:
+        request = make_int_request(1, "p-1")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+
+        with pytest.raises(TypeError, match="int values"):
+            _ = EvaluationAttemptBatch(
+                requests=(request,),
+                outcomes=(outcome,),
+                outcome_indices=(True,),
+            )
+
+    @pytest.mark.parametrize("invalid_index", (-1, 1))
+    def test_evaluation_attempt_batch_rejects_out_of_range_index(
+        self,
+        invalid_index: int,
+    ) -> None:
+        request = make_int_request(1, "p-1")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="request range"):
+            _ = EvaluationAttemptBatch(
+                requests=(request,),
+                outcomes=(outcome,),
+                outcome_indices=(invalid_index,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_missing_attempt_slot(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="cover every request"):
+            _ = EvaluationAttemptBatch(
+                requests=(request_one, request_two),
+                outcomes=(outcome,),
+                outcome_indices=(0,),
+            )
+
+    def test_evaluation_attempt_batch_counts_zero_cost_failure(self) -> None:
+        request = make_int_request(1, "p-1")
+        failure = make_int_failure(request, evaluation_count=0)
+
+        batch: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            requests=(request,),
+            failures=(failure,),
+        )
+
+        assert batch.evaluation_count == 0
+
+    def test_evaluation_attempt_batch_merges_single_request_attempts(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        request_three = make_int_request(3, "p-3")
+        outcome_one = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        outcome_three = EvaluationOutcome(
+            observation=Observation(
+                request=request_three,
+                candidate=3,
+                value=3.0,
+                score=3.0,
+            ),
+            evaluation_count=2,
+        )
+        failure_two = make_int_failure(request_two, evaluation_count=3)
+
+        batch = EvaluationAttemptBatch[
+            int,
+            Observation[int],
+        ].from_single_request_attempts(
+            (
+                EvaluationAttemptBatch(
+                    requests=(request_one,),
+                    outcomes=(outcome_one,),
+                ),
+                EvaluationAttemptBatch(
+                    requests=(request_two,),
+                    failures=(failure_two,),
+                ),
+                EvaluationAttemptBatch(
+                    requests=(request_three,),
+                    outcomes=(outcome_three,),
+                ),
+            )
+        )
+
+        assert batch.requests == (request_one, request_two, request_three)
+        assert batch.outcome_indices == (0, 2)
+        assert batch.failure_indices == (1,)
+        assert batch.records == (outcome_one.record, outcome_three.record)
+        assert batch.failures == (failure_two,)
+        assert batch.evaluation_count == 6
+
+    def test_evaluation_attempt_batch_merges_empty_single_attempt_sequence(
+        self,
+    ) -> None:
+        batch = EvaluationAttemptBatch[
+            int,
+            Observation[int],
+        ].from_single_request_attempts(())
+
+        assert batch.requests == ()
+        assert batch.outcomes == ()
+        assert batch.failures == ()
+
+    def test_evaluation_attempt_batch_merge_rejects_multi_request_attempt(
+        self,
+    ) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        outcome_one = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        outcome_two = EvaluationOutcome(
+            observation=Observation(
+                request=request_two,
+                candidate=2,
+                value=2.0,
+                score=2.0,
+            ),
+        )
+        attempt = EvaluationAttemptBatch(
+            requests=(request_one, request_two),
+            outcomes=(outcome_one, outcome_two),
+        )
+
+        with pytest.raises(ValueError, match="exactly one request"):
+            _ = EvaluationAttemptBatch[
+                int,
+                Observation[int],
+            ].from_single_request_attempts((attempt,))
+
+    def test_evaluation_attempt_batch_merge_rejects_empty_attempt_element(
+        self,
+    ) -> None:
+        attempt = EvaluationAttemptBatch[int, Observation[int]](requests=())
+
+        with pytest.raises(ValueError, match="exactly one request"):
+            _ = EvaluationAttemptBatch[
+                int,
+                Observation[int],
+            ].from_single_request_attempts((attempt,))
+
+    def test_evaluation_attempt_batch_concatenates_dense_batches(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        request_three = make_int_request(3, "p-3")
+        outcome_one = EvaluationOutcome(
+            observation=Observation(
+                request=request_one,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        outcome_three = EvaluationOutcome(
+            observation=Observation(
+                request=request_three,
+                candidate=3,
+                value=3.0,
+                score=3.0,
+            ),
+        )
+        failure_two = make_int_failure(request_two)
+        first_batch = EvaluationAttemptBatch(
+            requests=(request_one, request_two),
+            outcomes=(outcome_one,),
+            outcome_indices=(0,),
+            failures=(failure_two,),
+            failure_indices=(1,),
+        )
+        second_batch = EvaluationAttemptBatch(
+            requests=(request_three,),
+            outcomes=(outcome_three,),
+        )
+
+        batch = EvaluationAttemptBatch[
+            int,
+            Observation[int],
+        ].concatenate((first_batch, second_batch))
+
+        assert batch.requests == (request_one, request_two, request_three)
+        assert batch.outcome_indices == (0, 2)
+        assert batch.failure_indices == (1,)
+        assert batch.outcomes == (outcome_one, outcome_three)
+        assert batch.failures == (failure_two,)
+
+    def test_evaluation_attempt_batch_single_outcome_view_returns_outcome(
+        self,
+    ) -> None:
+        request = make_int_request(1, "p-1")
+        outcome = EvaluationOutcome(
+            observation=Observation(
+                request=request,
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        attempt = EvaluationAttemptBatch(
+            requests=(request,),
+            outcomes=(outcome,),
+        )
+
+        assert attempt.single_outcome_or_none() is outcome
+
+    def test_evaluation_attempt_batch_single_outcome_view_returns_none_for_failure(
+        self,
+    ) -> None:
+        request = make_int_request(1, "p-1")
+        failure = make_int_failure(request)
+        attempt: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            requests=(request,),
+            failures=(failure,),
+        )
+
+        assert attempt.single_outcome_or_none() is None
+
+    def test_evaluation_attempt_batch_single_outcome_view_rejects_multi_slot_batch(
+        self,
+    ) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        failure_one = make_int_failure(request_one)
+        failure_two = make_int_failure(request_two)
+        attempt: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            requests=(request_one, request_two),
+            failures=(failure_one, failure_two),
+        )
+
+        with pytest.raises(ValueError, match="exactly one request"):
+            result = attempt.single_outcome_or_none()
+            assert result is None
 
     def test_evaluation_outcome_preserves_scalar_refinement_payload(self) -> None:
         observation = Observation(
@@ -673,6 +1302,120 @@ class RuntimeArtifactsTests:
         assert report.evaluation_count == 3
         assert report.trace.events == ()
         assert report.refinements == ()
+        assert report.failures == ()
+
+    def test_terminal_artifacts_preserve_failure_fields(self) -> None:
+        proposal_one = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal_one,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        vector_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=proposal_one,
+            candidate=4,
+            objective_values=(16.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        failure = make_int_failure(make_int_request(2, "p-2"), "bad candidate")
+
+        result = RunResult[int].from_observations(
+            observations=(observation,),
+            failures=(failure,),
+        )
+        report = RunReport[int, Observation[int]].from_records(
+            records=(observation,),
+            failures=(failure,),
+        )
+        surface = NondominatedRunSurface[int].from_records(
+            records=(vector_record,),
+            failures=(failure,),
+        )
+        surface_from_report = NondominatedRunSurface[int].from_report(
+            RunReport[int, ObjectiveVectorRecord[int]].from_records(
+                records=(vector_record,),
+                failures=(failure,),
+            ),
+        )
+
+        assert result.observations == (observation,)
+        assert report.records == (observation,)
+        assert surface.records == (vector_record,)
+        assert result.failures == (failure,)
+        assert report.failures == (failure,)
+        assert surface.failures == (failure,)
+        assert surface_from_report.failures == (failure,)
+        assert result.evaluation_count == 2
+        assert report.evaluation_count == 2
+        assert surface.evaluation_count == 2
+
+    def test_terminal_artifacts_default_count_includes_failure_cost(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        failure = make_int_failure(
+            make_int_request(2, "p-2"),
+            "bad candidate",
+            evaluation_count=3,
+        )
+
+        result = RunResult[int].from_observations(
+            observations=(observation,),
+            failures=(failure,),
+        )
+
+        assert result.evaluation_count == 4
+
+    def test_terminal_artifacts_reject_evaluation_count_below_failure_cost(self) -> None:
+        proposal_one = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal_one,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        failure = make_int_failure(make_int_request(2, "p-2"), "bad candidate")
+
+        with pytest.raises(ValueError, match="evaluation_count"):
+            _ = RunResult[int].from_observations(
+                observations=(observation,),
+                failures=(failure,),
+                evaluation_count=1,
+            )
+
+        with pytest.raises(ValueError, match="evaluation_count"):
+            _ = RunReport[int, Observation[int]].from_records(
+                records=(observation,),
+                failures=(failure,),
+                evaluation_count=1,
+            )
+
+    def test_terminal_failure_fields_pickle_round_trip(self) -> None:
+        proposal_one = Proposal(candidate=4, proposal_id="p-1")
+        observation = Observation(
+            proposal=proposal_one,
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        failure = make_int_failure(make_int_request(2, "p-2"), "bad candidate")
+        result = RunResult[int].from_observations(
+            observations=(observation,),
+            failures=(failure,),
+        )
+
+        restored_result = cast(
+            RunResult[int],
+            pickle.loads(pickle.dumps(result)),
+        )
+
+        assert restored_result == result
+        assert restored_result.failures == (failure,)
 
     def test_run_report_preserves_record_aligned_refinements(self) -> None:
         proposal_one = Proposal(candidate=4, proposal_id="p-1")

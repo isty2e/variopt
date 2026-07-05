@@ -37,9 +37,13 @@ The generated API pages are limited to the supported facade modules:
 Those pages intentionally stop at the facade boundary. Importable deep
 submodules are not automatically part of the stable public contract.
 
-Refinement-related public artifacts are documented through the root facade and
-`variopt.artifacts`: `CandidateRefinement`, `EvaluationOutcome`, `RunReport`,
-`RunResult`, and `NondominatedRunSurface`. Kernel implementation contracts used
-by those examples, including `ProposalBatchQuery`, `KernelDiagnostics`,
-`KernelStatus`, `ExecutionResources`, and `NestedParallelismPolicy`, are also
-root-facade names.
+Execution-related public artifacts are documented through the root facade and
+`variopt.artifacts`: `CandidateRefinement`, `EvaluationOutcome`,
+`EvaluationFailure`, `EvaluationExceptionSnapshot`, `EvaluationAttemptBatch`,
+`RunReport`, `RunResult`, and `NondominatedRunSurface`. Run-method attempt
+assimilation exposes `UnsupportedEvaluationFailureError` for optimizers that
+cannot safely consume recorded failures; study orchestration exposes
+`RunExecutionFailed` for hard failures with partial run state. Kernel
+implementation contracts used by those examples, including `ProposalBatchQuery`,
+`KernelDiagnostics`, `KernelStatus`, `ExecutionResources`, and
+`NestedParallelismPolicy`, are also root-facade names.

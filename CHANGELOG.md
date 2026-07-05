@@ -34,6 +34,28 @@ format. Stability guarantees for the public surface are documented in the
   built-in CSA, DE, local-search, geometry, and projection hot loops to avoid
   repeated full-candidate validation after an operation-level validation
   boundary.
+- Added `EvaluationFailure`, `EvaluationExceptionSnapshot`, and
+  `EvaluationAttemptBatch` artifacts for request-aligned recording of user-code
+  evaluation failures without mixing them into successful records.
+- Added `RunMethod.tell_attempts(...)` and
+  `UnsupportedEvaluationFailureError` so optimizers can distinguish success-only
+  attempt batches from recorded evaluation failures at the assimilation boundary.
+- Added `RunExecutionFailed` so hard study execution failures carry partial
+  report/state and checkpoint-safe report/state projections when available.
+- Built-in sequential, joblib, async joblib, and MPI evaluators now expose
+  `evaluate_attempts(...)` hooks that return `EvaluationAttemptBatch` values and
+  preserve user-code evaluation failures separately from successful outcomes.
+- Direct and built-in local-search kernels now use `EvaluationAttemptBatch`
+  runner/result contracts so failed local-search trials remain visible instead
+  of being collapsed into successful optimized outcomes.
+
+### Fixed
+
+- `CSAOptimizer` now consumes recorded failed attempts from pending proposal,
+  generation, and proposal-attribution lifecycle state without inserting failed
+  candidates into CSA banks or adaptive score evidence. GA and DE-family
+  population optimizers continue to reject failure assimilation explicitly until
+  a partial-generation policy is defined for them.
 
 ## [0.1.0] - 2026-06-15
 

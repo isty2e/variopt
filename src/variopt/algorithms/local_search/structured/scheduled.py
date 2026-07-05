@@ -16,12 +16,13 @@ from ....kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from ....outcomes import EvaluationOutcome
+from ....outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ....spaces import LeafPath
 from .neighborhood import BoundaryT, DiscreteLeafSpace, StructuredCandidateT
 from .runtime.prepared import (
     PreparedStructuredLocalSearchRuntime,
     prepare_structured_local_search_runtime,
+    structured_episode_attempt_batch,
 )
 from .runtime.search import (
     first_improving_pair_move_outcome,
@@ -38,12 +39,9 @@ class StructuredScheduledLocalSearchKernel(
             StructuredCandidateT,
             Observation[StructuredCandidateT],
         ],
-        tuple[
-            EvaluationOutcome[
-                StructuredCandidateT,
-                Observation[StructuredCandidateT],
-            ],
-            ...,
+        EvaluationAttemptBatch[
+            StructuredCandidateT,
+            Observation[StructuredCandidateT],
         ],
     ],
     Generic[BoundaryT, StructuredCandidateT],
@@ -83,16 +81,18 @@ class StructuredScheduledLocalSearchKernel(
             msg = "pair_move_leaf_limit must be positive"
             raise ValueError(msg)
 
-    def _evaluate_candidate(
+    def _evaluate_candidate_attempt(
         self,
         *,
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         candidate: StructuredCandidateT,
+        proposal: Proposal[StructuredCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Evaluate one candidate through the supplied evaluator runner."""
-        return runtime.evaluate_candidate(
+        return runtime.evaluate_candidate_attempt(
             candidate=candidate,
+            proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
 
@@ -102,7 +102,7 @@ class StructuredScheduledLocalSearchKernel(
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal: Proposal[StructuredCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Evaluate one original proposal once without local search."""
         return runtime.evaluate_original_proposal(
             proposal=proposal,
@@ -147,9 +147,10 @@ class StructuredScheduledLocalSearchKernel(
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
         reserved_count: int,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Run one scheduled local-search episode for one original proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
+        failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
         context = self._proposal_context(runtime=runtime, proposal_index=proposal_index)
         proposal_evaluation_spec = runtime.proposal_evaluation_spec(
             proposal_index=proposal_index,
@@ -161,11 +162,20 @@ class StructuredScheduledLocalSearchKernel(
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
 
-        current_outcome = self._evaluate_candidate(
+        current_attempt = self._evaluate_candidate_attempt(
             runtime=runtime,
             candidate=proposal.candidate,
+            proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
+        current_outcome = current_attempt.single_outcome_or_none()
+        if current_outcome is None:
+            failed_attempts.append(current_attempt)
+            return structured_episode_attempt_batch(
+                outcome=None,
+                failed_attempts=failed_attempts,
+            )
+
         current_record = current_outcome.record
         current_candidate = current_record.candidate
         current_value = current_record.value
@@ -181,30 +191,32 @@ class StructuredScheduledLocalSearchKernel(
         budget_exhausted = False
 
         while completed_steps < episode_max_steps:
-            proposed_outcome, neighbor_evaluation_count, budget_exhausted = (
-                first_improving_single_leaf_outcome(
+            single_scan_result = first_improving_single_leaf_outcome(
+                runtime=runtime,
+                candidate=current_candidate,
+                current_score=current_score,
+                leaf_schedule=leaf_schedule,
+                proposal_evaluation_spec=proposal_evaluation_spec,
+                reserved_count=reserved_count,
+            )
+            evaluation_count += single_scan_result.evaluation_count
+            failed_attempts.extend(single_scan_result.failed_attempts)
+            proposed_outcome = single_scan_result.improved_outcome
+            budget_exhausted = single_scan_result.budget_exhausted
+            if proposed_outcome is None and not budget_exhausted:
+                pair_scan_result = first_improving_pair_move_outcome(
                     runtime=runtime,
                     candidate=current_candidate,
                     current_score=current_score,
                     leaf_schedule=leaf_schedule,
                     proposal_evaluation_spec=proposal_evaluation_spec,
+                    pair_move_leaf_limit=self.pair_move_leaf_limit,
                     reserved_count=reserved_count,
                 )
-            )
-            evaluation_count += neighbor_evaluation_count
-            if proposed_outcome is None and not budget_exhausted:
-                proposed_outcome, neighbor_evaluation_count, budget_exhausted = (
-                    first_improving_pair_move_outcome(
-                        runtime=runtime,
-                        candidate=current_candidate,
-                        current_score=current_score,
-                        leaf_schedule=leaf_schedule,
-                        proposal_evaluation_spec=proposal_evaluation_spec,
-                        pair_move_leaf_limit=self.pair_move_leaf_limit,
-                        reserved_count=reserved_count,
-                    )
-                )
-                evaluation_count += neighbor_evaluation_count
+                evaluation_count += pair_scan_result.evaluation_count
+                failed_attempts.extend(pair_scan_result.failed_attempts)
+                proposed_outcome = pair_scan_result.improved_outcome
+                budget_exhausted = pair_scan_result.budget_exhausted
 
             if budget_exhausted:
                 break
@@ -233,7 +245,7 @@ class StructuredScheduledLocalSearchKernel(
                 refined_candidate=current_candidate,
             )
 
-        return EvaluationOutcome(
+        outcome = EvaluationOutcome(
             record=Observation.from_objective_value(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
@@ -251,6 +263,10 @@ class StructuredScheduledLocalSearchKernel(
             refinement=refinement,
             candidate_equal=runtime.query.problem.space.candidates_equal,
         )
+        return structured_episode_attempt_batch(
+            outcome=outcome,
+            failed_attempts=failed_attempts,
+        )
 
     @override
     def run(
@@ -258,22 +274,22 @@ class StructuredScheduledLocalSearchKernel(
         query: ProposalBatchQuery[BoundaryT, StructuredCandidateT],
         runner: Callable[
             [ProposalBatchQuery[BoundaryT, StructuredCandidateT]],
-            tuple[EvaluationOutcome[StructuredCandidateT], ...],
+            EvaluationAttemptBatch[StructuredCandidateT],
         ],
-    ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Run scheduled local search for each proposal in a batch.
 
         Parameters
         ----------
         query : ProposalBatchQuery[BoundaryT, StructuredCandidateT]
             Proposal batch and evaluation context to optimize.
-        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], tuple[EvaluationOutcome[StructuredCandidateT], ...]]
+        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], EvaluationAttemptBatch[StructuredCandidateT]]
             Evaluator runner used to score single-leaf and pair moves.
 
         Returns
         -------
-        tuple[EvaluationOutcome[StructuredCandidateT], ...]
-            Locally improved outcomes aligned to ``query.proposals``.
+        EvaluationAttemptBatch[StructuredCandidateT]
+            Locally improved attempts and recorded failed local-search trials.
         """
         runtime: PreparedStructuredLocalSearchRuntime[
             BoundaryT,
@@ -282,12 +298,14 @@ class StructuredScheduledLocalSearchKernel(
             query=query,
             runner=runner,
         )
-        return tuple(
-            self._optimize_proposal(
-                runtime=runtime,
-                proposal_index=proposal_index,
-                proposal=proposal,
-                reserved_count=len(query.proposals) - proposal_index - 1,
+        return EvaluationAttemptBatch[StructuredCandidateT].concatenate(
+            tuple(
+                self._optimize_proposal(
+                    runtime=runtime,
+                    proposal_index=proposal_index,
+                    proposal=proposal,
+                    reserved_count=len(query.proposals) - proposal_index - 1,
+                )
+                for proposal_index, proposal in enumerate(query.proposals)
             )
-            for proposal_index, proposal in enumerate(query.proposals)
         )

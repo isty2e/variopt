@@ -10,8 +10,12 @@ from typing_extensions import override
 
 from tests.numeric_support import approx_equal
 from variopt import (
+    EvaluationAttemptBatch,
     EvaluationBudget,
+    EvaluationExceptionSnapshot,
+    EvaluationFailure,
     EvaluationOutcome,
+    EvaluationRequest,
     Objective,
     Observation,
     OptimizationDirection,
@@ -48,22 +52,40 @@ CandidateRunnerT = TypeVar("CandidateRunnerT")
 
 def evaluate_query_directly(
     query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
-) -> tuple[EvaluationOutcome[CandidateRunnerT], ...]:
+) -> EvaluationAttemptBatch[CandidateRunnerT]:
     """Evaluate one proposal batch directly through the problem objective."""
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(query.proposals))
 
-    return tuple(
+    requests = tuple(
+        EvaluationRequest(proposal=proposal)
+        for proposal in query.proposals
+    )
+    outcomes = tuple(
         EvaluationOutcome(
             observation=Observation.from_objective_value(
-                proposal=proposal,
-                candidate=proposal.candidate,
+                request=request,
+                candidate=request.candidate,
                 value=query.problem.objective.evaluate(proposal.candidate),
                 direction=query.problem.direction,
             ),
             evaluation_count=1,
         )
-        for proposal in query.proposals
+        for proposal, request in zip(query.proposals, requests, strict=True)
+    )
+    return EvaluationAttemptBatch(
+        requests=requests,
+        outcomes=outcomes,
+    )
+
+
+def attempt_batch_from_outcomes(
+    outcomes: tuple[EvaluationOutcome[CandidateRunnerT], ...],
+) -> EvaluationAttemptBatch[CandidateRunnerT]:
+    """Build a dense success-only attempt batch from outcome fixtures."""
+    return EvaluationAttemptBatch(
+        requests=tuple(outcome.record.request for outcome in outcomes),
+        outcomes=outcomes,
     )
 
 
@@ -161,7 +183,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             evaluate_query_directly,
-        )
+        ).outcomes
 
         assert len(outcomes) == 1
         outcome = outcomes[0]
@@ -198,7 +220,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             evaluate_query_directly,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert approx_equal(
@@ -259,7 +281,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             evaluate_query_directly,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert objective_values_seen == [-10.0]
@@ -311,13 +333,225 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             evaluate_query_directly,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.proposal.proposal_id == "p-1"
         assert outcome.observation.candidate == 1.5
         assert outcome.observation.value == 10.0
         assert outcome.evaluation_count == 2
+
+    def test_failed_scipy_trial_is_preserved_and_skipped(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        failed_score_seen: float | None = None
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            nonlocal failed_score_seen
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            initial_score = objective_in_coordinate_space(initial_coordinates)
+            failed_score_seen = objective_in_coordinate_space((2.0,))
+            return FakeScipyOptimizeResult(
+                x=initial_coordinates,
+                fun=initial_score,
+                nfev=2,
+                success=False,
+                message="stopped after failed trial",
+            )
+
+        def failing_trial_runner(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> EvaluationAttemptBatch[float]:
+            proposal = local_query.proposals[0]
+            request: EvaluationRequest[float] = EvaluationRequest(proposal=proposal)
+            if proposal.candidate == 2.0:
+                failure = EvaluationFailure[float](
+                    request=request,
+                    exception=EvaluationExceptionSnapshot.from_exception(
+                        ValueError("bad trial")
+                    ),
+                )
+                return EvaluationAttemptBatch(
+                    requests=(request,),
+                    failures=(failure,),
+                )
+            return evaluate_query_directly(local_query)
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        attempts = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            failing_trial_runner,
+        )
+
+        assert failed_score_seen == float("inf")
+        assert attempts.outcome_indices == (0,)
+        assert attempts.failure_indices == (1,)
+        assert attempts.outcomes[0].observation.candidate == 4.0
+        assert attempts.outcomes[0].kernel_diagnostics is not None
+        assert attempts.outcomes[0].kernel_diagnostics.status == KernelStatus.STOPPED
+        assert attempts.failures[0].candidate == 2.0
+        assert attempts.failures[0].exception.message == "bad trial"
+
+    def test_scipy_all_failed_attempts_return_failure_only_batch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            failed_score = objective_in_coordinate_space(initial_coordinates)
+            assert failed_score == float("inf")
+            return FakeScipyOptimizeResult(
+                x=initial_coordinates,
+                fun=failed_score,
+                nfev=1,
+                success=False,
+                message="all attempts failed",
+            )
+
+        def failing_runner(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> EvaluationAttemptBatch[float]:
+            proposal = local_query.proposals[0]
+            request: EvaluationRequest[float] = EvaluationRequest(proposal=proposal)
+            failure = EvaluationFailure[float](
+                request=request,
+                exception=EvaluationExceptionSnapshot.from_exception(
+                    ValueError("bad scipy attempt")
+                ),
+            )
+            return EvaluationAttemptBatch(
+                requests=(request,),
+                failures=(failure,),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        attempts = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            failing_runner,
+        )
+
+        assert attempts.outcomes == ()
+        assert attempts.outcome_indices == ()
+        assert attempts.failure_indices == (0, 1)
+        assert tuple(failure.candidate for failure in attempts.failures) == (4.0, 4.0)
+        assert tuple(failure.proposal_id for failure in attempts.failures) == (
+            None,
+            "p-1",
+        )
+        assert all(
+            failure.exception.message == "bad scipy attempt"
+            for failure in attempts.failures
+        )
+        assert attempts.evaluation_count == 2
+
+    def test_scipy_rejects_multi_slot_runner_attempt_for_single_proposal(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            _ = objective_in_coordinate_space(initial_coordinates)
+            return FakeScipyOptimizeResult(
+                x=initial_coordinates,
+                fun=0.0,
+                nfev=1,
+                success=True,
+                message="ok",
+            )
+
+        def malformed_runner(
+            local_query: ProposalBatchQuery[float | int, float],
+        ) -> EvaluationAttemptBatch[float]:
+            proposal = local_query.proposals[0]
+            return evaluate_query_directly(
+                ProposalBatchQuery(
+                    problem=local_query.problem,
+                    proposals=(proposal, Proposal(candidate=proposal.candidate)),
+                    execution_resources=local_query.execution_resources,
+                )
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="kernel runner must return exactly one attempt for one proposal",
+        ):
+            _ = kernel.run(
+                self.make_query(problem=problem, candidate=4.0),
+                malformed_runner,
+            )
 
     def test_scipy_reserves_budget_for_later_batch_proposals(
         self,
@@ -375,7 +609,7 @@ class ScipyMinimizeKernelTests:
             evaluation_budget=evaluation_budget,
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert evaluation_budget.remaining == 0
         assert tuple(outcome.evaluation_count for outcome in outcomes) == (1, 1)
@@ -430,23 +664,25 @@ class ScipyMinimizeKernelTests:
 
         def elapsed_runner(
             local_query: ProposalBatchQuery[float | int, float],
-        ) -> tuple[EvaluationOutcome[float], ...]:
+        ) -> EvaluationAttemptBatch[float]:
             nonlocal runner_call_count
             runner_call_count += 1
             proposal = local_query.proposals[0]
-            return (
-                EvaluationOutcome(
-                    observation=Observation.from_objective_value(
-                        proposal=proposal,
-                        candidate=proposal.candidate,
-                        value=local_query.problem.objective.evaluate(
-                            proposal.candidate
+            return attempt_batch_from_outcomes(
+                (
+                    EvaluationOutcome(
+                        observation=Observation.from_objective_value(
+                            proposal=proposal,
+                            candidate=proposal.candidate,
+                            value=local_query.problem.objective.evaluate(
+                                proposal.candidate
+                            ),
+                            direction=local_query.problem.direction,
+                            elapsed_seconds=0.25,
                         ),
-                        direction=local_query.problem.direction,
-                        elapsed_seconds=0.25,
+                        evaluation_count=1,
                     ),
-                    evaluation_count=1,
-                ),
+                )
             )
 
         monkeypatch.setattr(
@@ -458,7 +694,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             elapsed_runner,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert runner_call_count == 1
@@ -510,7 +746,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             evaluate_query_directly,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.value == 10.0
@@ -556,7 +792,7 @@ class ScipyMinimizeKernelTests:
 
         def counting_runner(
             local_query: ProposalBatchQuery[float | int, float],
-        ) -> tuple[EvaluationOutcome[float], ...]:
+        ) -> EvaluationAttemptBatch[float]:
             nonlocal runner_call_count
             runner_call_count += 1
             return evaluate_query_directly(local_query)
@@ -570,7 +806,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             counting_runner,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert runner_call_count == 1
@@ -621,7 +857,7 @@ class ScipyMinimizeKernelTests:
 
         def counting_runner(
             local_query: ProposalBatchQuery[float | int, float],
-        ) -> tuple[EvaluationOutcome[float], ...]:
+        ) -> EvaluationAttemptBatch[float]:
             nonlocal runner_call_count
             runner_call_count += 1
             return evaluate_query_directly(local_query)
@@ -635,7 +871,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             counting_runner,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert runner_call_count == 1
@@ -691,7 +927,7 @@ class ScipyMinimizeKernelTests:
         outcomes = kernel.run(
             self.make_query(problem=problem, candidate=4.0),
             evaluate_query_directly,
-        )
+        ).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == 4.0
@@ -768,7 +1004,7 @@ class ScipyMinimizeKernelTests:
             fake_run_scipy_minimize,
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert tuple(outcome.observation.candidate for outcome in outcomes) == (
             4.0,
@@ -810,7 +1046,7 @@ class ScipyMinimizeKernelTests:
             ),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         space.validate(outcome.observation.candidate)
@@ -853,7 +1089,7 @@ class ScipyMinimizeKernelTests:
         )
 
         with pytest.raises(TypeError, match="RealSpace"):
-            _ = kernel.run(query, evaluate_query_directly)
+            _ = kernel.run(query, evaluate_query_directly).outcomes
 
     def test_context_can_disable_local_search(self) -> None:
         problem = Problem(
@@ -873,7 +1109,7 @@ class ScipyMinimizeKernelTests:
             proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == 4.0
@@ -912,25 +1148,27 @@ class ScipyMinimizeKernelTests:
 
         def assert_spec_forwarded(
             local_query: ProposalBatchQuery[float | int, float],
-        ) -> tuple[EvaluationOutcome[float], ...]:
+        ) -> EvaluationAttemptBatch[float]:
             assert local_query.proposal_evaluation_specs == (spec,)
             proposal = local_query.proposals[0]
-            return (
-                EvaluationOutcome(
-                    observation=Observation.from_objective_value(
-                        proposal=proposal,
-                        proposal_evaluation_spec=spec,
-                        candidate=proposal.candidate,
-                        value=local_query.problem.objective.evaluate(
-                            proposal.candidate
+            return attempt_batch_from_outcomes(
+                (
+                    EvaluationOutcome(
+                        observation=Observation.from_objective_value(
+                            proposal=proposal,
+                            proposal_evaluation_spec=spec,
+                            candidate=proposal.candidate,
+                            value=local_query.problem.objective.evaluate(
+                                proposal.candidate
+                            ),
+                            direction=local_query.problem.direction,
                         ),
-                        direction=local_query.problem.direction,
+                        evaluation_count=1,
                     ),
-                    evaluation_count=1,
-                ),
+                )
             )
 
-        outcomes = kernel.run(query, assert_spec_forwarded)
+        outcomes = kernel.run(query, assert_spec_forwarded).outcomes
 
         assert outcomes[0].observation.proposal_evaluation_spec is spec
 
@@ -987,22 +1225,24 @@ class ScipyMinimizeKernelTests:
 
         def assert_spec_forwarded(
             local_query: ProposalBatchQuery[float | int, float],
-        ) -> tuple[EvaluationOutcome[float], ...]:
+        ) -> EvaluationAttemptBatch[float]:
             assert local_query.proposal_evaluation_specs == (spec,)
             proposal = local_query.proposals[0]
-            return (
-                EvaluationOutcome(
-                    observation=Observation.from_objective_value(
-                        proposal=proposal,
-                        proposal_evaluation_spec=spec,
-                        candidate=proposal.candidate,
-                        value=local_query.problem.objective.evaluate(
-                            proposal.candidate
+            return attempt_batch_from_outcomes(
+                (
+                    EvaluationOutcome(
+                        observation=Observation.from_objective_value(
+                            proposal=proposal,
+                            proposal_evaluation_spec=spec,
+                            candidate=proposal.candidate,
+                            value=local_query.problem.objective.evaluate(
+                                proposal.candidate
+                            ),
+                            direction=local_query.problem.direction,
                         ),
-                        direction=local_query.problem.direction,
+                        evaluation_count=1,
                     ),
-                    evaluation_count=1,
-                ),
+                )
             )
 
         monkeypatch.setattr(
@@ -1011,7 +1251,7 @@ class ScipyMinimizeKernelTests:
             fake_run_scipy_minimize,
         )
 
-        outcomes = kernel.run(query, assert_spec_forwarded)
+        outcomes = kernel.run(query, assert_spec_forwarded).outcomes
 
         assert outcomes[0].observation.proposal_evaluation_spec is spec
         assert outcomes[0].observation.proposal.proposal_id == "p-1"
@@ -1072,7 +1312,7 @@ class ScipyMinimizeKernelTests:
             "run_scipy_minimize",
             fake_run_scipy_minimize,
         )
-        _ = kernel.run(query, evaluate_query_directly)
+        _ = kernel.run(query, evaluate_query_directly).outcomes
 
         assert captured_options == [{"maxiter": 3}]
 
@@ -1152,7 +1392,7 @@ class ScipyMinimizeKernelTests:
             fake_run_scipy_minimize,
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert len(outcomes) == 2
         assert codec_call_count == 1
@@ -1191,7 +1431,7 @@ class ScipyMinimizeKernelTests:
             classmethod(reject_from_space),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert outcomes[0].observation.candidate == 4.0
 
@@ -1235,7 +1475,7 @@ class ScipyMinimizeKernelTests:
             classmethod(reject_from_space),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert tuple(outcome.observation.candidate for outcome in outcomes) == (
             4.0,
@@ -1271,7 +1511,7 @@ class ScipyMinimizeKernelTests:
 
         def reject_runner(
             empty_query: ProposalBatchQuery[float | int, float],
-        ) -> tuple[EvaluationOutcome[float], ...]:
+        ) -> EvaluationAttemptBatch[float]:
             _ = empty_query
             raise AssertionError("empty local-search batch should not call runner")
 
@@ -1281,7 +1521,7 @@ class ScipyMinimizeKernelTests:
             classmethod(reject_from_space),
         )
 
-        outcomes = kernel.run(query, reject_runner)
+        outcomes = kernel.run(query, reject_runner).outcomes
 
         assert outcomes == ()
 
@@ -1304,7 +1544,7 @@ class ScipyMinimizeKernelTests:
             ),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert outcomes == ()
 
@@ -1388,7 +1628,7 @@ class ScipyMinimizeKernelTests:
             fake_run_scipy_minimize,
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert tuple(outcome.observation.candidate for outcome in outcomes) == (
             4.0,
@@ -1471,8 +1711,8 @@ class ScipyMinimizeKernelTests:
             fake_run_scipy_minimize,
         )
 
-        first_outcomes = kernel.run(first_query, evaluate_query_directly)
-        second_outcomes = kernel.run(second_query, evaluate_query_directly)
+        first_outcomes = kernel.run(first_query, evaluate_query_directly).outcomes
+        second_outcomes = kernel.run(second_query, evaluate_query_directly).outcomes
 
         assert tuple(spaces_seen) == (first_space, second_space)
         assert first_outcomes[0].observation.candidate == 4.0
@@ -1513,7 +1753,7 @@ class ScipyMinimizeKernelTests:
         )
 
         with pytest.raises(TypeError, match="ProposalLocalSearchContext hints"):
-            _ = kernel.run(query, evaluate_query_directly)
+            _ = kernel.run(query, evaluate_query_directly).outcomes
 
 
 def record_real(candidate: RecordCandidate, field_name: str) -> float:

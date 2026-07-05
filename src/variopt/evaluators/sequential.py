@@ -12,9 +12,9 @@ from ..artifacts import (
     Observation,
     RequestAlignedEvaluationRecord,
 )
-from ..evaluation_pipeline import evaluate_request_outcome
+from ..evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ..execution import ExecutionResources, NestedParallelismPolicy
-from ..outcomes import EvaluationOutcome
+from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT
 from .base import Evaluator
@@ -86,4 +86,36 @@ class SequentialEvaluator(
                 request=request,
             )
             for request in requests
+        )
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT],
+        requests: Sequence[EvaluationRequest[CandidateT]],
+    ) -> EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]:
+        """Execute a request batch into a dense success/failure attempt batch.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT]
+            Problem that defines evaluation semantics.
+        requests : Sequence[EvaluationRequest[CandidateT]]
+            Request batch to execute.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]
+            Dense attempt batch aligned to ``requests``.
+        """
+        return EvaluationAttemptBatch[
+            CandidateT,
+            SequentialEvaluationRecordT,
+        ].from_single_request_attempts(
+            tuple(
+                evaluate_request_attempt(
+                    problem=problem,
+                    request=request,
+                )
+                for request in requests
+            )
         )

@@ -1,6 +1,7 @@
 """Aggregate reducer state for CSA proposal adaptation."""
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 
 from typing_extensions import Self
@@ -275,6 +276,32 @@ class CSAProposalState:
         return matched_attribution, replace(
             self,
             pending_attributions=tuple(remaining_attributions),
+        )
+
+    def remove_pending_attributions(self, proposal_ids: AbstractSet[str]) -> Self:
+        """Return a state with selected pending attributions discarded.
+
+        Parameters
+        ----------
+        proposal_ids : collections.abc.Set[str]
+            Proposal identifiers whose in-flight attributions should be
+            removed without recording score credit.
+
+        Returns
+        -------
+        Self
+            Proposal state with matching pending attributions removed.
+        """
+        if not proposal_ids or len(self.pending_attributions) == 0:
+            return self
+
+        return replace(
+            self,
+            pending_attributions=tuple(
+                attribution
+                for attribution in self.pending_attributions
+                if attribution.proposal_id not in proposal_ids
+            ),
         )
 
     def family_stat_for_key(self, family_key: str) -> ProposalFamilyStat | None:

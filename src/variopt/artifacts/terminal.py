@@ -10,6 +10,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT
+from .attempts import EvaluationFailure
 from .records import ObjectiveVectorRecord, Observation, RequestAlignedEvaluationRecord
 from .refinement import CandidateRefinement, require_matching_refined_candidate
 
@@ -166,6 +167,26 @@ def _optional_refinement_tuple(
     return tuple(refinements)
 
 
+def _optional_failure_tuple(
+    failures: Sequence[EvaluationFailure[CandidateT]] | None,
+) -> tuple[EvaluationFailure[CandidateT], ...]:
+    if failures is None:
+        return ()
+
+    return tuple(failures)
+
+
+def _terminal_failure_evaluation_count(
+    failures: Sequence[EvaluationFailure[CandidateT]],
+) -> int:
+    for failure in failures:
+        if type(failure) is not EvaluationFailure:
+            msg = "failures must contain EvaluationFailure values"
+            raise TypeError(msg)
+
+    return sum(failure.evaluation_count for failure in failures)
+
+
 def _initialize_dataclass_fields(
     instance: FrozenGenericSlotsCompat,
     *,
@@ -272,12 +293,16 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
         Optional record-aligned refinement provenance. An empty tuple means no
         refinement metadata was recorded for the run.
+    failures : tuple[EvaluationFailure[CandidateT], ...], default=()
+        Recorded failed evaluation attempts. Successful records remain in
+        ``records`` only.
     """
 
     records: tuple[RunRecordT, ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
+    failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
     _candidate_equal: CandidateEquality[CandidateT] | None = field(
         default=None,
@@ -318,7 +343,8 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
-        if self.evaluation_count < len(self.records):
+        failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
+        if self.evaluation_count < len(self.records) + failure_evaluation_count:
             msg = "evaluation_count must be at least the number of records"
             raise ValueError(msg)
 
@@ -352,6 +378,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Build a terminal report from an arbitrary record sequence.
@@ -368,6 +395,8 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             Optional record-aligned refinement provenance. ``None`` keeps the
             compact no-metadata sentinel. Aligned all-``None`` metadata is
             canonicalized to the same sentinel.
+        failures : Sequence[EvaluationFailure[CandidateT]] | None, optional
+            Recorded failed evaluation attempts.
         candidate_equal : CandidateEquality[CandidateT] | None, optional
             Explicit candidate equality predicate used to validate refinement
             alignment. When absent, strict scalar Python equality is used.
@@ -380,7 +409,9 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
         refinement_tuple = _optional_refinement_tuple(refinements)
-        normalized_evaluation_count = len(record_tuple)
+        failure_tuple = _optional_failure_tuple(failures)
+        failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
+        normalized_evaluation_count = len(record_tuple) + failure_evaluation_count
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
@@ -389,6 +420,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
+            failures=failure_tuple,
             candidate_equal=candidate_equal,
         )
 
@@ -410,6 +442,9 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
         Optional observation-aligned refinement provenance. An empty tuple
         means no refinement metadata was recorded for the run.
+    failures : tuple[EvaluationFailure[CandidateT], ...], default=()
+        Recorded failed evaluation attempts. Successful scalar observations
+        remain in ``observations`` only.
     """
 
     best_observation: Observation[CandidateT] | None
@@ -417,6 +452,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
+    failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
     _candidate_equal: CandidateEquality[CandidateT] | None = field(
         default=None,
@@ -453,7 +489,8 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
-        if self.evaluation_count < len(self.observations):
+        failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
+        if self.evaluation_count < len(self.observations) + failure_evaluation_count:
             msg = "evaluation_count must be at least the number of observations"
             raise ValueError(msg)
 
@@ -505,6 +542,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Build a scalar run summary from an observation history.
@@ -520,6 +558,8 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
             Optional observation-aligned refinement provenance. ``None`` keeps
             the compact no-metadata sentinel.
+        failures : Sequence[EvaluationFailure[CandidateT]] | None, optional
+            Recorded failed evaluation attempts.
         candidate_equal : CandidateEquality[CandidateT] | None, optional
             Explicit candidate equality predicate used to validate refinement
             alignment. When absent, strict scalar Python equality is used.
@@ -532,7 +572,9 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         observation_tuple = tuple(observations)
         normalized_trace = Trace() if trace is None else trace
         refinement_tuple = _optional_refinement_tuple(refinements)
-        normalized_evaluation_count = len(observation_tuple)
+        failure_tuple = _optional_failure_tuple(failures)
+        failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
+        normalized_evaluation_count = len(observation_tuple) + failure_evaluation_count
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
@@ -543,6 +585,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 evaluation_count=normalized_evaluation_count,
                 trace=normalized_trace,
                 refinements=refinement_tuple,
+                failures=failure_tuple,
                 candidate_equal=candidate_equal,
             )
 
@@ -557,6 +600,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
+            failures=failure_tuple,
             candidate_equal=candidate_equal,
         )
 
@@ -648,6 +692,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
         Optional record-aligned refinement provenance. An empty tuple means no
         refinement metadata was recorded for the run.
+    failures : tuple[EvaluationFailure[CandidateT], ...], default=()
+        Recorded failed evaluation attempts. Successful vector records remain
+        in ``records`` only.
     """
 
     nondominated_records: tuple[ObjectiveVectorRecord[CandidateT], ...]
@@ -655,6 +702,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
+    failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
     _candidate_equal: CandidateEquality[CandidateT] | None = field(
         default=None,
@@ -698,6 +746,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         evaluation_count: int,
         trace: Trace,
         refinements: tuple[CandidateRefinement[CandidateT] | None, ...],
+        failures: tuple[EvaluationFailure[CandidateT], ...],
         candidate_equal: CandidateEquality[CandidateT] | None,
     ) -> Self:
         surface = cls.__new__(cls)
@@ -710,6 +759,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 "evaluation_count": evaluation_count,
                 "trace": trace,
                 "refinements": refinements,
+                "failures": failures,
                 "_candidate_equal": None,
                 "_candidate_equal_required": False,
                 "_validated_refinement_pairs": (),
@@ -737,7 +787,8 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
-        if self.evaluation_count < len(self.records):
+        failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
+        if self.evaluation_count < len(self.records) + failure_evaluation_count:
             msg = "evaluation_count must be at least the number of records"
             raise ValueError(msg)
 
@@ -788,6 +839,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> Self:
         """Build a nondominated surface from vector-valued records.
@@ -803,6 +855,8 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         refinements : Sequence[CandidateRefinement[CandidateT] | None] | None, optional
             Optional record-aligned refinement provenance. ``None`` keeps the
             compact no-metadata sentinel.
+        failures : Sequence[EvaluationFailure[CandidateT]] | None, optional
+            Recorded failed evaluation attempts.
         candidate_equal : CandidateEquality[CandidateT] | None, optional
             Explicit candidate equality predicate used to validate refinement
             alignment. When absent, strict scalar Python equality is used.
@@ -816,7 +870,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
         refinement_tuple = _optional_refinement_tuple(refinements)
-        normalized_evaluation_count = len(record_tuple)
+        failure_tuple = _optional_failure_tuple(failures)
+        failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
+        normalized_evaluation_count = len(record_tuple) + failure_evaluation_count
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
@@ -827,6 +883,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             refinements=refinement_tuple,
+            failures=failure_tuple,
             candidate_equal=candidate_equal,
         )
 
@@ -856,6 +913,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=report.evaluation_count,
             trace=report.trace,
             refinements=report.refinements,
+            failures=report.failures,
             candidate_equal=candidate_equal,
         )
 
@@ -896,7 +954,7 @@ def terminal_surface_setstate(
             object.__setattr__(self, dataclass_field.name, None)
         elif dataclass_field.name == "_candidate_equal_required":
             object.__setattr__(self, dataclass_field.name, False)
-        elif dataclass_field.name == "_validated_refinement_pairs":
+        elif dataclass_field.name in {"failures", "_validated_refinement_pairs"}:
             object.__setattr__(self, dataclass_field.name, ())
         elif dataclass_field.name in {
             "_validated_frontier_source_records",

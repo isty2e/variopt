@@ -17,7 +17,7 @@ from ....kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from ....outcomes import EvaluationOutcome
+from ....outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import (
@@ -33,6 +33,7 @@ from .runtime.kicks import (
 from .runtime.prepared import (
     PreparedStructuredLocalSearchRuntime,
     prepare_structured_local_search_runtime,
+    structured_episode_attempt_batch,
 )
 from .runtime.search import run_leafwise_local_search_episode
 
@@ -46,12 +47,9 @@ class StructuredIteratedLocalSearchKernel(
             StructuredCandidateT,
             Observation[StructuredCandidateT],
         ],
-        tuple[
-            EvaluationOutcome[
-                StructuredCandidateT,
-                Observation[StructuredCandidateT],
-            ],
-            ...,
+        EvaluationAttemptBatch[
+            StructuredCandidateT,
+            Observation[StructuredCandidateT],
         ],
     ],
     Generic[BoundaryT, StructuredCandidateT],
@@ -115,7 +113,7 @@ class StructuredIteratedLocalSearchKernel(
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal: Proposal[StructuredCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Evaluate one original proposal once without local search."""
         return runtime.evaluate_original_proposal(
             proposal=proposal,
@@ -161,9 +159,10 @@ class StructuredIteratedLocalSearchKernel(
         proposal: Proposal[StructuredCandidateT],
         random_state: np.random.RandomState,
         reserved_count: int,
-    ) -> EvaluationOutcome[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Run one iterated local-search episode for one original proposal."""
         runtime.neighborhood.space.validate(proposal.candidate)
+        failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
         context = self._proposal_context(runtime=runtime, proposal_index=proposal_index)
         proposal_evaluation_spec = runtime.proposal_evaluation_spec(
             proposal_index=proposal_index,
@@ -192,7 +191,14 @@ class StructuredIteratedLocalSearchKernel(
             max_steps=episode_max_steps,
             reserved_count=reserved_count,
         )
+        failed_attempts.extend(incumbent_result.failed_attempts)
         incumbent_record = incumbent_result.record
+        if incumbent_record is None:
+            return structured_episode_attempt_batch(
+                outcome=None,
+                failed_attempts=failed_attempts,
+            )
+
         incumbent_candidate = incumbent_record.candidate
         incumbent_value = incumbent_record.value
         incumbent_score = incumbent_record.score
@@ -238,7 +244,10 @@ class StructuredIteratedLocalSearchKernel(
             evaluation_count += kicked_result.evaluation_count
             completed_steps += kicked_result.completed_steps
             budget_exhausted = kicked_result.budget_exhausted
+            failed_attempts.extend(kicked_result.failed_attempts)
             kicked_record = kicked_result.record
+            if kicked_record is None:
+                continue
             if accepts_strict_improvement(
                 incumbent_score=incumbent_score,
                 candidate_score=kicked_record.score,
@@ -263,7 +272,7 @@ class StructuredIteratedLocalSearchKernel(
                 refined_candidate=incumbent_candidate,
             )
 
-        return EvaluationOutcome(
+        outcome = EvaluationOutcome(
             record=Observation.from_objective_value(
                 proposal=proposal,
                 proposal_evaluation_spec=proposal_evaluation_spec,
@@ -281,6 +290,10 @@ class StructuredIteratedLocalSearchKernel(
             refinement=refinement,
             candidate_equal=runtime.query.problem.space.candidates_equal,
         )
+        return structured_episode_attempt_batch(
+            outcome=outcome,
+            failed_attempts=failed_attempts,
+        )
 
     @override
     def run(
@@ -288,22 +301,22 @@ class StructuredIteratedLocalSearchKernel(
         query: ProposalBatchQuery[BoundaryT, StructuredCandidateT],
         runner: Callable[
             [ProposalBatchQuery[BoundaryT, StructuredCandidateT]],
-            tuple[EvaluationOutcome[StructuredCandidateT], ...],
+            EvaluationAttemptBatch[StructuredCandidateT],
         ],
-    ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
         """Run iterated local search for each proposal in a batch.
 
         Parameters
         ----------
         query : ProposalBatchQuery[BoundaryT, StructuredCandidateT]
             Proposal batch and evaluation context to optimize.
-        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], tuple[EvaluationOutcome[StructuredCandidateT], ...]]
+        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], EvaluationAttemptBatch[StructuredCandidateT]]
             Evaluator runner used to score local-search and kick candidates.
 
         Returns
         -------
-        tuple[EvaluationOutcome[StructuredCandidateT], ...]
-            Local-search outcomes aligned to ``query.proposals``.
+        EvaluationAttemptBatch[StructuredCandidateT]
+            Locally improved attempts and recorded failed local-search trials.
         """
         runtime: PreparedStructuredLocalSearchRuntime[
             BoundaryT,
@@ -315,19 +328,21 @@ class StructuredIteratedLocalSearchKernel(
 
         def optimize_batch(
             random_state: np.random.RandomState,
-        ) -> tuple[EvaluationOutcome[StructuredCandidateT], ...]:
-            return tuple(
-                self._optimize_proposal(
-                    runtime=runtime,
-                    proposal_index=proposal_index,
-                    proposal=proposal,
-                    random_state=random_state,
-                    reserved_count=len(query.proposals) - proposal_index - 1,
+        ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+            return EvaluationAttemptBatch[StructuredCandidateT].concatenate(
+                tuple(
+                    self._optimize_proposal(
+                        runtime=runtime,
+                        proposal_index=proposal_index,
+                        proposal=proposal,
+                        random_state=random_state,
+                        reserved_count=len(query.proposals) - proposal_index - 1,
+                    )
+                    for proposal_index, proposal in enumerate(query.proposals)
                 )
-                for proposal_index, proposal in enumerate(query.proposals)
             )
 
-        outcomes, next_random_state_snapshot = self._random_state_snapshot.advance(
+        attempts, next_random_state_snapshot = self._random_state_snapshot.advance(
             optimize_batch,
         )
         object.__setattr__(
@@ -335,4 +350,4 @@ class StructuredIteratedLocalSearchKernel(
             "_random_state_snapshot",
             next_random_state_snapshot,
         )
-        return outcomes
+        return attempts

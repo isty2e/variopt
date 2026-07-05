@@ -19,7 +19,7 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationOutcome
+from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT, RunMethodStateT
 from .common import StudyEvaluationRecordT
@@ -57,7 +57,7 @@ class Study(
         Stateful optimizer that owns cross-step search memory.
     evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
         Execution backend that turns requests into evaluation outcomes.
-    kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]] | None, optional
+    kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]] | None, optional
         Optional within-step refinement kernel. Defaults to
         :class:`~variopt.kernel.DirectKernel`.
 
@@ -81,7 +81,7 @@ class Study(
     ]
     kernel: Kernel[
         ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
     ]
 
     def __init__(
@@ -100,7 +100,7 @@ class Study(
         ],
         kernel: Kernel[
             ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-            tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+            EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
         ]
         | None = None,
     ) -> None:
@@ -114,7 +114,7 @@ class Study(
             Stateful optimizer that emits proposals and assimilates records.
         evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
             Execution backend that evaluates requests.
-        kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]] | None, optional
+        kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]] | None, optional
             Optional within-step refinement kernel.
         """
         object.__setattr__(self, "problem", problem)

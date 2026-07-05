@@ -9,12 +9,15 @@ import pytest
 from typing_extensions import override
 
 from variopt import (
+    EvaluationAttemptBatch,
+    EvaluationFailure,
     EvaluationRequest,
     IntegerSpace,
     Objective,
     OptimizationDirection,
     PermutationSpace,
     Problem,
+    UnsupportedEvaluationFailureError,
 )
 from variopt.algorithms import (
     RestrictedTournamentGAProfile,
@@ -176,6 +179,34 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
 
         assert next_state.generation_index == 1
         assert tuple(member.candidate for member in next_state.population) == (0, 9, 15, 29)
+
+    def test_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
+        optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=RestrictedTournamentGAProfile(restricted_tournament_window_size=4),
+            sampler=CyclingIntegerSampler((9, 8, 1, 0)),
+            random_state=0,
+        )
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=1)
+        request = EvaluationRequest(proposal=proposals[0])
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            requests=(request,),
+            failures=(
+                EvaluationFailure[int].from_exception(
+                    request=request,
+                    exception=ValueError("failed"),
+                ),
+            ),
+        )
+
+        with pytest.raises(UnsupportedEvaluationFailureError):
+            _ = optimizer.tell_attempts(state, attempts)
+
+        assert state.pending_proposals == proposals
 
     def test_from_permutation_space_defaults_can_optimize(self) -> None:
         space = PermutationSpace(size=6)

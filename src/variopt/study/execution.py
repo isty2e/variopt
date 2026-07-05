@@ -1,7 +1,7 @@
 """Generic study step and run orchestration."""
 
 from dataclasses import dataclass, replace
-from typing import Generic, Protocol, TypeGuard, cast
+from typing import Generic, NoReturn, Protocol, TypeGuard, cast
 
 from typing_extensions import TypeVar
 
@@ -9,6 +9,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..artifacts import (
     CandidateRefinement,
+    EvaluationFailure,
     EvaluationRequest,
     Observation,
     Proposal,
@@ -25,23 +26,27 @@ from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,
     EvaluationBudget,
+    EvaluationBudgetExhausted,
     ExecutionAssimilationMode,
     ExecutionModel,
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..objective import Objective, ScalarEvaluationProtocol
-from ..outcomes import EvaluationOutcome
+from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
     StudyEvaluationRecordT,
     build_evaluation_requests,
+    supports_attempt_batches,
     trace_value_for_records,
+    validate_aligned_attempts,
     validate_aligned_outcomes,
 )
 from .exact_async.orchestration import evaluate_batch_exact_async
+from .failures import RunExecutionFailed
 from .validation import require_async_evaluator, validate_execution_request
 
 BoundaryT = TypeVar("BoundaryT")
@@ -56,15 +61,15 @@ class StudyStepResult(
 
     Parameters
     ----------
-    outcomes : tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
-        Evaluator outcomes returned for the step.
+    attempts : EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+        Dense evaluator/kernel attempts returned for the step.
     state : RunMethodStateT
         Run-method state after assimilating ``outcomes``.
     evaluation_count : int
         Evaluation units consumed by the step after hard-budget reconciliation.
     """
 
-    outcomes: tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
+    attempts: EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
     state: RunMethodStateT
     evaluation_count: int
 
@@ -77,6 +82,7 @@ class _CheckpointSafeRunSnapshot(
 
     records: tuple[StudyEvaluationRecordT, ...]
     refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None
+    failures: tuple[EvaluationFailure[CandidateT], ...]
     trace: Trace
     evaluation_count: int
     state: RunMethodStateT
@@ -128,7 +134,7 @@ class StudyExecutionOwner(
         self,
     ) -> Kernel[
         ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
     ]:
         """Return the configured kernel."""
         ...
@@ -163,7 +169,7 @@ class DirectScalarSequentialStudyOwner(
         self,
     ) -> DirectKernel[
         ProposalBatchQuery[BoundaryT, CandidateT, Observation[CandidateT]],
-        tuple[EvaluationOutcome[CandidateT, Observation[CandidateT]], ...],
+        EvaluationAttemptBatch[CandidateT, Observation[CandidateT]],
     ]:
         """Return the configured direct kernel."""
         ...
@@ -245,6 +251,105 @@ def _current_remaining_budget(
     return evaluation_budget.remaining
 
 
+def _current_evaluation_count(
+    *,
+    max_evaluations: int,
+    evaluation_budget: EvaluationBudget | None,
+    record_budget_remaining: int,
+) -> int:
+    """Return the current terminal accounting projection."""
+    if evaluation_budget is None:
+        return max_evaluations - record_budget_remaining
+    return max_evaluations - evaluation_budget.remaining
+
+
+def _build_run_report(
+    *,
+    records: tuple[StudyEvaluationRecordT, ...],
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None,
+    failures: tuple[EvaluationFailure[CandidateT], ...],
+    trace_events: tuple[TraceEvent, ...],
+    evaluation_count: int,
+    candidate_equal: CandidateEquality[CandidateT],
+) -> RunReport[CandidateT, StudyEvaluationRecordT]:
+    """Build one report projection from the current run-history state."""
+    return RunReport[CandidateT, StudyEvaluationRecordT].from_records(
+        records=records,
+        evaluation_count=evaluation_count,
+        trace=Trace(events=trace_events),
+        refinements=refinements,
+        failures=failures,
+        candidate_equal=candidate_equal,
+    )
+
+
+def _run_report_from_snapshot(
+    *,
+    snapshot: _CheckpointSafeRunSnapshot[
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    candidate_equal: CandidateEquality[CandidateT],
+) -> RunReport[CandidateT, StudyEvaluationRecordT]:
+    """Build one report projection from a checkpoint-safe snapshot."""
+    return RunReport[CandidateT, StudyEvaluationRecordT].from_records(
+        records=snapshot.records,
+        evaluation_count=snapshot.evaluation_count,
+        trace=snapshot.trace,
+        refinements=snapshot.refinements,
+        failures=snapshot.failures,
+        candidate_equal=candidate_equal,
+    )
+
+
+def _raise_run_execution_failed(
+    *,
+    cause: Exception,
+    records: tuple[StudyEvaluationRecordT, ...],
+    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None,
+    failures: tuple[EvaluationFailure[CandidateT], ...],
+    trace_events: tuple[TraceEvent, ...],
+    evaluation_count: int,
+    state: RunMethodStateT,
+    safe_snapshot: _CheckpointSafeRunSnapshot[
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ]
+    | None,
+    candidate_equal: CandidateEquality[CandidateT],
+) -> NoReturn:
+    """Raise a hard run failure carrying current and checkpoint-safe projections."""
+    checkpoint_safe_report: RunReport[CandidateT, StudyEvaluationRecordT] | None = None
+    checkpoint_safe_state: RunMethodStateT | None = None
+    if safe_snapshot is not None:
+        checkpoint_safe_report = _run_report_from_snapshot(
+            snapshot=safe_snapshot,
+            candidate_equal=candidate_equal,
+        )
+        checkpoint_safe_state = safe_snapshot.state
+
+    raise RunExecutionFailed[
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ](
+        partial_report=_build_run_report(
+            records=records,
+            refinements=refinements,
+            failures=failures,
+            trace_events=trace_events,
+            evaluation_count=evaluation_count,
+            candidate_equal=candidate_equal,
+        ),
+        partial_state=state,
+        checkpoint_safe_report=checkpoint_safe_report,
+        checkpoint_safe_state=checkpoint_safe_state,
+        cause=cause,
+    ) from cause
+
+
 def _optimize_direct_scalar_sequential(
     study: DirectScalarSequentialStudyOwner[
         BoundaryT,
@@ -274,6 +379,7 @@ def _optimize_direct_scalar_sequential(
         raise RuntimeError(msg)
 
     observations: list[Observation[CandidateT]] = []
+    failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
@@ -294,83 +400,136 @@ def _optimize_direct_scalar_sequential(
             record_budget_remaining=record_budget_remaining,
         )
         current_batch_size = min(batch_size, remaining)
-        proposals, next_state = study.run_method.ask(
-            state,
-            batch_size=current_batch_size,
-        )
-        if len(proposals) == 0:
-            msg = "run_method returned no proposals"
-            raise RuntimeError(msg)
-
-        if len(proposals) > current_batch_size:
-            msg = "run_method returned more proposals than requested"
-            raise ValueError(msg)
-
-        # DirectKernel ignores hint payloads, but the generic path still
-        # validates alignment when it builds ProposalBatchQuery.
-        proposal_kernel_hints = study.run_method.proposal_kernel_hints(
-            next_state,
-            proposals,
-        )
-        if proposal_kernel_hints is not None and (
-            len(proposal_kernel_hints) != len(proposals)
-        ):
-            msg = "proposal_kernel_hints must align one-to-one with proposals"
-            raise ValueError(msg)
-
-        proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
-            next_state,
-            proposals,
-        )
-        if proposal_evaluation_specs is not None and (
-            len(proposal_evaluation_specs) != len(proposals)
-        ):
-            msg = "proposal_evaluation_specs must align one-to-one with proposals"
-            raise ValueError(msg)
-
-        batch_observations: list[Observation[CandidateT]] = []
-        batch_outcomes: list[
-            EvaluationOutcome[CandidateT, Observation[CandidateT]]
-        ] = []
-        for index, proposal in enumerate(proposals):
-            candidate = proposal.candidate
-            study.problem.space.validate(candidate)
-            proposal_evaluation_spec = (
-                None
-                if proposal_evaluation_specs is None
-                else proposal_evaluation_specs[index]
+        try:
+            proposals, next_state = study.run_method.ask(
+                state,
+                batch_size=current_batch_size,
             )
-            request = EvaluationRequest(
-                proposal=proposal,
-                proposal_evaluation_spec=proposal_evaluation_spec,
+            if len(proposals) == 0:
+                msg = "run_method returned no proposals"
+                raise RuntimeError(msg)
+
+            if len(proposals) > current_batch_size:
+                msg = "run_method returned more proposals than requested"
+                raise ValueError(msg)
+
+            # DirectKernel ignores hint payloads, but the generic path still
+            # validates alignment when it builds ProposalBatchQuery.
+            proposal_kernel_hints = study.run_method.proposal_kernel_hints(
+                next_state,
+                proposals,
             )
-            if evaluation_budget is not None:
-                evaluation_budget.consume()
-            observation = Observation.from_objective_value(
-                request=request,
-                candidate=candidate,
-                value=objective.evaluate(candidate),
-                direction=study.problem.direction,
+            if proposal_kernel_hints is not None and (
+                len(proposal_kernel_hints) != len(proposals)
+            ):
+                msg = "proposal_kernel_hints must align one-to-one with proposals"
+                raise ValueError(msg)
+
+            proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
+                next_state,
+                proposals,
             )
-            batch_observations.append(observation)
-            batch_outcomes.append(
-                EvaluationOutcome(
-                    record=observation,
-                    evaluation_count=1,
+            if proposal_evaluation_specs is not None and (
+                len(proposal_evaluation_specs) != len(proposals)
+            ):
+                msg = "proposal_evaluation_specs must align one-to-one with proposals"
+                raise ValueError(msg)
+
+            batch_observations: list[Observation[CandidateT]] = []
+            batch_outcomes: list[
+                EvaluationOutcome[CandidateT, Observation[CandidateT]]
+            ] = []
+            batch_requests: list[EvaluationRequest[CandidateT]] = []
+            batch_outcome_indices: list[int] = []
+            batch_failures: list[EvaluationFailure[CandidateT]] = []
+            batch_failure_indices: list[int] = []
+            for index, proposal in enumerate(proposals):
+                candidate = proposal.candidate
+                study.problem.space.validate(candidate)
+                proposal_evaluation_spec = (
+                    None
+                    if proposal_evaluation_specs is None
+                    else proposal_evaluation_specs[index]
+                )
+                request = EvaluationRequest(
+                    proposal=proposal,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                )
+                batch_requests.append(request)
+                if evaluation_budget is not None:
+                    evaluation_budget.consume()
+                try:
+                    value = objective.evaluate(candidate)
+                except Exception as exception:
+                    batch_failures.append(
+                        EvaluationFailure[CandidateT].from_exception(
+                            request=request,
+                            exception=exception,
+                        ),
+                    )
+                    batch_failure_indices.append(index)
+                    continue
+
+                observation = Observation.from_objective_value(
+                    request=request,
+                    candidate=candidate,
+                    value=value,
+                    direction=study.problem.direction,
+                )
+                batch_observations.append(observation)
+                batch_outcome_indices.append(index)
+                batch_outcomes.append(
+                    EvaluationOutcome(
+                        record=observation,
+                        evaluation_count=1,
+                    ),
+                )
+
+            batch_observation_tuple = tuple(batch_observations)
+            batch_outcome_tuple = tuple(batch_outcomes)
+            batch_attempts: EvaluationAttemptBatch[
+                CandidateT,
+                Observation[CandidateT],
+            ] = EvaluationAttemptBatch(
+                requests=tuple(batch_requests),
+                outcomes=batch_outcome_tuple,
+                outcome_indices=tuple(batch_outcome_indices),
+                failures=tuple(batch_failures),
+                failure_indices=tuple(batch_failure_indices),
+            )
+            next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
+        except EvaluationBudgetExhausted:
+            raise
+        except Exception as exception:
+            _raise_run_execution_failed(
+                cause=exception,
+                records=tuple(observations),
+                refinements=None,
+                failures=tuple(failures),
+                trace_events=tuple(trace_events),
+                evaluation_count=_current_evaluation_count(
+                    max_evaluations=max_evaluations,
+                    evaluation_budget=evaluation_budget,
+                    record_budget_remaining=record_budget_remaining,
                 ),
+                state=state,
+                safe_snapshot=None,
+                candidate_equal=study.problem.space.candidates_equal,
             )
-
-        batch_observation_tuple = tuple(batch_observations)
-        batch_outcome_tuple = tuple(batch_outcomes)
-        state = study.run_method.tell_outcomes(next_state, batch_outcome_tuple)
+        state = next_run_state
         observations.extend(batch_observation_tuple)
+        failures.extend(batch_failures)
         if evaluation_budget is None:
-            record_budget_remaining -= len(batch_observation_tuple)
+            record_budget_remaining -= batch_attempts.attempt_count
 
         trace_events.append(
             TraceEvent(
                 kind="study.step",
-                message=f"evaluated {len(batch_observation_tuple)} proposal(s)",
+                message=(
+                    f"completed {batch_attempts.attempt_count} attempt(s): "
+                    f"{len(batch_observation_tuple)} succeeded, "
+                    f"{len(batch_failures)} failed"
+                ),
                 value=trace_value_for_records(batch_observation_tuple),
             ),
         )
@@ -384,6 +543,7 @@ def _optimize_direct_scalar_sequential(
                 else max_evaluations - evaluation_budget.remaining
             ),
             trace=Trace(events=tuple(trace_events)),
+            failures=tuple(failures),
             candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
@@ -428,6 +588,62 @@ def evaluate_batch_sync(
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(resolved_requests))
     return tuple(study.evaluator.evaluate(query.problem, resolved_requests))
+
+
+def evaluate_attempts_sync(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyEvaluationRecordT,
+    ],
+    query: ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
+    *,
+    requests: tuple[EvaluationRequest[CandidateT], ...] | None = None,
+) -> EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]:
+    """Execute one synchronous request batch into a dense attempt batch.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        Study-like owner exposing the problem, evaluator, and kernel.
+    query : ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT]
+        Proposal batch and evaluation metadata to execute.
+    requests : tuple[EvaluationRequest[CandidateT], ...] | None, default=None
+        Optional prebuilt request batch aligned with ``query``.
+
+    Returns
+    -------
+    EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+        Dense attempt batch preserving successful and failed request slots.
+    """
+    resolved_requests = (
+        build_evaluation_requests(
+            query.proposals,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        if requests is None
+        else requests
+    )
+    if query.evaluation_budget is not None:
+        query.evaluation_budget.consume(len(resolved_requests))
+
+    if supports_attempt_batches(study.evaluator):
+        return study.evaluator.evaluate_attempts(
+            query.problem,
+            resolved_requests,
+        )
+
+    outcomes = tuple(study.evaluator.evaluate(query.problem, resolved_requests))
+    validate_aligned_outcomes(
+        resolved_requests,
+        outcomes,
+        candidate_equal=study.problem.space.candidates_equal,
+    )
+    return EvaluationAttemptBatch(
+        requests=resolved_requests,
+        outcomes=outcomes,
+    )
 
 
 def evaluate_step(
@@ -535,16 +751,22 @@ def evaluate_step(
                 CandidateT,
                 StudyEvaluationRecordT,
             ],
-        ) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+        ) -> EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]:
             query = _query_with_evaluation_budget(query, evaluation_budget)
             query_requests = requests_for_query(query)
             if query.evaluation_budget is not None:
                 query.evaluation_budget.consume(len(query_requests))
-            return evaluate_batch_exact_async(
+            attempts = evaluate_batch_exact_async(
                 require_async_evaluator(study),
                 query.problem,
                 query_requests,
             )
+            validate_aligned_attempts(
+                query_requests,
+                attempts,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
+            return attempts
     else:
 
         def batch_executor(
@@ -553,33 +775,40 @@ def evaluate_step(
                 CandidateT,
                 StudyEvaluationRecordT,
             ],
-        ) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+        ) -> EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]:
             query = _query_with_evaluation_budget(query, evaluation_budget)
-            return evaluate_batch_sync(
+            query_requests = requests_for_query(query)
+            attempts = evaluate_attempts_sync(
                 study,
                 query,
-                requests=requests_for_query(query),
+                requests=query_requests,
             )
+            validate_aligned_attempts(
+                query_requests,
+                attempts,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
+            return attempts
 
     remaining_before = (
         None if evaluation_budget is None else evaluation_budget.remaining
     )
-    outcomes = study.kernel.run(top_level_query, batch_executor)
+    kernel_attempts = study.kernel.run(top_level_query, batch_executor)
     requests = requests_for_query(top_level_query)
-    validate_aligned_outcomes(
+    validate_aligned_attempts(
         requests,
-        outcomes,
+        kernel_attempts,
         candidate_equal=study.problem.space.candidates_equal,
     )
-    reported_evaluation_count = sum(outcome.evaluation_count for outcome in outcomes)
+    reported_evaluation_count = kernel_attempts.evaluation_count
     step_evaluation_count = _consume_reported_evaluation_cost(
         evaluation_budget=evaluation_budget,
         remaining_before=remaining_before,
         reported_evaluation_count=reported_evaluation_count,
     )
-    next_state = study.run_method.tell_outcomes(next_state, outcomes)
+    next_state = study.run_method.tell_attempts(next_state, kernel_attempts)
     return StudyStepResult(
-        outcomes=outcomes,
+        attempts=kernel_attempts,
         state=next_state,
         evaluation_count=step_evaluation_count,
     )
@@ -639,7 +868,7 @@ def step(
         batch_size,
         execution_model=execution_model,
     )
-    return tuple(outcome.record for outcome in step_result.outcomes), step_result.state
+    return step_result.attempts.records, step_result.state
 
 
 def run(
@@ -707,6 +936,7 @@ def run(
 
     records: list[StudyEvaluationRecordT] = []
     refinements: list[CandidateRefinement[CandidateT] | None] | None = None
+    failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
@@ -730,6 +960,7 @@ def run(
         safe_snapshot = _CheckpointSafeRunSnapshot(
             records=(),
             refinements=None,
+            failures=(),
             trace=Trace(),
             evaluation_count=0,
             state=state,
@@ -744,20 +975,40 @@ def run(
             record_budget_remaining=record_budget_remaining,
         )
         current_batch_size = min(batch_size, remaining)
-        step_result = evaluate_step(
-            study,
-            state,
-            batch_size=current_batch_size,
-            execution_model=execution_model,
-            evaluation_budget=evaluation_budget,
-        )
-        batch_records = tuple(outcome.record for outcome in step_result.outcomes)
+        try:
+            step_result = evaluate_step(
+                study,
+                state,
+                batch_size=current_batch_size,
+                execution_model=execution_model,
+                evaluation_budget=evaluation_budget,
+            )
+        except EvaluationBudgetExhausted:
+            raise
+        except Exception as exception:
+            _raise_run_execution_failed(
+                cause=exception,
+                records=tuple(records),
+                refinements=None if refinements is None else tuple(refinements),
+                failures=tuple(failures),
+                trace_events=tuple(trace_events),
+                evaluation_count=_current_evaluation_count(
+                    max_evaluations=max_evaluations,
+                    evaluation_budget=evaluation_budget,
+                    record_budget_remaining=record_budget_remaining,
+                ),
+                state=state,
+                safe_snapshot=safe_snapshot,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
+        batch_records = step_result.attempts.records
         batch_refinements = tuple(
-            outcome.refinement for outcome in step_result.outcomes
+            outcome.refinement for outcome in step_result.attempts.outcomes
         )
         state = step_result.state
         records_before_batch = len(records)
         records.extend(batch_records)
+        failures.extend(step_result.attempts.failures)
         if refinements is not None:
             refinements.extend(batch_refinements)
         elif any(refinement is not None for refinement in batch_refinements):
@@ -767,25 +1018,30 @@ def run(
             refinement_history.extend(batch_refinements)
             refinements = refinement_history
         if evaluation_budget is None:
-            remaining -= len(batch_records)
+            remaining -= step_result.attempts.attempt_count
             record_budget_remaining = remaining
         trace_events.append(
             TraceEvent(
                 kind="study.step",
-                message=f"evaluated {len(batch_records)} proposal(s)",
+                message=(
+                    f"completed {step_result.attempts.attempt_count} attempt(s): "
+                    f"{len(batch_records)} succeeded, "
+                    f"{len(step_result.attempts.failures)} failed"
+                ),
                 value=trace_value_for_records(batch_records),
             ),
         )
         if stop_at_checkpoint_boundary:
-            evaluation_count = (
-                max_evaluations - record_budget_remaining
-                if evaluation_budget is None
-                else max_evaluations - evaluation_budget.remaining
+            evaluation_count = _current_evaluation_count(
+                max_evaluations=max_evaluations,
+                evaluation_budget=evaluation_budget,
+                record_budget_remaining=record_budget_remaining,
             )
             if study.run_method.is_checkpoint_safe_state(state):
                 safe_snapshot = _CheckpointSafeRunSnapshot(
                     records=tuple(records),
                     refinements=None if refinements is None else tuple(refinements),
+                    failures=tuple(failures),
                     trace=Trace(events=tuple(trace_events)),
                     evaluation_count=evaluation_count,
                     state=state,
@@ -805,26 +1061,24 @@ def run(
             )
             raise RuntimeError(msg)
         return (
-            RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-                records=safe_snapshot.records,
-                evaluation_count=safe_snapshot.evaluation_count,
-                trace=safe_snapshot.trace,
-                refinements=safe_snapshot.refinements,
+            _run_report_from_snapshot(
+                snapshot=safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             ),
             safe_snapshot.state,
         )
 
     return (
-        RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-            records=records,
-            evaluation_count=(
-                max_evaluations - record_budget_remaining
-                if evaluation_budget is None
-                else max_evaluations - evaluation_budget.remaining
-            ),
-            trace=Trace(events=tuple(trace_events)),
+        _build_run_report(
+            records=tuple(records),
             refinements=None if refinements is None else tuple(refinements),
+            failures=tuple(failures),
+            trace_events=tuple(trace_events),
+            evaluation_count=_current_evaluation_count(
+                max_evaluations=max_evaluations,
+                evaluation_budget=evaluation_budget,
+                record_budget_remaining=record_budget_remaining,
+            ),
             candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
@@ -872,6 +1126,7 @@ def materialize_scalar_run_result(
         evaluation_count=run_report.evaluation_count,
         trace=run_report.trace,
         refinements=run_report.refinements,
+        failures=run_report.failures,
         candidate_equal=candidate_equal,
     )
 

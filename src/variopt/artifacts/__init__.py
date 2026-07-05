@@ -4,11 +4,13 @@ Public artifact names continue to live under ``variopt.artifacts`` while the
 implementation is split by ontology tier:
 
 - request-plane artifacts
+- evaluation-attempt failure artifacts
 - evaluation-record artifacts
 - candidate-refinement provenance artifacts
 - terminal/report surfaces
 """
 
+from .attempts import EvaluationExceptionSnapshot, EvaluationFailure
 from .records import (
     EvaluationRecord,
     InteractionEvaluationRecord,
@@ -34,6 +36,8 @@ from .terminal import (
 
 __all__ = [
     "CandidateRefinement",
+    "EvaluationExceptionSnapshot",
+    "EvaluationFailure",
     "EvaluationRecord",
     "EvaluationRequest",
     "InteractionEvaluationRecord",

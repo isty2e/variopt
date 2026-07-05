@@ -32,6 +32,9 @@ from variopt.algorithms.population.csa.generation.proposal import (
     CSAProposalPolicy,
     CSAProposalState,
 )
+from variopt.algorithms.population.csa.generation.proposal.state import (
+    ProposalAttribution,
+)
 from variopt.algorithms.population.csa.generation.state import (
     GeneratedCandidate,
     GenerationQueue,
@@ -214,6 +217,27 @@ class CSAEngineStateTests:
 
         assert next_state.pending_proposals.is_empty
         assert state.pending_proposals.get("csa-0") == proposal
+
+    def test_consume_failed_pending_proposals_removes_all_inflight_registries(self) -> None:
+        proposal = Proposal(candidate=7, proposal_id="csa-0")
+        state = build_engine_state()
+        state = replace(
+            state,
+            proposal_state=state.proposal_state.register_pending_attribution(
+                ProposalAttribution(
+                    proposal_id="csa-0",
+                    source_score=10.0,
+                    proposal_family_key="regular",
+                ),
+            ),
+        ).issue_proposal(proposal, tracks_generation=True)
+
+        next_state = state.consume_failed_pending_proposals({"csa-0"})
+
+        assert next_state.pending_proposals.is_empty
+        assert next_state.generation_state.pending_proposal_ids == frozenset()
+        assert next_state.proposal_state.pending_attributions == ()
+        assert state.proposal_state.pending_attributions != ()
 
     def test_progression_masks_merge_stage_and_refresh_masks(self) -> None:
         state = build_engine_state()

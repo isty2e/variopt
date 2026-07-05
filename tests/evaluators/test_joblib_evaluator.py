@@ -228,6 +228,116 @@ class JoblibEvaluatorTests:
 
         assert tuple(outcome.observation.value for outcome in outcomes) == (16.0,)
 
+    def test_loky_backend_evaluate_attempts_records_pickled_failure(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=ExplodingObjective(),
+        )
+        evaluator = JoblibEvaluator[int, int](backend="loky", n_jobs=2)
+
+        attempts = evaluator.evaluate_attempts(
+            problem,
+            _requests(
+                (
+                    Proposal(candidate=1, proposal_id="p-1"),
+                    Proposal(candidate=4, proposal_id="p-2"),
+                )
+            ),
+        )
+
+        assert attempts.outcome_indices == (0,)
+        assert attempts.failure_indices == (1,)
+        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
+            1.0,
+        )
+        assert attempts.failures[0].proposal_id == "p-2"
+        assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
+        assert attempts.failures[0].exception.message == "boom"
+
+    def test_evaluate_attempts_records_user_failure_and_preserves_successes(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=ExplodingObjective(),
+        )
+        evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
+
+        attempts = evaluator.evaluate_attempts(
+            problem,
+            _requests(
+                (
+                    Proposal(candidate=1, proposal_id="p-1"),
+                    Proposal(candidate=4, proposal_id="p-2"),
+                    Proposal(candidate=2, proposal_id="p-3"),
+                )
+            ),
+        )
+
+        assert attempts.outcome_indices == (0, 2)
+        assert attempts.failure_indices == (1,)
+        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
+            1.0,
+            4.0,
+        )
+        failure = attempts.failures[0]
+        assert failure.proposal_id == "p-2"
+        assert failure.exception.exception_type == "builtins.ValueError"
+        assert failure.exception.message == "boom"
+
+    def test_evaluate_attempts_support_all_failure_batch(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=ExplodingObjective(),
+        )
+        evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
+
+        attempts = evaluator.evaluate_attempts(
+            problem,
+            _requests(
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=4, proposal_id="p-2"),
+                )
+            ),
+        )
+
+        assert attempts.outcomes == ()
+        assert attempts.outcome_indices == ()
+        assert attempts.failure_indices == (0, 1)
+        assert tuple(failure.proposal_id for failure in attempts.failures) == (
+            "p-1",
+            "p-2",
+        )
+        assert attempts.evaluation_count == 2
+
+    def test_evaluate_attempts_support_empty_batch(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=ExplodingObjective(),
+        )
+        evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
+
+        attempts = evaluator.evaluate_attempts(problem, ())
+
+        assert attempts.requests == ()
+        assert attempts.outcomes == ()
+        assert attempts.failures == ()
+        assert attempts.evaluation_count == 0
+
+    def test_evaluate_attempts_does_not_record_validation_failure(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
+
+        with pytest.raises(ValueError):
+            _ = evaluator.evaluate_attempts(
+                problem,
+                _requests((Proposal(candidate=11, proposal_id="p-1"),)),
+            )
+
     def test_execution_resources_report_evaluator_ownership(self) -> None:
         evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
 
@@ -245,6 +355,53 @@ class AsyncJoblibEvaluatorTests:
     def test_rejects_negative_infrastructure_retry_limit(self) -> None:
         with pytest.raises(ValueError):
             _ = AsyncJoblibEvaluator[int, int](infrastructure_retry_limit=-1)
+
+    def test_evaluate_attempts_records_user_failure_without_retrying(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=ExplodingObjective(),
+        )
+        evaluator = AsyncJoblibEvaluator[int, int](
+            backend="threading",
+            n_jobs=2,
+            infrastructure_retry_limit=3,
+        )
+
+        attempts = evaluator.evaluate_attempts(
+            problem,
+            _requests(
+                (
+                    Proposal(candidate=1, proposal_id="p-1"),
+                    Proposal(candidate=4, proposal_id="p-2"),
+                    Proposal(candidate=2, proposal_id="p-3"),
+                )
+            ),
+        )
+
+        assert attempts.outcome_indices == (0, 2)
+        assert attempts.failure_indices == (1,)
+        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
+            1.0,
+            4.0,
+        )
+        assert attempts.failures[0].proposal_id == "p-2"
+        assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
+
+    def test_evaluate_attempts_support_empty_batch(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=ExplodingObjective(),
+        )
+        evaluator = AsyncJoblibEvaluator[int, int](backend="threading", n_jobs=2)
+
+        attempts = evaluator.evaluate_attempts(problem, ())
+
+        assert attempts.requests == ()
+        assert attempts.outcomes == ()
+        assert attempts.failures == ()
+        assert attempts.evaluation_count == 0
 
     def test_evaluate_preserves_input_proposal_order(self) -> None:
         problem = Problem(

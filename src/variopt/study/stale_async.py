@@ -9,6 +9,7 @@ from typing_extensions import TypeVar
 
 from ..artifacts import (
     CandidateRefinement,
+    EvaluationFailure,
     EvaluationRequest,
     Proposal,
     ProposalEvaluationSpec,
@@ -19,19 +20,26 @@ from ..artifacts import (
 from ..evaluators.async_evaluator.contracts import AsyncEvaluator
 from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
 from ..evaluators.base import Evaluator
-from ..execution import STALE_ASYNC_EXECUTION_MODEL, EvaluationBudget
+from ..execution import (
+    STALE_ASYNC_EXECUTION_MODEL,
+    EvaluationBudget,
+    EvaluationBudgetExhausted,
+)
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationOutcome
+from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
+    OutcomeToAttemptBatchSession,
     StudyEvaluationRecordT,
     build_evaluation_requests,
+    supports_attempt_batch_sessions,
     trace_value_for_records,
-    validate_aligned_outcomes,
+    validate_aligned_attempts,
 )
+from .failures import RunExecutionFailed
 from .validation import require_async_evaluator, validate_execution_request
 
 BoundaryT = TypeVar("BoundaryT")
@@ -77,7 +85,7 @@ class _StudyStaleAsyncOwner(
         self,
     ) -> Kernel[
         ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
     ]:
         """Return the configured kernel."""
         ...
@@ -91,7 +99,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
     ----------
     requests : tuple[EvaluationRequest[CandidateT], ...]
         Logical request batch owned by the session.
-    batch_session : EvaluationBatchSession[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
+    batch_session : EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]]
         Evaluator-owned async batch session that executes ``requests``.
     completed_indices : set[int], default=set()
         Logical request indices already emitted through completed groups.
@@ -99,7 +107,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
 
     requests: tuple[EvaluationRequest[CandidateT], ...]
     batch_session: EvaluationBatchSession[
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
     ]
     candidate_equal: CandidateEquality[CandidateT]
     completed_indices: set[int] = field(default_factory=set)
@@ -112,10 +120,10 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
 
     def poll_completed_groups(
         self,
-    ) -> tuple[tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...], ...]:
+    ) -> tuple[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT], ...]:
         """Poll and validate newly completed groups for one stale-async session."""
         completed_groups: list[
-            tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
+            EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
         ] = []
         for completion_group in self.batch_session.poll():
             end_index = completion_group.start_index + len(completion_group.outcomes)
@@ -124,9 +132,13 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
                 raise ValueError(msg)
 
             group_requests = self.requests[completion_group.start_index : end_index]
-            validate_aligned_outcomes(
+            attempts = EvaluationAttemptBatch[
+                CandidateT,
+                StudyEvaluationRecordT,
+            ].from_single_request_attempts(completion_group.outcomes)
+            validate_aligned_attempts(
                 group_requests,
-                completion_group.outcomes,
+                attempts,
                 candidate_equal=self.candidate_equal,
             )
 
@@ -137,7 +149,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
                     raise ValueError(msg)
                 self.completed_indices.add(target_index)
 
-            completed_groups.append(completion_group.outcomes)
+            completed_groups.append(attempts)
 
         return tuple(completed_groups)
 
@@ -245,7 +257,15 @@ def open_stale_async_batch_session(
     return (
         StaleAsyncActiveBatchSession(
             requests=requests,
-            batch_session=async_evaluator.open_session(problem, requests),
+            batch_session=(
+                async_evaluator.open_attempt_session(problem, requests)
+                if supports_attempt_batch_sessions(async_evaluator)
+                else OutcomeToAttemptBatchSession(
+                    requests=requests,
+                    outcome_session=async_evaluator.open_session(problem, requests),
+                    candidate_equal=problem.space.candidates_equal,
+                )
+            ),
             candidate_equal=problem.space.candidates_equal,
         ),
         next_state,
@@ -350,6 +370,7 @@ def run_stale_async(
 
     records: list[StudyEvaluationRecordT] = []
     refinements: list[CandidateRefinement[CandidateT] | None] | None = None
+    failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
@@ -362,6 +383,7 @@ def run_stale_async(
     )
     safe_records: tuple[StudyEvaluationRecordT, ...] | None = None
     safe_refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None = None
+    safe_failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     safe_trace = Trace()
     safe_evaluation_count = 0
     safe_state = state
@@ -409,23 +431,26 @@ def run_stale_async(
                 if len(completed_groups) > 0:
                     completed_any = True
                 for completed_group in completed_groups:
-                    group_records = tuple(outcome.record for outcome in completed_group)
+                    group_records = completed_group.records
                     group_refinements = tuple(
-                        outcome.refinement for outcome in completed_group
+                        outcome.refinement for outcome in completed_group.outcomes
                     )
-                    group_evaluation_count = sum(
-                        outcome.evaluation_count for outcome in completed_group
-                    )
+                    group_evaluation_count = completed_group.evaluation_count
                     if evaluation_budget is not None:
-                        unmetered_evaluation_count = group_evaluation_count - len(
-                            group_records,
+                        unmetered_evaluation_count = (
+                            group_evaluation_count - completed_group.attempt_count
                         )
                         if unmetered_evaluation_count > 0:
                             evaluation_budget.consume(unmetered_evaluation_count)
                     else:
-                        record_budget_remaining -= len(group_records)
+                        record_budget_remaining -= completed_group.attempt_count
+                    next_state = study.run_method.tell_attempts(
+                        state,
+                        completed_group,
+                    )
                     records_before_group = len(records)
                     records.extend(group_records)
+                    failures.extend(completed_group.failures)
                     if refinements is not None:
                         refinements.extend(group_refinements)
                     elif any(
@@ -436,14 +461,15 @@ def run_stale_async(
                         ] = [None for _index in range(records_before_group)]
                         refinement_history.extend(group_refinements)
                         refinements = refinement_history
-                    state = study.run_method.tell_outcomes(
-                        state,
-                        completed_group,
-                    )
+                    state = next_state
                     trace_events.append(
                         TraceEvent(
                             kind="study.step",
-                            message=f"evaluated {len(group_records)} proposal(s)",
+                            message=(
+                                f"completed {completed_group.attempt_count} attempt(s): "
+                                f"{len(group_records)} succeeded, "
+                                f"{len(completed_group.failures)} failed"
+                            ),
                             value=trace_value_for_records(group_records),
                         ),
                     )
@@ -455,6 +481,7 @@ def run_stale_async(
                         safe_refinements = (
                             None if refinements is None else tuple(refinements)
                         )
+                        safe_failures = tuple(failures)
                         safe_trace = Trace(events=tuple(trace_events))
                         safe_evaluation_count = (
                             max_evaluations - record_budget_remaining
@@ -469,7 +496,7 @@ def run_stale_async(
                         else evaluation_budget.remaining
                     )
                     if remaining > 0 and not study.run_method.is_exhausted(state):
-                        refill_batch_size = min(len(group_records), remaining)
+                        refill_batch_size = min(completed_group.attempt_count, remaining)
                         refill_session, state = (
                             _open_stale_async_batch_session_for_study(
                                 study,
@@ -487,6 +514,52 @@ def run_stale_async(
             ]
             if not completed_any and len(active_sessions) > 0:
                 sleep(_STALE_ASYNC_IDLE_SLEEP_SECONDS)
+    except EvaluationBudgetExhausted:
+        _cancel_active_stale_async_sessions(active_sessions)
+        raise
+    except Exception as exception:
+        _cancel_active_stale_async_sessions(active_sessions)
+        partial_report = RunReport[CandidateT, StudyEvaluationRecordT].from_records(
+            records=tuple(records),
+            evaluation_count=(
+                max_evaluations - record_budget_remaining
+                if evaluation_budget is None
+                else max_evaluations - evaluation_budget.remaining
+            ),
+            trace=Trace(events=tuple(trace_events)),
+            refinements=None if refinements is None else tuple(refinements),
+            failures=tuple(failures),
+            candidate_equal=study.problem.space.candidates_equal,
+        )
+        checkpoint_safe_report: RunReport[
+            CandidateT,
+            StudyEvaluationRecordT,
+        ] | None = None
+        checkpoint_safe_state: RunMethodStateT | None = None
+        if safe_records is not None:
+            checkpoint_safe_report = RunReport[
+                CandidateT,
+                StudyEvaluationRecordT,
+            ].from_records(
+                records=safe_records,
+                evaluation_count=safe_evaluation_count,
+                trace=safe_trace,
+                refinements=safe_refinements,
+                failures=safe_failures,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
+            checkpoint_safe_state = safe_state
+        raise RunExecutionFailed[
+            CandidateT,
+            RunMethodStateT,
+            StudyEvaluationRecordT,
+        ](
+            partial_report=partial_report,
+            partial_state=state,
+            checkpoint_safe_report=checkpoint_safe_report,
+            checkpoint_safe_state=checkpoint_safe_state,
+            cause=exception,
+        ) from exception
     except BaseException:
         _cancel_active_stale_async_sessions(active_sessions)
         raise
@@ -505,6 +578,7 @@ def run_stale_async(
                 evaluation_count=safe_evaluation_count,
                 trace=safe_trace,
                 refinements=safe_refinements,
+                failures=safe_failures,
                 candidate_equal=study.problem.space.candidates_equal,
             ),
             safe_state,
@@ -520,6 +594,7 @@ def run_stale_async(
             ),
             trace=Trace(events=tuple(trace_events)),
             refinements=None if refinements is None else tuple(refinements),
+            failures=tuple(failures),
             candidate_equal=study.problem.space.candidates_equal,
         ),
         state,

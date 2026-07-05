@@ -1,6 +1,7 @@
 """CSA generation queue and runtime-state definitions."""
 
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Generic
 
@@ -253,6 +254,29 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             queue=self.queue,
             pending_proposal_ids=self.pending_proposal_ids - consumed_ids,
             buffered_observations=self.buffered_observations + tuple(observations),
+        )
+
+    def consume_failed_proposals(self, proposal_ids: AbstractSet[str]) -> Self:
+        """Return a runtime with failed proposal ids removed from the pool.
+
+        Parameters
+        ----------
+        proposal_ids : collections.abc.Set[str]
+            Proposal identifiers whose evaluation attempts failed.
+
+        Returns
+        -------
+        Self
+            Runtime state with the failed proposal identifiers removed while
+            preserving queued children and successful buffered observations.
+        """
+        if not proposal_ids:
+            return self
+
+        return type(self)(
+            queue=self.queue,
+            pending_proposal_ids=self.pending_proposal_ids - proposal_ids,
+            buffered_observations=self.buffered_observations,
         )
 
     def release_buffer(self) -> tuple[tuple[Observation[CandidateT], ...], Self]:

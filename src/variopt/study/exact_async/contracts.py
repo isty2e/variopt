@@ -8,7 +8,7 @@ from ...artifacts import EvaluationRequest, Proposal
 from ...evaluators.base import Evaluator
 from ...kernel import Kernel, ProposalBatchQuery
 from ...methods import RunMethod
-from ...outcomes import EvaluationOutcome
+from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import StudyEvaluationRecordT
@@ -84,7 +84,7 @@ class StudyExactAsyncOwner(
         self,
     ) -> Kernel[
         ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
     ]:
         """Return the configured kernel."""
         ...

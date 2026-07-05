@@ -11,8 +11,12 @@ from typing_extensions import override
 from variopt import (
     ArraySpace,
     CategoricalSpace,
+    EvaluationAttemptBatch,
     EvaluationBudget,
+    EvaluationExceptionSnapshot,
+    EvaluationFailure,
     EvaluationOutcome,
+    EvaluationRequest,
     IntegerSpace,
     Objective,
     Observation,
@@ -63,29 +67,34 @@ class DummyProposalKernelHint(ProposalKernelHint):
 
 def evaluate_query_directly(
     query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
-) -> tuple[EvaluationOutcome[CandidateRunnerT], ...]:
+) -> EvaluationAttemptBatch[CandidateRunnerT]:
     """Evaluate one proposal batch directly through the problem objective."""
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(query.proposals))
 
-    return tuple(
+    requests = tuple(EvaluationRequest(proposal=proposal) for proposal in query.proposals)
+    outcomes = tuple(
         EvaluationOutcome(
             observation=Observation.from_objective_value(
-                proposal=proposal,
-                candidate=proposal.candidate,
-                value=query.problem.objective.evaluate(proposal.candidate),
+                request=request,
+                candidate=request.candidate,
+                value=query.problem.objective.evaluate(request.candidate),
                 direction=query.problem.direction,
             ),
             evaluation_count=1,
         )
-        for proposal in query.proposals
+        for request in requests
+    )
+    return EvaluationAttemptBatch(
+        requests=requests,
+        outcomes=outcomes,
     )
 
 
 def record_and_evaluate_query_directly(
     query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
     evaluated_candidates: list[CandidateRunnerT],
-) -> tuple[EvaluationOutcome[CandidateRunnerT], ...]:
+) -> EvaluationAttemptBatch[CandidateRunnerT]:
     """Record candidates crossing the evaluator boundary before evaluation."""
     evaluated_candidates.extend(proposal.candidate for proposal in query.proposals)
     return evaluate_query_directly(query)
@@ -351,7 +360,7 @@ class StructuredHillClimbKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == 2
@@ -383,7 +392,7 @@ class StructuredHillClimbKernelTests:
             evaluation_budget=evaluation_budget,
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         assert evaluation_budget.remaining == 0
         assert tuple(outcome.evaluation_count for outcome in outcomes) == (1, 1)
@@ -395,6 +404,199 @@ class StructuredHillClimbKernelTests:
             == "evaluation budget exhausted before local convergence"
             for outcome in outcomes
         )
+
+    def test_failed_hill_climb_trial_is_preserved_and_skipped(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=IntegerObjective(),
+        )
+        kernel = StructuredHillClimbKernel[int, int](max_steps=8)
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=5, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+        )
+
+        def fail_neighbor_four(
+            local_query: ProposalBatchQuery[int, int],
+        ) -> EvaluationAttemptBatch[int]:
+            proposal = local_query.proposals[0]
+            request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
+            if proposal.candidate == 4:
+                failure = EvaluationFailure[int](
+                    request=request,
+                    exception=EvaluationExceptionSnapshot.from_exception(
+                        ValueError("bad structured trial")
+                    ),
+                )
+                return EvaluationAttemptBatch(
+                    requests=(request,),
+                    failures=(failure,),
+                )
+            return evaluate_query_directly(local_query)
+
+        attempts = kernel.run(query, fail_neighbor_four)
+
+        assert attempts.outcome_indices == (0,)
+        assert attempts.failure_indices == (1,)
+        assert attempts.outcomes[0].observation.candidate == 5
+        assert attempts.outcomes[0].kernel_diagnostics is not None
+        assert attempts.outcomes[0].refinement is None
+        assert attempts.failures[0].candidate == 4
+        assert attempts.failures[0].exception.message == "bad structured trial"
+
+    def test_initial_hill_climb_failure_returns_failure_only_attempt(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=IntegerObjective(),
+        )
+        kernel = StructuredHillClimbKernel[int, int](max_steps=8)
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=5, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+        )
+
+        def fail_every_attempt(
+            local_query: ProposalBatchQuery[int, int],
+        ) -> EvaluationAttemptBatch[int]:
+            proposal = local_query.proposals[0]
+            request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
+            failure = EvaluationFailure[int](
+                request=request,
+                exception=EvaluationExceptionSnapshot.from_exception(
+                    RuntimeError("initial structured failure")
+                ),
+            )
+            return EvaluationAttemptBatch(
+                requests=(request,),
+                failures=(failure,),
+            )
+
+        attempts = kernel.run(query, fail_every_attempt)
+
+        assert attempts.outcomes == ()
+        assert attempts.outcome_indices == ()
+        assert attempts.failure_indices == (0,)
+        assert attempts.failures[0].candidate == 5
+        assert attempts.failures[0].proposal_id == "p-1"
+        assert attempts.failures[0].exception.message == "initial structured failure"
+        assert attempts.evaluation_count == 1
+
+    def test_mixed_proposal_hill_climb_rebases_failure_and_outcome_indices(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=IntegerObjective(),
+        )
+        kernel = StructuredHillClimbKernel[int, int](max_steps=1)
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(
+                Proposal(candidate=5, proposal_id="p-fail"),
+                Proposal(candidate=5, proposal_id="p-ok"),
+            ),
+            execution_resources=self.make_execution_resources(),
+        )
+
+        def fail_first_proposal(
+            local_query: ProposalBatchQuery[int, int],
+        ) -> EvaluationAttemptBatch[int]:
+            proposal = local_query.proposals[0]
+            request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
+            if proposal.proposal_id == "p-fail":
+                failure = EvaluationFailure[int](
+                    request=request,
+                    exception=EvaluationExceptionSnapshot.from_exception(
+                        ValueError("first proposal failed")
+                    ),
+                )
+                return EvaluationAttemptBatch(
+                    requests=(request,),
+                    failures=(failure,),
+                )
+            return evaluate_query_directly(local_query)
+
+        attempts = kernel.run(query, fail_first_proposal)
+
+        assert attempts.failure_indices == (0,)
+        assert attempts.outcome_indices == (1,)
+        assert attempts.failures[0].proposal_id == "p-fail"
+        assert attempts.outcomes[0].observation.proposal.proposal_id == "p-ok"
+        assert attempts.outcomes[0].observation.candidate == 4
+        assert attempts.evaluation_count == 3
+
+    def test_hill_climb_rejects_multi_slot_runner_attempt_for_single_proposal(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=IntegerObjective(),
+        )
+        kernel = StructuredHillClimbKernel[int, int](max_steps=1)
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=5, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+        )
+
+        def malformed_runner(
+            local_query: ProposalBatchQuery[int, int],
+        ) -> EvaluationAttemptBatch[int]:
+            proposal = local_query.proposals[0]
+            return evaluate_query_directly(
+                ProposalBatchQuery(
+                    problem=local_query.problem,
+                    proposals=(proposal, Proposal(candidate=proposal.candidate)),
+                    execution_resources=local_query.execution_resources,
+                )
+            )
+
+        with pytest.raises(
+            ValueError,
+            match="kernel runner must return exactly one attempt for one proposal",
+        ):
+            _ = kernel.run(query, malformed_runner)
+
+    def test_disabled_hill_climb_preserves_original_proposal_failure(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=IntegerObjective(),
+        )
+        kernel = StructuredHillClimbKernel[int, int](max_steps=8)
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=5, proposal_id="p-1"),),
+            execution_resources=self.make_execution_resources(),
+            proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
+        )
+
+        def fail_original_proposal(
+            local_query: ProposalBatchQuery[int, int],
+        ) -> EvaluationAttemptBatch[int]:
+            proposal = local_query.proposals[0]
+            request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
+            failure = EvaluationFailure[int](
+                request=request,
+                exception=EvaluationExceptionSnapshot.from_exception(
+                    ValueError("disabled structured failure")
+                ),
+            )
+            return EvaluationAttemptBatch(
+                requests=(request,),
+                failures=(failure,),
+            )
+
+        attempts = kernel.run(query, fail_original_proposal)
+
+        assert attempts.outcomes == ()
+        assert attempts.outcome_indices == ()
+        assert attempts.failure_indices == (0,)
+        assert attempts.failures[0].candidate == 5
+        assert attempts.failures[0].proposal_id == "p-1"
+        assert attempts.failures[0].exception.message == "disabled structured failure"
+        assert attempts.evaluation_count == 1
 
     def test_categorical_hill_climber_moves_through_declared_alternatives(self) -> None:
         color_space: CategoricalSpace[Color] = CategoricalSpace(
@@ -416,7 +618,7 @@ class StructuredHillClimbKernelTests:
             )
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == "blue"
@@ -440,7 +642,7 @@ class StructuredHillClimbKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == (1, 2)
@@ -472,7 +674,7 @@ class StructuredHillClimbKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert record_int(outcome.observation.candidate, "level") == 1
@@ -493,7 +695,7 @@ class StructuredHillClimbKernelTests:
             proposal_kernel_hints=(ProposalLocalSearchContext(enabled=False),),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == 5
@@ -528,7 +730,7 @@ class StructuredHillClimbKernelTests:
             proposal_kernel_hints=(ProposalLocalSearchContext(local_budget=1),),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert record_int(outcome.observation.candidate, "level") == 1
@@ -559,7 +761,7 @@ class StructuredHillClimbKernelTests:
             ),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert record_int(outcome.observation.candidate, "level") == 0
@@ -657,7 +859,7 @@ class StructuredScheduledLocalSearchKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == (1, 1)
@@ -689,7 +891,7 @@ class StructuredScheduledLocalSearchKernelTests:
             ),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == (0, 1, 1)
@@ -728,7 +930,7 @@ class StructuredStochasticNeighborhoodKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == 0
@@ -761,7 +963,7 @@ class StructuredStochasticNeighborhoodKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.evaluation_count == 3
@@ -790,7 +992,7 @@ class StructuredStochasticNeighborhoodKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.evaluation_count == 4
@@ -817,7 +1019,7 @@ class StructuredStochasticNeighborhoodKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate != 0
@@ -950,11 +1152,17 @@ class StructuredStochasticNeighborhoodKernelTests:
 
         forward_candidates = tuple(
             outcome.observation.candidate
-            for outcome in kernel.run(forward_query, evaluate_query_directly)
+            for outcome in kernel.run(
+                forward_query,
+                evaluate_query_directly,
+            ).outcomes
         )
         reversed_candidates = tuple(
             outcome.observation.candidate
-            for outcome in kernel.run(reversed_query, evaluate_query_directly)
+            for outcome in kernel.run(
+                reversed_query,
+                evaluate_query_directly,
+            ).outcomes
         )
 
         assert forward_candidates[0] != forward_candidates[1]
@@ -992,7 +1200,7 @@ class StructuredStochasticNeighborhoodKernelTests:
                 query,
                 evaluated_candidates,
             ),
-        )
+        ).outcomes
 
         assert tuple(evaluated_candidates) == (0,)
         assert outcomes[0].observation.candidate == 0
@@ -1076,7 +1284,7 @@ class StructuredVariableNeighborhoodKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == (1, 1, 1)
@@ -1116,7 +1324,7 @@ class StructuredVariableNeighborhoodKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == 0
@@ -1222,7 +1430,7 @@ class StructuredIteratedLocalSearchKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == (1, 1)
@@ -1262,7 +1470,7 @@ class StructuredIteratedLocalSearchKernelTests:
             execution_resources=self.make_execution_resources(),
         )
 
-        outcomes = kernel.run(query, evaluate_query_directly)
+        outcomes = kernel.run(query, evaluate_query_directly).outcomes
 
         outcome = outcomes[0]
         assert outcome.observation.candidate == (0, 0, 0)

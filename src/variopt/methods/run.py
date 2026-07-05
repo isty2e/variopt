@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Generic, TypeVar
 
+from typing_extensions import override
+
 from ..artifacts import ProposalEvaluationSpec, RequestAlignedEvaluationRecord
 from ..execution import (
     SEQUENTIAL_EXECUTION_MODEL,
@@ -11,12 +13,75 @@ from ..execution import (
     ExecutionModel,
 )
 from ..kernel import ProposalKernelHint
-from ..outcomes import EvaluationOutcome
+from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..typevars import ProposalT, RunMethodStateT
 from .base import SearchMethod
 
 OutcomeCandidateT = TypeVar("OutcomeCandidateT")
 RunMethodRecordT = TypeVar("RunMethodRecordT", bound=RequestAlignedEvaluationRecord)
+
+
+class UnsupportedEvaluationFailureError(RuntimeError):
+    """Raised when a run method cannot safely assimilate failed attempts.
+
+    Parameters
+    ----------
+    failure_count : int
+        Number of recorded failures in the attempt batch.
+    attempt_count : int
+        Total number of request slots represented by the attempt batch.
+    """
+
+    failure_count: int
+    attempt_count: int
+    _message: str
+
+    def __init__(self, failure_count: int, attempt_count: int) -> None:
+        """Create an unsupported-failure assimilation error.
+
+        Parameters
+        ----------
+        failure_count : int
+            Number of recorded failures in the attempt batch.
+        attempt_count : int
+            Total number of request slots represented by the attempt batch.
+
+        Raises
+        ------
+        TypeError
+            If either count is not an ``int``.
+        ValueError
+            If ``failure_count`` is not positive, if ``attempt_count`` is
+            negative, or if ``failure_count`` exceeds ``attempt_count``.
+        """
+        if type(failure_count) is not int:
+            msg = "failure_count must be int"
+            raise TypeError(msg)
+        if type(attempt_count) is not int:
+            msg = "attempt_count must be int"
+            raise TypeError(msg)
+        if failure_count <= 0:
+            msg = "failure_count must be positive"
+            raise ValueError(msg)
+        if attempt_count < 0:
+            msg = "attempt_count must be non-negative"
+            raise ValueError(msg)
+        if failure_count > attempt_count:
+            msg = "failure_count must not exceed attempt_count"
+            raise ValueError(msg)
+
+        self.failure_count = failure_count
+        self.attempt_count = attempt_count
+        self._message = (
+            f"run method does not support evaluation failure assimilation "
+            f"({failure_count} failures in {attempt_count} attempts)"
+        )
+        super().__init__(failure_count, attempt_count)
+
+    @override
+    def __str__(self) -> str:
+        """Return the human-readable unsupported-assimilation message."""
+        return self._message
 
 
 class RunMethod(
@@ -125,6 +190,46 @@ class RunMethod(
         affects adaptive search state.
         """
         return self.tell(state, tuple(outcome.record for outcome in outcomes))
+
+    def tell_attempts(
+        self,
+        state: RunMethodStateT,
+        attempts: EvaluationAttemptBatch[OutcomeCandidateT, RunMethodRecordT],
+    ) -> RunMethodStateT:
+        """Advance state from a dense evaluation-attempt batch.
+
+        Parameters
+        ----------
+        state : RunMethodStateT
+            Current immutable run-method state.
+        attempts : EvaluationAttemptBatch[OutcomeCandidateT, RunMethodRecordT]
+            Dense request-aligned batch containing successful outcomes and
+            recorded user-code evaluation failures.
+
+        Returns
+        -------
+        RunMethodStateT
+            Advanced immutable run-method state.
+
+        Raises
+        ------
+        UnsupportedEvaluationFailureError
+            If ``attempts`` contains failures and the concrete run method has not
+            overridden this hook to consume failed proposal lifecycle explicitly.
+
+        Notes
+        -----
+        The default implementation delegates success-only batches to
+        :meth:`tell_outcomes`. It never drops failures before delegation because
+        failed attempts may own pending proposal lifecycle in stateful optimizers.
+        """
+        if attempts.has_failures:
+            raise UnsupportedEvaluationFailureError(
+                failure_count=len(attempts.failures),
+                attempt_count=attempts.attempt_count,
+            )
+
+        return self.tell_outcomes(state, attempts.outcomes)
 
     def proposal_kernel_hints(
         self,

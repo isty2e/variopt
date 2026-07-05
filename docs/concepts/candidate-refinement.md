@@ -7,11 +7,12 @@ It sits between a run method's proposal and the evaluation record:
 
 ```text
 RunMethod.ask -> Proposal -> Kernel or evaluator execution
-    -> EvaluationOutcome(record, refinement) -> Study -> RunMethod feedback
+    -> EvaluationAttemptBatch(successful EvaluationOutcome, failures)
+    -> Study -> RunMethod feedback
 ```
 
 The evaluation record remains the semantic result. Refinement metadata explains
-how execution reached the candidate in that record.
+how execution reached the candidate in a successful outcome record.
 
 ## Candidate Vocabulary
 
@@ -42,8 +43,9 @@ Refinement is not owned by `EvaluationProtocol`.
   metadata if it deliberately transforms a candidate before protocol evaluation.
 - `EvaluationProtocol` owns only the meaning of evaluating the actual candidate
   it receives.
-- `Study` transports outcomes, records accounting, and preserves aligned
-  refinement metadata in terminal reports.
+- `Study` transports attempt batches at execution boundaries, records
+  accounting, and preserves aligned successful-outcome refinement metadata in
+  terminal reports.
 - `RunMethod.tell(...)` remains record-based. A run method that needs
   execution-side metadata can override `RunMethod.tell_outcomes(...)`.
 
@@ -73,8 +75,10 @@ represented by `None`.
 
 ## Local Search Behavior
 
-Built-in local-search kernels attach `CandidateRefinement` when the episode
-returns a candidate with changed canonical leaf values.
+Built-in local-search kernels attach `CandidateRefinement` to successful
+`EvaluationOutcome` values when the episode returns a candidate with changed
+canonical leaf values. Recorded `EvaluationFailure` attempts never receive
+kernel refinement metadata.
 
 For structured spaces, `changed_leaf_paths` is the authoritative set of leaf
 paths reported by the refinement producer. A scalar leaf uses the root path

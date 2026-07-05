@@ -6,14 +6,19 @@ from ...artifacts import EvaluationRequest
 from ...evaluators.async_evaluator.contracts import AsyncEvaluator
 from ...evaluators.async_evaluator.sessions import ResumableBatchSession
 from ...kernel import DirectKernel
-from ...outcomes import EvaluationOutcome
+from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import (
+    ResumableOutcomeToAttemptBatchSession,
     StudyEvaluationRecordT,
     build_evaluation_requests,
+    finalize_ordered_attempts,
     finalize_ordered_outcomes,
+    require_resumable_batch_session,
     store_completion_group,
+    supports_attempt_batch_sessions,
+    supports_attempt_batches,
 )
 from ..validation import require_resumable_async_evaluator
 from .artifacts import StudyExactAsyncStepResumeHandle
@@ -32,7 +37,7 @@ def evaluate_batch_exact_async(
     ],
     problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
     requests: tuple[EvaluationRequest[CandidateT], ...],
-) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+) -> EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]:
     """Execute one request batch through the exact-async evaluator path.
 
     Parameters
@@ -46,9 +51,33 @@ def evaluate_batch_exact_async(
 
     Returns
     -------
-    tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
-        Ordered evaluator outcomes aligned with ``requests``.
+    EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+        Dense attempt batch aligned with ``requests``.
     """
+    if supports_attempt_batches(async_evaluator):
+        return async_evaluator.evaluate_attempts(problem, requests)
+
+    if supports_attempt_batch_sessions(async_evaluator):
+        attempt_session = async_evaluator.open_attempt_session(problem, requests)
+        ordered_attempts: list[
+            EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None
+        ] = [None] * attempt_session.handle.request_count
+        completed_count = 0
+        try:
+            while completed_count < attempt_session.handle.request_count:
+                completion_groups = tuple(attempt_session.wait())
+                for completion_group in completion_groups:
+                    completed_count += store_completion_group(
+                        ordered_attempts,
+                        completion_group,
+                        request_count=attempt_session.handle.request_count,
+                    )
+        except BaseException:
+            attempt_session.cancel()
+            raise
+
+        return finalize_ordered_attempts(ordered_attempts)
+
     batch_session = async_evaluator.open_session(problem, requests)
     ordered_outcomes: list[
         EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None
@@ -67,7 +96,10 @@ def evaluate_batch_exact_async(
         batch_session.cancel()
         raise
 
-    return finalize_ordered_outcomes(ordered_outcomes)
+    return EvaluationAttemptBatch(
+        requests=requests,
+        outcomes=finalize_ordered_outcomes(ordered_outcomes),
+    )
 
 
 def open_exact_async_step_session(
@@ -133,10 +165,23 @@ def open_exact_async_step_session(
         proposals,
         proposal_evaluation_specs=proposal_evaluation_specs,
     )
-    batch_session = resumable_evaluator.open_session(
-        study.problem,
-        requests,
-    )
+    if supports_attempt_batch_sessions(resumable_evaluator):
+        batch_session = resumable_evaluator.open_attempt_session(
+            study.problem,
+            requests,
+        )
+    else:
+        outcome_session = require_resumable_batch_session(
+            resumable_evaluator.open_session(
+                study.problem,
+                requests,
+            ),
+        )
+        batch_session = ResumableOutcomeToAttemptBatchSession(
+            requests=requests,
+            outcome_session=outcome_session,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
     if not isinstance(batch_session, ResumableBatchSession):
         msg = "resumable async evaluator returned a non-resumable batch session"
         raise TypeError(msg)
@@ -195,12 +240,19 @@ def resume_exact_async_step_session(
         )
         raise ValueError(msg)
 
-    batch_session = resumable_evaluator.resume_session(handle.evaluator_handle)
+    outcome_session = require_resumable_batch_session(
+        resumable_evaluator.resume_session(handle.evaluator_handle),
+    )
+    batch_session = ResumableOutcomeToAttemptBatchSession(
+        requests=handle.requests,
+        outcome_session=outcome_session,
+        candidate_equal=study.problem.space.candidates_equal,
+    )
     return StudyExactAsyncStepSession(
         study=study,
         requests=handle.requests,
         post_ask_state=handle.post_ask_state,
         batch_session=batch_session,
         candidate_equal=study.problem.space.candidates_equal,
-        ordered_outcomes=list(handle.ordered_outcomes),
+        ordered_attempts=list(handle.ordered_attempts),
     )

@@ -22,6 +22,23 @@ consumed by `Study`, exposed to outcome-aware methods through
 canonical `RunMethod.tell` path. See
 [`EvaluationOutcome`][variopt.EvaluationOutcome].
 
+## EvaluationFailure
+
+A request-aligned record of a user-code evaluation failure. It keeps the
+canonical `EvaluationRequest`, a JSON- and pickle-friendly
+`EvaluationExceptionSnapshot`, and the logical evaluation cost consumed by the
+failed attempt. It does not contain the raw exception object and is not a fake
+`EvaluationRecord`. See [`EvaluationFailure`][variopt.EvaluationFailure].
+
+## EvaluationAttemptBatch
+
+The dense aggregate that aligns a batch of `EvaluationRequest` slots with
+successful `EvaluationOutcome`s and recorded `EvaluationFailure`s. The aggregate
+owns slot indices, duplicate-index rejection, request identity alignment, and
+total evaluation-count accounting. `RunMethod.tell_attempts` consumes this
+aggregate at the optimizer assimilation boundary. See
+[`EvaluationAttemptBatch`][variopt.EvaluationAttemptBatch].
+
 ## DiversityMetric
 
 The distance or dissimilarity contract used by diversity-aware search methods.
@@ -51,8 +68,11 @@ The wrapped `Proposal` that an `Evaluator` receives and forwards to the
 ## Evaluator
 
 The component that owns execution mechanics — how a batch of
-`EvaluationRequest`s becomes a batch of `EvaluationOutcome`s. Backends include
-`SequentialEvaluator`, `JoblibEvaluator`, and `MpiEvaluator`. See
+`EvaluationRequest`s becomes successful `EvaluationOutcome`s or, through
+built-in evaluator `evaluate_attempts` hooks, a dense `EvaluationAttemptBatch`
+that preserves recorded user-code `EvaluationFailure`s. Backends include
+`SequentialEvaluator`, `JoblibEvaluator`, `AsyncJoblibEvaluator`, and
+`MpiEvaluator`. See
 [`Evaluator`][variopt.Evaluator].
 
 ## ExecutionResources
@@ -64,8 +84,8 @@ parallel owner, nested-parallelism policy, worker count, and backend label. See
 ## Kernel
 
 An optional bounded-episode component that turns one proposal batch into one
-locally improved report. Kernels own local search, not global search. See
-[`Kernel`][variopt.Kernel].
+locally improved `EvaluationAttemptBatch`. Kernels own local search, not global
+search. See [`Kernel`][variopt.Kernel].
 
 ## KernelDiagnostics
 
@@ -89,7 +109,8 @@ allowed below the current execution owner. See
 The multi-objective terminal sibling of `RunResult`. Materialised from a
 `RunReport` of `ObjectiveVectorRecord`s; exposes the non-dominated candidate
 set while preserving record-aligned `CandidateRefinement` provenance when the
-source report carried it. See
+source report carried it. Recorded evaluation failures remain separate from the
+frontier through `NondominatedRunSurface.failures`. See
 [`NondominatedRunSurface`][variopt.NondominatedRunSurface].
 
 ## Objective
@@ -154,25 +175,47 @@ and prioritized structured leaf paths. See
 ## RunMethod
 
 The search-state owner. Proposes candidates via `ask`, consumes records via
-`tell`, may opt into full outcome metadata through `tell_outcomes`, and owns
-the persistent search-state object. Population optimizers
+`tell`, may opt into full outcome metadata through `tell_outcomes`, consumes
+dense attempt batches through `tell_attempts`, and owns the persistent
+search-state object. Population optimizers
 (`CSAOptimizer`, `DifferentialEvolutionOptimizer`,
 `GeneticAlgorithmOptimizer`) are `RunMethod` implementations. See
 [`RunMethod`][variopt.RunMethod].
+
+## UnsupportedEvaluationFailureError
+
+Raised by the default `RunMethod.tell_attempts` implementation when a dense
+attempt batch contains recorded failures and the concrete optimizer has not
+defined how failed proposal lifecycle should affect its state. `CSAOptimizer`
+overrides this hook for failed proposal cleanup; GA and DE-family optimizers
+currently keep the default rejection contract. See
+[`UnsupportedEvaluationFailureError`][variopt.UnsupportedEvaluationFailureError].
+
+## RunExecutionFailed
+
+Raised when study orchestration hits a hard evaluator, backend, or assimilation
+failure that cannot be represented as a recorded `EvaluationFailure`. Carries a
+`partial_report` and `partial_state` for fully assimilated work, plus the latest
+checkpoint-safe report and state when one was reached. See
+[`RunExecutionFailed`][variopt.RunExecutionFailed].
 
 ## RunReport
 
 The generic terminal report produced by `Study.run(...)`. Covers any
 `EvaluationRecord` type and may carry record-aligned
 `CandidateRefinement` provenance when a kernel or evaluator changed candidates
-before evaluation. See [`RunReport`][variopt.RunReport].
+before evaluation. Recorded evaluation failures are exposed separately through
+`RunReport.failures`; they are not mixed into `RunReport.records`. See
+[`RunReport`][variopt.RunReport].
 
 ## RunResult
 
 The scalar terminal result produced by `Study.optimize(...)`. Covers scalar
 `Observation` records only and preserves observation-aligned
 `CandidateRefinement` provenance when local refinement changed evaluated
-candidates. See [`RunResult`][variopt.RunResult].
+candidates. Recorded evaluation failures are exposed separately through
+`RunResult.failures`; they are not mixed into `RunResult.observations`. See
+[`RunResult`][variopt.RunResult].
 
 ## SearchSpace
 

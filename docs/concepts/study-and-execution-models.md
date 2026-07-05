@@ -110,15 +110,24 @@ the same logical sequence it would under `sync_batch`.
 
 ## Outcome Metadata
 
-Each execution model transports `EvaluationOutcome` values, not just raw
-records. That matters for kernel diagnostics, evaluation-cost accounting, and
-candidate-refinement provenance.
+Execution boundaries transport `EvaluationAttemptBatch` values, not just raw
+records. Successful attempts carry `EvaluationOutcome` metadata for kernel
+diagnostics, evaluation-cost accounting, and candidate-refinement provenance.
+Recorded user-code failures remain separate `EvaluationFailure` attempts.
 
-`Study` preserves that metadata in terminal surfaces while keeping the semantic
-feedback record-based. Run methods normally consume `EvaluationRecord` values
-through `tell(...)`; methods that adapt from execution-side metadata can
-override `tell_outcomes(...)` without making refinement part of the evaluation
-protocol.
+`Study` preserves successful-outcome metadata in terminal surfaces while
+keeping the semantic feedback record-based. Run methods normally consume
+`EvaluationRecord` values through `tell(...)`; methods that adapt from
+execution-side metadata can override `tell_outcomes(...)` or
+`tell_attempts(...)` without making refinement or failure reporting part of the
+evaluation protocol.
+
+Among the built-in population methods, `CSAOptimizer` consumes recorded failed
+attempts by draining the failed proposal ids from pending CSA lifecycle state
+without treating them as observations. GA and DE-family optimizers currently
+raise `UnsupportedEvaluationFailureError` for failure-bearing attempt batches
+because they require an explicit partial-generation policy before failures can
+be assimilated safely.
 
 For the refinement vocabulary, see
 [Candidate Refinement](candidate-refinement.md).

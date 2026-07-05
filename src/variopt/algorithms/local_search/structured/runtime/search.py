@@ -4,7 +4,7 @@ import numpy as np
 
 from .....artifacts import Observation, Proposal, ProposalEvaluationSpec
 from .....kernel import KernelStatus
-from .....outcomes import EvaluationOutcome
+from .....outcomes import EvaluationAttemptBatch
 from .....randomness import random_state_choice_indices_without_replacement
 from .....spaces import CategoricalSpace, LeafPath
 from ..neighborhood import (
@@ -17,6 +17,7 @@ from ..neighborhood import (
     discrete_leaf_neighbors,
 )
 from .artifacts import (
+    StructuredImprovementScanResult,
     StructuredLocalImprovementResult,
     StructuredVariableNeighborhoodStageAttempt,
 )
@@ -109,7 +110,7 @@ def first_improving_single_leaf_outcome(
     leaf_schedule: tuple[tuple[LeafPath, DiscreteLeafSpace], ...],
     proposal_evaluation_spec: ProposalEvaluationSpec | None,
     reserved_count: int = 0,
-) -> tuple[EvaluationOutcome[StructuredCandidateT] | None, int, bool]:
+) -> StructuredImprovementScanResult[StructuredCandidateT]:
     """Return the first improving single-leaf move, if any.
 
     Parameters
@@ -130,12 +131,12 @@ def first_improving_single_leaf_outcome(
 
     Returns
     -------
-    tuple[EvaluationOutcome[StructuredCandidateT] | None, int, bool]
-        Improving outcome when found and the total number of evaluations
-        consumed while scanning the neighborhood, followed by whether the scan
-        stopped because no evaluation budget remained.
+    StructuredImprovementScanResult[StructuredCandidateT]
+        Improving outcome, accounting, failure attempts, and budget status for
+        the neighborhood scan.
     """
     evaluated_neighbor_count = 0
+    failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
     space = runtime.neighborhood.space
     space.validate(candidate)
     for path, leaf_space in leaf_schedule:
@@ -145,20 +146,37 @@ def first_improving_single_leaf_outcome(
         )
         for replacement in discrete_leaf_neighbors(leaf_space, current_leaf_value):
             if not runtime.can_evaluate(reserved_count=reserved_count):
-                return None, evaluated_neighbor_count, True
+                return StructuredImprovementScanResult(
+                    improved_outcome=None,
+                    evaluation_count=evaluated_neighbor_count,
+                    failed_attempts=tuple(failed_attempts),
+                    budget_exhausted=True,
+                )
             proposed_candidate = space.replace_leaf_values_in_validated_candidate(
                 candidate,
                 {path: replacement},
             )
-            proposed_outcome = runtime.evaluate_candidate(
+            proposed_attempt = runtime.evaluate_candidate_attempt(
                 candidate=proposed_candidate,
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
-            evaluated_neighbor_count += proposed_outcome.evaluation_count
+            evaluated_neighbor_count += proposed_attempt.evaluation_count
+            proposed_outcome = proposed_attempt.single_outcome_or_none()
+            if proposed_outcome is None:
+                failed_attempts.append(proposed_attempt)
+                continue
             if proposed_outcome.record.score < current_score:
-                return proposed_outcome, evaluated_neighbor_count, False
+                return StructuredImprovementScanResult(
+                    improved_outcome=proposed_outcome,
+                    evaluation_count=evaluated_neighbor_count,
+                    failed_attempts=tuple(failed_attempts),
+                )
 
-    return None, evaluated_neighbor_count, False
+    return StructuredImprovementScanResult(
+        improved_outcome=None,
+        evaluation_count=evaluated_neighbor_count,
+        failed_attempts=tuple(failed_attempts),
+    )
 
 
 def first_improving_pair_move_outcome(
@@ -170,7 +188,7 @@ def first_improving_pair_move_outcome(
     proposal_evaluation_spec: ProposalEvaluationSpec | None,
     pair_move_leaf_limit: int,
     reserved_count: int = 0,
-) -> tuple[EvaluationOutcome[StructuredCandidateT] | None, int, bool]:
+) -> StructuredImprovementScanResult[StructuredCandidateT]:
     """Return the first improving two-leaf move, if any.
 
     Parameters
@@ -193,16 +211,19 @@ def first_improving_pair_move_outcome(
 
     Returns
     -------
-    tuple[EvaluationOutcome[StructuredCandidateT] | None, int, bool]
-        Improving outcome when found and the total number of evaluations
-        consumed while scanning pair moves, followed by whether the scan
-        stopped because no evaluation budget remained.
+    StructuredImprovementScanResult[StructuredCandidateT]
+        Improving outcome, accounting, failure attempts, and budget status for
+        the pair-move scan.
     """
     limited_schedule = leaf_schedule[:pair_move_leaf_limit]
     if len(limited_schedule) < 2:
-        return None, 0, False
+        return StructuredImprovementScanResult(
+            improved_outcome=None,
+            evaluation_count=0,
+        )
 
     evaluated_neighbor_count = 0
+    failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
     space = runtime.neighborhood.space
     space.validate(candidate)
     for left_index in range(len(limited_schedule) - 1):
@@ -231,7 +252,12 @@ def first_improving_pair_move_outcome(
             for left_replacement in left_neighbors:
                 for right_replacement in right_neighbors:
                     if not runtime.can_evaluate(reserved_count=reserved_count):
-                        return None, evaluated_neighbor_count, True
+                        return StructuredImprovementScanResult(
+                            improved_outcome=None,
+                            evaluation_count=evaluated_neighbor_count,
+                            failed_attempts=tuple(failed_attempts),
+                            budget_exhausted=True,
+                        )
                     proposed_candidate = space.replace_leaf_values_in_validated_candidate(
                         candidate,
                         {
@@ -239,15 +265,27 @@ def first_improving_pair_move_outcome(
                             right_path: right_replacement,
                         },
                     )
-                    proposed_outcome = runtime.evaluate_candidate(
+                    proposed_attempt = runtime.evaluate_candidate_attempt(
                         candidate=proposed_candidate,
                         proposal_evaluation_spec=proposal_evaluation_spec,
                     )
-                    evaluated_neighbor_count += proposed_outcome.evaluation_count
+                    evaluated_neighbor_count += proposed_attempt.evaluation_count
+                    proposed_outcome = proposed_attempt.single_outcome_or_none()
+                    if proposed_outcome is None:
+                        failed_attempts.append(proposed_attempt)
+                        continue
                     if proposed_outcome.record.score < current_score:
-                        return proposed_outcome, evaluated_neighbor_count, False
+                        return StructuredImprovementScanResult(
+                            improved_outcome=proposed_outcome,
+                            evaluation_count=evaluated_neighbor_count,
+                            failed_attempts=tuple(failed_attempts),
+                        )
 
-    return None, evaluated_neighbor_count, False
+    return StructuredImprovementScanResult(
+        improved_outcome=None,
+        evaluation_count=evaluated_neighbor_count,
+        failed_attempts=tuple(failed_attempts),
+    )
 
 
 def run_structured_variable_neighborhood_stage_once(
@@ -295,29 +333,29 @@ def run_structured_variable_neighborhood_stage_once(
         If the stage configuration is incomplete or unsupported.
     """
     if stage.kind == "leafwise_first_improvement":
-        proposed_outcome, evaluation_count, budget_exhausted = (
-            first_improving_single_leaf_outcome(
-                runtime=runtime,
-                candidate=candidate,
-                current_score=current_score,
-                leaf_schedule=leaf_schedule,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                reserved_count=reserved_count,
-            )
+        scan_result = first_improving_single_leaf_outcome(
+            runtime=runtime,
+            candidate=candidate,
+            current_score=current_score,
+            leaf_schedule=leaf_schedule,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            reserved_count=reserved_count,
         )
-        if budget_exhausted:
+        if scan_result.budget_exhausted:
             return StructuredVariableNeighborhoodStageAttempt(
                 improved_outcome=None,
-                evaluation_count=evaluation_count,
+                evaluation_count=scan_result.evaluation_count,
                 terminal_status=KernelStatus.STOPPED,
                 terminal_message="evaluation budget exhausted before local convergence",
+                failed_attempts=scan_result.failed_attempts,
                 budget_exhausted=True,
             )
         return StructuredVariableNeighborhoodStageAttempt(
-            improved_outcome=proposed_outcome,
-            evaluation_count=evaluation_count,
+            improved_outcome=scan_result.improved_outcome,
+            evaluation_count=scan_result.evaluation_count,
             terminal_status=KernelStatus.CONVERGED,
             terminal_message="no improving move found in the full leafwise neighborhood",
+            failed_attempts=scan_result.failed_attempts,
         )
 
     if stage.kind == "sampled_leafwise_first_improvement":
@@ -336,6 +374,7 @@ def run_structured_variable_neighborhood_stage_once(
             ),
         )
         evaluation_count = 0
+        failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
         for move in sampled_neighborhood.moves:
             if not runtime.can_evaluate(reserved_count=reserved_count):
                 return StructuredVariableNeighborhoodStageAttempt(
@@ -343,6 +382,7 @@ def run_structured_variable_neighborhood_stage_once(
                     evaluation_count=evaluation_count,
                     terminal_status=KernelStatus.STOPPED,
                     terminal_message="evaluation budget exhausted before local convergence",
+                    failed_attempts=tuple(failed_attempts),
                     budget_exhausted=True,
                 )
             proposed_candidate = (
@@ -351,11 +391,15 @@ def run_structured_variable_neighborhood_stage_once(
                     {move.path: move.replacement},
                 )
             )
-            proposed_outcome = runtime.evaluate_candidate(
+            proposed_attempt = runtime.evaluate_candidate_attempt(
                 candidate=proposed_candidate,
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
-            evaluation_count += proposed_outcome.evaluation_count
+            evaluation_count += proposed_attempt.evaluation_count
+            proposed_outcome = proposed_attempt.single_outcome_or_none()
+            if proposed_outcome is None:
+                failed_attempts.append(proposed_attempt)
+                continue
             if proposed_outcome.record.score < current_score:
                 return StructuredVariableNeighborhoodStageAttempt(
                     improved_outcome=proposed_outcome,
@@ -364,6 +408,7 @@ def run_structured_variable_neighborhood_stage_once(
                     terminal_message=(
                         "sampled variable-neighborhood stage found an improving move"
                     ),
+                    failed_attempts=tuple(failed_attempts),
                 )
 
         if sampled_neighborhood.covers_full_neighborhood:
@@ -374,6 +419,7 @@ def run_structured_variable_neighborhood_stage_once(
                 terminal_message=(
                     "no improving move found in the full sampled leafwise neighborhood"
                 ),
+                failed_attempts=tuple(failed_attempts),
             )
 
         return StructuredVariableNeighborhoodStageAttempt(
@@ -381,6 +427,7 @@ def run_structured_variable_neighborhood_stage_once(
             evaluation_count=evaluation_count,
             terminal_status=KernelStatus.STOPPED,
             terminal_message="no improving move found in the sampled variable neighborhood",
+            failed_attempts=tuple(failed_attempts),
         )
 
     if stage.kind == "scheduled_single_then_pair":
@@ -388,60 +435,66 @@ def run_structured_variable_neighborhood_stage_once(
             msg = "scheduled stage must define pair_move_leaf_limit"
             raise ValueError(msg)
 
-        proposed_outcome, evaluation_count, budget_exhausted = (
-            first_improving_single_leaf_outcome(
-                runtime=runtime,
-                candidate=candidate,
-                current_score=current_score,
-                leaf_schedule=leaf_schedule,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                reserved_count=reserved_count,
-            )
+        single_scan_result = first_improving_single_leaf_outcome(
+            runtime=runtime,
+            candidate=candidate,
+            current_score=current_score,
+            leaf_schedule=leaf_schedule,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            reserved_count=reserved_count,
         )
-        if budget_exhausted:
+        if single_scan_result.budget_exhausted:
             return StructuredVariableNeighborhoodStageAttempt(
                 improved_outcome=None,
-                evaluation_count=evaluation_count,
+                evaluation_count=single_scan_result.evaluation_count,
                 terminal_status=KernelStatus.STOPPED,
                 terminal_message="evaluation budget exhausted before local convergence",
+                failed_attempts=single_scan_result.failed_attempts,
                 budget_exhausted=True,
             )
-        if proposed_outcome is not None:
+        if single_scan_result.improved_outcome is not None:
             return StructuredVariableNeighborhoodStageAttempt(
-                improved_outcome=proposed_outcome,
-                evaluation_count=evaluation_count,
+                improved_outcome=single_scan_result.improved_outcome,
+                evaluation_count=single_scan_result.evaluation_count,
                 terminal_status=KernelStatus.STOPPED,
                 terminal_message=(
                     "scheduled variable-neighborhood stage found an improving move"
                 ),
+                failed_attempts=single_scan_result.failed_attempts,
             )
 
-        pair_outcome, pair_evaluation_count, pair_budget_exhausted = (
-            first_improving_pair_move_outcome(
-                runtime=runtime,
-                candidate=candidate,
-                current_score=current_score,
-                leaf_schedule=leaf_schedule,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                pair_move_leaf_limit=stage.pair_move_leaf_limit,
-                reserved_count=reserved_count,
-            )
+        pair_scan_result = first_improving_pair_move_outcome(
+            runtime=runtime,
+            candidate=candidate,
+            current_score=current_score,
+            leaf_schedule=leaf_schedule,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            pair_move_leaf_limit=stage.pair_move_leaf_limit,
+            reserved_count=reserved_count,
         )
-        if pair_budget_exhausted:
+        combined_failed_attempts = (
+            single_scan_result.failed_attempts + pair_scan_result.failed_attempts
+        )
+        evaluation_count = (
+            single_scan_result.evaluation_count + pair_scan_result.evaluation_count
+        )
+        if pair_scan_result.budget_exhausted:
             return StructuredVariableNeighborhoodStageAttempt(
                 improved_outcome=None,
-                evaluation_count=evaluation_count + pair_evaluation_count,
+                evaluation_count=evaluation_count,
                 terminal_status=KernelStatus.STOPPED,
                 terminal_message="evaluation budget exhausted before local convergence",
+                failed_attempts=combined_failed_attempts,
                 budget_exhausted=True,
             )
         return StructuredVariableNeighborhoodStageAttempt(
-            improved_outcome=pair_outcome,
-            evaluation_count=evaluation_count + pair_evaluation_count,
+            improved_outcome=pair_scan_result.improved_outcome,
+            evaluation_count=evaluation_count,
             terminal_status=KernelStatus.CONVERGED,
             terminal_message=(
                 "no improving move found in the scheduled single-then-pair neighborhood"
             ),
+            failed_attempts=combined_failed_attempts,
         )
 
     msg = f"unsupported structured variable-neighborhood stage: {stage.kind!r}"
@@ -483,10 +536,24 @@ def run_leafwise_local_search_episode(
     StructuredLocalImprovementResult[StructuredCandidateT]
         Final observation and episode accounting after local improvement.
     """
-    current_outcome = runtime.evaluate_candidate(
+    original_proposal = proposal if initial_candidate is proposal.candidate else None
+    current_attempt = runtime.evaluate_candidate_attempt(
         candidate=initial_candidate,
+        proposal=original_proposal,
         proposal_evaluation_spec=proposal_evaluation_spec,
     )
+    failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
+    current_outcome = current_attempt.single_outcome_or_none()
+    if current_outcome is None:
+        failed_attempts.append(current_attempt)
+        return StructuredLocalImprovementResult(
+            record=None,
+            evaluation_count=current_attempt.evaluation_count,
+            completed_steps=0,
+            converged=False,
+            failed_attempts=tuple(failed_attempts),
+        )
+
     current_record = current_outcome.record
     current_candidate = current_record.candidate
     current_value = current_record.value
@@ -497,17 +564,18 @@ def run_leafwise_local_search_episode(
     budget_exhausted = False
 
     while completed_steps < max_steps:
-        proposed_outcome, neighbor_evaluation_count, budget_exhausted = (
-            first_improving_single_leaf_outcome(
-                runtime=runtime,
-                candidate=current_candidate,
-                current_score=current_score,
-                leaf_schedule=leaf_schedule,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                reserved_count=reserved_count,
-            )
+        scan_result = first_improving_single_leaf_outcome(
+            runtime=runtime,
+            candidate=current_candidate,
+            current_score=current_score,
+            leaf_schedule=leaf_schedule,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            reserved_count=reserved_count,
         )
-        evaluation_count += neighbor_evaluation_count
+        evaluation_count += scan_result.evaluation_count
+        failed_attempts.extend(scan_result.failed_attempts)
+        proposed_outcome = scan_result.improved_outcome
+        budget_exhausted = scan_result.budget_exhausted
         if proposed_outcome is None:
             converged = not budget_exhausted
             break
@@ -529,5 +597,6 @@ def run_leafwise_local_search_episode(
         evaluation_count=evaluation_count,
         completed_steps=completed_steps,
         converged=converged,
+        failed_attempts=tuple(failed_attempts),
         budget_exhausted=budget_exhausted,
     )

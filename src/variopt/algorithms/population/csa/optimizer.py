@@ -21,7 +21,7 @@ from ....execution import (
 from ....json_types import JSONDict, JSONValue
 from ....kernel import ProposalLocalSearchContext
 from ....methods import RunMethod
-from ....outcomes import EvaluationOutcome
+from ....outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ....randomness import (
     RandomSeed,
     RandomStateSnapshot,
@@ -657,6 +657,95 @@ class CSAOptimizer(
             tuple(observations),
             explicit_local_displacement_leaf_paths=tuple(explicit_paths),
         )
+
+    @override
+    def tell_attempts(
+        self,
+        state: CSAEngineState[CandidateT],
+        attempts: EvaluationAttemptBatch[OutcomeCandidateT, Observation[CandidateT]],
+    ) -> CSAEngineState[CandidateT]:
+        """Advance CSA state from successful and failed evaluation attempts.
+
+        Parameters
+        ----------
+        state : CSAEngineState[CandidateT]
+            Current immutable CSA engine state.
+        attempts : EvaluationAttemptBatch[OutcomeCandidateT, Observation[CandidateT]]
+            Dense request-aligned attempt batch containing successful outcomes
+            and recorded evaluation failures.
+
+        Returns
+        -------
+        CSAEngineState[CandidateT]
+            Updated engine state after successes update optimizer evidence and
+            failures consume pending proposal lifecycle.
+
+        Raises
+        ------
+        ValueError
+            If failed attempts do not align with distinct pending proposal ids.
+        """
+        if not attempts.has_failures:
+            return self.tell_outcomes(state, attempts.outcomes)
+
+        failed_proposal_ids = self._validate_failed_attempt_proposal_ids(
+            state,
+            attempts,
+        )
+        next_state = state.consume_failed_pending_proposals(failed_proposal_ids)
+        if len(attempts.outcomes) > 0:
+            return self.tell_outcomes(next_state, attempts.outcomes)
+
+        if next_state.generation_state.ready_to_commit or (
+            next_state.pending_proposals.is_empty
+            and (
+                next_state.progression_state.has_pending_action
+                or next_state.banking_state.refresh_state is not None
+            )
+        ):
+            return self._tell_with_explicit_local_displacements(next_state, ())
+
+        return next_state
+
+    def _validate_failed_attempt_proposal_ids(
+        self,
+        state: CSAEngineState[CandidateT],
+        attempts: EvaluationAttemptBatch[OutcomeCandidateT, Observation[CandidateT]],
+    ) -> frozenset[str]:
+        failed_proposal_ids: set[str] = set()
+        successful_proposal_ids = {
+            outcome.record.proposal.proposal_id
+            for outcome in attempts.outcomes
+            if outcome.record.proposal.proposal_id is not None
+        }
+        for failure in attempts.failures:
+            proposal_id = failure.proposal_id
+            if proposal_id is None:
+                msg = (
+                    "failed attempts supplied to CSAOptimizer.tell_attempts "
+                    "must reference proposal ids"
+                )
+                raise ValueError(msg)
+
+            if proposal_id in failed_proposal_ids or proposal_id in successful_proposal_ids:
+                msg = (
+                    "attempts supplied to CSAOptimizer.tell_attempts must have "
+                    "distinct proposal ids"
+                )
+                raise ValueError(msg)
+
+            pending_proposal = state.pending_proposals.get(proposal_id)
+            if pending_proposal is None:
+                msg = "failed attempt does not correspond to a pending proposal"
+                raise ValueError(msg)
+
+            if pending_proposal is not failure.proposal and pending_proposal != failure.proposal:
+                msg = "failed attempt proposal does not match the pending proposal"
+                raise ValueError(msg)
+
+            failed_proposal_ids.add(proposal_id)
+
+        return frozenset(failed_proposal_ids)
 
     def _tell_with_explicit_local_displacements(
         self,

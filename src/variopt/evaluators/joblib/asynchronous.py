@@ -12,9 +12,9 @@ import joblib  # pyright: ignore[reportMissingTypeStubs]
 from typing_extensions import override
 
 from ...artifacts import EvaluationRequest
-from ...evaluation_pipeline import evaluate_request_outcome
+from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
-from ...outcomes import EvaluationOutcome
+from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
 from ..async_evaluator.artifacts import (
@@ -39,6 +39,7 @@ from .contracts import (
     JoblibDelayedFactory,
     JoblibEvaluationRecordT,
     JoblibGeneratorParallelFactory,
+    JoblibListParallelFactory,
 )
 from .execution import build_execution_resources, validate_joblib_configuration
 
@@ -267,6 +268,56 @@ class AsyncJoblibEvaluator(
             evaluator=self,
             _handle=self.submit_batch(problem, requests),
         )
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT],
+        requests: Sequence[EvaluationRequest[CandidateT]],
+    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]:
+        """Execute a request batch through joblib into a dense attempt batch.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+            Problem that defines evaluation semantics.
+        requests : Sequence[EvaluationRequest[CandidateT]]
+            Request batch to execute.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]
+            Dense attempt batch aligned to ``requests``.
+
+        Notes
+        -----
+        This batch-level attempt hook is separate from exact-async session
+        orchestration. Session-level attempt wiring is handled by the study
+        orchestration migration.
+        """
+        parallel_factory = cast(
+            JoblibListParallelFactory[
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]
+            ],
+            getattr(joblib, "Parallel"),
+        )
+        delayed_factory = cast(
+            JoblibDelayedFactory,
+            getattr(joblib, "delayed"),
+        )
+        attempts = parallel_factory(
+            n_jobs=self.n_jobs,
+            backend=self.backend,
+        )(
+            delayed_factory(evaluate_request_attempt)(
+                problem=problem,
+                request=request,
+            )
+            for request in requests
+        )
+        return EvaluationAttemptBatch[
+            CandidateT,
+            JoblibEvaluationRecordT,
+        ].from_single_request_attempts(tuple(attempts))
 
     @override
     def resume_session(

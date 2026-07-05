@@ -4,7 +4,11 @@ import pytest
 from typing_extensions import override
 
 from tests.study_support import (
+    AttemptOutOfOrderAsyncEvaluator,
     ExactAsyncCapableBatchQueueOptimizer,
+    FailingCandidateObjective,
+    FailureRecordingBatchQueueOptimizer,
+    NonResumableSessionResumableAsyncEvaluator,
     OutcomeAwareBatchQueueOptimizer,
     OutOfOrderAsyncEvaluator,
     RecordingKernel,
@@ -293,6 +297,42 @@ class StudyExactAsyncTests:
                 for observation in next_state.tell_history[0]
             ) == ("p-1", "p-2")
 
+    def test_run_exact_async_records_out_of_order_attempt_failures(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-1"),
+                    Proposal(candidate=5, proposal_id="p-2"),
+                    Proposal(candidate=1, proposal_id="p-3"),
+                ),
+            ],
+        )
+        evaluator = AttemptOutOfOrderAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            batch_size=3,
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+            "p-3",
+        )
+        assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
+        assert report.evaluation_count == 3
+        assert final_state.tell_history == ((report.records[0], report.records[1]),)
+        assert tuple(
+            failure_proposal_id
+            for failure_batch in final_state.failure_history
+            for failure_proposal_id in failure_batch
+        ) == ("p-2",)
+
     def test_optimize_exact_async_projects_evaluator_refinements(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
@@ -348,6 +388,25 @@ class StudyExactAsyncTests:
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
         with pytest.raises(TypeError, match="study-level resumable exact_async orchestration requires a ResumableAsyncEvaluator"):
+            _ = study.open_exact_async_step_session(
+                optimizer.create_initial_state(),
+                batch_size=1,
+            )
+
+    def test_open_exact_async_step_session_rejects_non_resumable_batch_session(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = NonResumableSessionResumableAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        with pytest.raises(TypeError, match="resumable async evaluator returned a non-resumable batch session"):
             _ = study.open_exact_async_step_session(
                 optimizer.create_initial_state(),
                 batch_size=1,
@@ -443,7 +502,9 @@ class StudyExactAsyncTests:
         )
         first_completion_groups = tuple(session.poll())
         resume_handle = session.suspend()
-        stored_outcome = resume_handle.ordered_outcomes[1]
+        stored_attempt = resume_handle.ordered_attempts[1]
+        assert stored_attempt is not None
+        stored_outcome = stored_attempt.single_outcome_or_none()
 
         assert len(first_completion_groups) == 1
         assert stored_outcome is not None
@@ -453,8 +514,12 @@ class StudyExactAsyncTests:
 
         resumed_session = study.resume_exact_async_step_session(resume_handle)
         observations, next_state = resumed_session.finish()
-        first_resumed_outcome = resumed_session.ordered_outcomes[0]
-        second_resumed_outcome = resumed_session.ordered_outcomes[1]
+        first_resumed_attempt = resumed_session.ordered_attempts[0]
+        second_resumed_attempt = resumed_session.ordered_attempts[1]
+        assert first_resumed_attempt is not None
+        assert second_resumed_attempt is not None
+        first_resumed_outcome = first_resumed_attempt.single_outcome_or_none()
+        second_resumed_outcome = second_resumed_attempt.single_outcome_or_none()
 
         assert tuple(observation.candidate for observation in observations) == (3, 1)
         assert first_resumed_outcome is not None

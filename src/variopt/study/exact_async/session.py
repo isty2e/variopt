@@ -16,14 +16,14 @@ from ...evaluators.async_evaluator.sessions import (
     EvaluationBatchSession,
     ResumableBatchSession,
 )
-from ...outcomes import EvaluationOutcome
+from ...outcomes import EvaluationAttemptBatch
 from ...spaces import CandidateEquality
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import (
     StudyEvaluationRecordT,
-    finalize_ordered_outcomes,
+    finalize_ordered_attempts,
     store_completion_group,
-    validate_aligned_outcomes,
+    validate_aligned_attempts,
 )
 from .artifacts import (
     StudyExactAsyncSessionLifecycle,
@@ -48,10 +48,10 @@ class StudyExactAsyncStepSession(
         Requests issued for this step.
     post_ask_state : RunMethodStateT
         Run-method state captured immediately after the corresponding ``ask``.
-    batch_session : EvaluationBatchSession[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
+    batch_session : EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]]
         Evaluator-owned async batch session for the issued requests.
-    ordered_outcomes : list[EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None], optional
-        Optional pre-filled outcome slots aligned to ``requests``.
+    ordered_attempts : list[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None], optional
+        Optional pre-filled attempt slots aligned to ``requests``.
     """
 
     study: StudyRunMethodOwner[
@@ -62,11 +62,11 @@ class StudyExactAsyncStepSession(
     requests: tuple[EvaluationRequest[CandidateT], ...]
     post_ask_state: RunMethodStateT
     batch_session: EvaluationBatchSession[
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
     ]
     candidate_equal: CandidateEquality[CandidateT]
-    ordered_outcomes: list[
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None
+    ordered_attempts: list[
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None
     ] = field(default_factory=list)
     _lifecycle: StudyExactAsyncSessionLifecycle = "active"
     _final_records: tuple[StudyEvaluationRecordT, ...] | None = None
@@ -85,12 +85,12 @@ class StudyExactAsyncStepSession(
             msg = "requests must align with batch_session.handle.request_count"
             raise ValueError(msg)
 
-        if len(self.ordered_outcomes) == 0:
-            self.ordered_outcomes = [None] * self.batch_session.handle.request_count
+        if len(self.ordered_attempts) == 0:
+            self.ordered_attempts = [None] * self.batch_session.handle.request_count
             return
 
-        if len(self.ordered_outcomes) != self.batch_session.handle.request_count:
-            msg = "ordered_outcomes must align with batch_session.handle.request_count"
+        if len(self.ordered_attempts) != self.batch_session.handle.request_count:
+            msg = "ordered_attempts must align with batch_session.handle.request_count"
             raise ValueError(msg)
 
     @property
@@ -114,7 +114,7 @@ class StudyExactAsyncStepSession(
             evaluator-owned handle.
         """
         completed_count = sum(
-            outcome is not None for outcome in self.ordered_outcomes
+            attempt is not None for attempt in self.ordered_attempts
         )
         return EvaluationBatchSessionState(
             request_count=self.handle.request_count,
@@ -126,15 +126,15 @@ class StudyExactAsyncStepSession(
     def poll(
         self,
     ) -> tuple[
-        CompletionGroup[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]],
         ...,
     ]:
         """Poll newly completed exact-async groups for this step session.
 
         Returns
         -------
-        tuple[CompletionGroup[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]], ...]
-            Newly completed outcome groups emitted by the evaluator.
+        tuple[CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]], ...]
+            Newly completed attempt groups emitted by the evaluator.
 
         Raises
         ------
@@ -163,7 +163,7 @@ class StudyExactAsyncStepSession(
         *,
         timeout: float | None = None,
     ) -> tuple[
-        CompletionGroup[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]],
         ...,
     ]:
         """Wait for newly completed exact-async groups for this step session.
@@ -175,8 +175,8 @@ class StudyExactAsyncStepSession(
 
         Returns
         -------
-        tuple[CompletionGroup[EvaluationOutcome[CandidateT, StudyEvaluationRecordT]], ...]
-            Newly completed outcome groups emitted by the evaluator, or an
+        tuple[CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]], ...]
+            Newly completed attempt groups emitted by the evaluator, or an
             empty tuple when ``timeout`` expires first.
 
         Raises
@@ -217,7 +217,7 @@ class StudyExactAsyncStepSession(
         self,
         completion_groups: tuple[
             CompletionGroup[
-                EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+                EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
             ],
             ...,
         ],
@@ -225,12 +225,12 @@ class StudyExactAsyncStepSession(
         """Store newly observed completion groups and update lifecycle."""
         for completion_group in completion_groups:
             _ = store_completion_group(
-                self.ordered_outcomes,
+                self.ordered_attempts,
                 completion_group,
                 request_count=self.handle.request_count,
             )
 
-        if all(outcome is not None for outcome in self.ordered_outcomes):
+        if all(attempt is not None for attempt in self.ordered_attempts):
             self._lifecycle = "completed"
 
     def suspend(
@@ -268,7 +268,7 @@ class StudyExactAsyncStepSession(
             evaluator_handle=evaluator_handle,
             requests=self.requests,
             post_ask_state=self.post_ask_state,
-            ordered_outcomes=tuple(self.ordered_outcomes),
+            ordered_attempts=tuple(self.ordered_attempts),
         )
 
     def finish(self) -> tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]:
@@ -297,16 +297,16 @@ class StudyExactAsyncStepSession(
         while self._lifecycle == "active":
             _ = self.wait()
 
-        outcomes = finalize_ordered_outcomes(self.ordered_outcomes)
-        validate_aligned_outcomes(
+        attempts = finalize_ordered_attempts(self.ordered_attempts)
+        validate_aligned_attempts(
             self.requests,
-            outcomes,
+            attempts,
             candidate_equal=self.candidate_equal,
         )
-        records = tuple(outcome.record for outcome in outcomes)
-        next_state = self.study.run_method.tell_outcomes(
+        records = attempts.records
+        next_state = self.study.run_method.tell_attempts(
             self.post_ask_state,
-            outcomes,
+            attempts,
         )
         self._final_records = records
         self._final_state = next_state
