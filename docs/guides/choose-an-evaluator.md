@@ -77,8 +77,20 @@ is the lifecycle object returned by that submission. `ResumableAsyncEvaluator`
 adds evaluator-owned suspend/resume handles for exact-async sessions without
 changing the run method's execution model.
 
-`AsyncJoblibEvaluator` also exposes attempt-aware session hooks used by `Study`
-to stream `EvaluationAttemptBatch` slots directly. In that path, ordinary
+`Study` requires native attempt-aware evaluator capability. Synchronous study
+execution calls `evaluate_attempts(...)`; async study execution uses
+attempt-batch session hooks such as `open_attempt_session(...)` and, for
+resumable exact-async sessions, `resume_attempt_session(...)`.
+Those attempts may carry request-free scalar or vector payloads such as
+`ObservationPayload` and `ObjectiveVectorPayload`, or already request-aligned
+record payloads. `Study` materializes successful payload attempts into feedback
+records before calling the run method, so scalar and vector evaluators do not
+need to build terminal records themselves. If a custom integration needs a
+payload family to feed a different feedback-record family, pass an explicit
+`EvaluationAttemptMaterializer` to `Study`.
+
+`AsyncJoblibEvaluator` provides the async hooks. In that path, ordinary
 objective `Exception`s become recorded `EvaluationFailure` attempts, while
 candidate validation, cancellation, and backend failures remain hard batch
-failures.
+failures. Direct `Evaluator.evaluate(...)` remains available on the evaluator
+facade, but `Study` does not adapt outcome-only batches or sessions.

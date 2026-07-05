@@ -32,7 +32,7 @@ from variopt.algorithms.local_search import (
     StructuredVariableNeighborhoodKernel,
     StructuredVariableNeighborhoodStage,
 )
-from variopt.artifacts import EvaluationSuccess, KernelStatus
+from variopt.artifacts import EvaluationSuccess, KernelStatus, ObservationPayload
 from variopt.execution import (
     ExecutionResources,
     NestedParallelismPolicy,
@@ -65,8 +65,8 @@ class DummyProposalKernelHint(ProposalKernelHint):
 
 
 def evaluate_query_directly(
-    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
-) -> EvaluationAttemptBatch[CandidateRunnerT]:
+    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT, ObservationPayload],
+) -> EvaluationAttemptBatch[CandidateRunnerT, ObservationPayload]:
     """Evaluate one proposal batch directly through the problem objective."""
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(query.proposals))
@@ -90,9 +90,9 @@ def evaluate_query_directly(
 
 
 def record_and_evaluate_query_directly(
-    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
+    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT, ObservationPayload],
     evaluated_candidates: list[CandidateRunnerT],
-) -> EvaluationAttemptBatch[CandidateRunnerT]:
+) -> EvaluationAttemptBatch[CandidateRunnerT, ObservationPayload]:
     """Record candidates crossing the evaluator boundary before evaluation."""
     evaluated_candidates.extend(proposal.candidate for proposal in query.proposals)
     return evaluate_query_directly(query)
@@ -416,8 +416,8 @@ class StructuredHillClimbKernelTests:
         )
 
         def fail_neighbor_four(
-            local_query: ProposalBatchQuery[int, int],
-        ) -> EvaluationAttemptBatch[int]:
+            local_query: ProposalBatchQuery[int, int, ObservationPayload],
+        ) -> EvaluationAttemptBatch[int, ObservationPayload]:
             proposal = local_query.proposals[0]
             request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
             if proposal.candidate == 4:
@@ -455,8 +455,8 @@ class StructuredHillClimbKernelTests:
         )
 
         def fail_every_attempt(
-            local_query: ProposalBatchQuery[int, int],
-        ) -> EvaluationAttemptBatch[int]:
+            local_query: ProposalBatchQuery[int, int, ObservationPayload],
+        ) -> EvaluationAttemptBatch[int, ObservationPayload]:
             proposal = local_query.proposals[0]
             request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
             failure = EvaluationFailure[int](
@@ -497,8 +497,8 @@ class StructuredHillClimbKernelTests:
         )
 
         def fail_first_proposal(
-            local_query: ProposalBatchQuery[int, int],
-        ) -> EvaluationAttemptBatch[int]:
+            local_query: ProposalBatchQuery[int, int, ObservationPayload],
+        ) -> EvaluationAttemptBatch[int, ObservationPayload]:
             proposal = local_query.proposals[0]
             request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
             if proposal.proposal_id == "p-fail":
@@ -537,8 +537,8 @@ class StructuredHillClimbKernelTests:
         )
 
         def malformed_runner(
-            local_query: ProposalBatchQuery[int, int],
-        ) -> EvaluationAttemptBatch[int]:
+            local_query: ProposalBatchQuery[int, int, ObservationPayload],
+        ) -> EvaluationAttemptBatch[int, ObservationPayload]:
             proposal = local_query.proposals[0]
             return evaluate_query_directly(
                 ProposalBatchQuery(
@@ -568,8 +568,8 @@ class StructuredHillClimbKernelTests:
         )
 
         def fail_original_proposal(
-            local_query: ProposalBatchQuery[int, int],
-        ) -> EvaluationAttemptBatch[int]:
+            local_query: ProposalBatchQuery[int, int, ObservationPayload],
+        ) -> EvaluationAttemptBatch[int, ObservationPayload]:
             proposal = local_query.proposals[0]
             request: EvaluationRequest[int] = EvaluationRequest(proposal=proposal)
             failure = EvaluationFailure[int](
@@ -597,12 +597,12 @@ class StructuredHillClimbKernelTests:
             ("red", "green", "blue")
         )
         initial_candidate: Color = "red"
-        problem: Problem[Color, Color, Observation[Color]] = Problem(
+        problem: Problem[Color, Color, ObservationPayload] = Problem(
             space=color_space,
             objective=CategoricalObjective(),
         )
         kernel = StructuredHillClimbKernel[Color, Color](max_steps=4)
-        query: ProposalBatchQuery[Color, Color, Observation[Color]] = (
+        query: ProposalBatchQuery[Color, Color, ObservationPayload] = (
             ProposalBatchQuery(
                 problem=problem,
                 proposals=(
@@ -1272,7 +1272,7 @@ class StructuredVariableNeighborhoodKernelTests:
                 ),
             ),
         )
-        query: ProposalBatchQuery[Sequence[int], tuple[int, ...]] = ProposalBatchQuery(
+        query: ProposalBatchQuery[Sequence[int], tuple[int, ...], ObservationPayload] = ProposalBatchQuery(
             problem=problem,
             proposals=(Proposal(candidate=(0, 0, 0), proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),
@@ -1494,7 +1494,7 @@ class StructuredIteratedLocalSearchKernelTests:
             kick_policy=StructuredKickPolicy(kick_leaf_count=1),
             random_state=4,
         )
-        query: ProposalBatchQuery[Sequence[int], tuple[int, ...]] = ProposalBatchQuery(
+        query: ProposalBatchQuery[Sequence[int], tuple[int, ...], ObservationPayload] = ProposalBatchQuery(
             problem=problem,
             proposals=(Proposal(candidate=(0, 0, 0), proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),

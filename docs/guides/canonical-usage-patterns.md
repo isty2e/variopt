@@ -13,7 +13,7 @@ records and you want one scalar
 [`RunResult`][variopt.RunResult].
 
 Use [`Study.run`][variopt.Study.run]
-when a run method consumes successful payload projections and you want one
+when a run method consumes materialized request-aligned records and you want one
 generic
 [`RunReport`][variopt.RunReport].
 
@@ -24,9 +24,9 @@ The smallest practical custom protocol pattern is:
 1. Define one request-free payload type.
 2. Implement one proposal-local
    [`EvaluationProtocol`][variopt.EvaluationProtocol].
-3. Let evaluation artifacts attach request identity when materializing
+3. Let evaluation artifacts attach request identity when recording
    [`EvaluationSuccess`][variopt.artifacts.EvaluationSuccess]
-   and terminal reports.
+   values.
 
 ```python
 from dataclasses import dataclass
@@ -39,7 +39,6 @@ from variopt import (
     IntegerSpace,
     Problem,
     Proposal,
-    RunReport,
 )
 from variopt.artifacts import EvaluationSuccess
 
@@ -81,23 +80,27 @@ def evaluate_success(
 successes = tuple(
     evaluate_success(request) for request in requests
 )
-report = RunReport[int, LabelPayload].from_successes(successes)
 
-assert report.evaluation_count == 2
-assert [payload.label for payload in report.records] == ["parity:1", "parity:0"]
+assert sum(success.evaluation_count for success in successes) == 2
+assert [success.payload.label for success in successes] == [
+    "parity:1",
+    "parity:0",
+]
 ```
 
 In normal optimization runs, [`Problem`][variopt.Problem] and
 [`Study`][variopt.Study] provide the validation and orchestration shell around
-the same request-free protocol contract.
+the same request-free protocol contract. `Study` then materializes built-in
+scalar and vector payload attempts into request-aligned records at the
+run-method feedback boundary.
 
 ## Compatibility `Study.run(...)`
 
 `Study.run(...)` still interoperates with custom run methods that consume
-successful payload projections through `RunMethod.tell(...)`. If a custom
-payload is used directly with that legacy feedback path today, it must expose
-the evaluated request and candidate structurally; do not subclass an
-obsolete generic record base from the public facade.
+records through `RunMethod.tell(...)`. If a custom payload is used directly with
+that legacy feedback path today, it must already be a request-aligned record:
+it must expose the evaluated request and candidate structurally. Do not subclass
+an obsolete generic record base from the public facade.
 
 ```python
 from dataclasses import dataclass
@@ -225,24 +228,22 @@ from the generic report instead.
 from variopt import (
     EvaluationRequest,
     NondominatedRunSurface,
+    ObjectiveVectorRecord,
     OptimizationDirection,
     Proposal,
     RunReport,
 )
-from variopt.artifacts import EvaluationSuccess, ObjectiveVectorPayload
+from variopt.artifacts import EvaluationSuccess
 
 
-successes = tuple(
-    EvaluationSuccess(
-        request=EvaluationRequest(
-            proposal=Proposal(candidate=candidate, proposal_id=proposal_id),
-        ),
-        payload=ObjectiveVectorPayload.from_objective_values(
-            objective_values=objective_values,
-            directions=(
-                OptimizationDirection.MINIMIZE,
-                OptimizationDirection.MINIMIZE,
-            ),
+records = tuple(
+    ObjectiveVectorRecord.from_objective_values(
+        proposal=Proposal(candidate=candidate, proposal_id=proposal_id),
+        candidate=candidate,
+        objective_values=objective_values,
+        directions=(
+            OptimizationDirection.MINIMIZE,
+            OptimizationDirection.MINIMIZE,
         ),
     )
     for candidate, proposal_id, objective_values in (
@@ -252,8 +253,12 @@ successes = tuple(
         (4, "p-4", (4.0, 4.0)),
     )
 )
+successes = tuple(
+    EvaluationSuccess(request=record.request, payload=record)
+    for record in records
+)
 
-report = RunReport[int, ObjectiveVectorPayload].from_successes(
+report = RunReport[int, ObjectiveVectorRecord[int]].from_successes(
     successes=successes,
     evaluation_count=5,
 )

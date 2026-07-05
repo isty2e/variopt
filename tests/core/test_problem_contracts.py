@@ -28,7 +28,12 @@ from variopt import (
     Study,
 )
 from variopt.algorithms.population import CSAOptimizer
-from variopt.artifacts import InteractionEvaluationUnit, ObservationPayload
+from variopt.artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationSuccess,
+    InteractionEvaluationUnit,
+    ObservationPayload,
+)
 from variopt.kernel import DirectKernel
 
 PickleRoundTripT = TypeVar("PickleRoundTripT")
@@ -74,6 +79,22 @@ class LegacyObservationEvaluator(
                 evaluation_count=1,
             )
             for request in requests
+        )
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[int, int, Observation[int]],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+        """Return request-owned attempts for the current Study evaluator contract."""
+        return EvaluationAttemptBatch(
+            attempts=tuple(
+                EvaluationSuccess(
+                    request=request,
+                    payload=problem.evaluation_protocol.evaluate_request(request),
+                )
+                for request in requests
+            ),
         )
 
 

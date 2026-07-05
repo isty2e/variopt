@@ -105,11 +105,15 @@ class AttributeBagProtocol(EvaluationProtocol[int, CompatibilityEvaluationPayloa
         candidate = request.candidate
 
         class AttributeBagPayload:
+            request: EvaluationRequest[int]
+            candidate: int
+
             def __init__(self) -> None:
-                self.request = "not an evaluation request"
+                self.request = request
+                object.__setattr__(self, "request", "not an evaluation request")
                 self.candidate = candidate
 
-        return cast(CompatibilityEvaluationPayload, AttributeBagPayload())
+        return AttributeBagPayload()
 
 
 class VectorPayloadProtocol(EvaluationProtocol[int, ObjectiveVectorPayload]):

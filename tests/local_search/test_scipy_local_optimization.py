@@ -27,6 +27,7 @@ from variopt.algorithms.local_search.scipy import kernel as scipy_kernel_module
 from variopt.artifacts import (
     EvaluationSuccess,
     KernelStatus,
+    ObservationPayload,
     ProposalEvaluationSpec,
 )
 from variopt.execution import (
@@ -53,8 +54,8 @@ CandidateRunnerT = TypeVar("CandidateRunnerT")
 
 
 def evaluate_query_directly(
-    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT],
-) -> EvaluationAttemptBatch[CandidateRunnerT]:
+    query: ProposalBatchQuery[BoundaryRunnerT, CandidateRunnerT, ObservationPayload],
+) -> EvaluationAttemptBatch[CandidateRunnerT, ObservationPayload]:
     """Evaluate one proposal batch directly through the problem objective."""
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(query.proposals))
@@ -82,7 +83,7 @@ def evaluate_query_directly(
 
 def attempt_batch_from_observations(
     observations: tuple[Observation[CandidateRunnerT], ...],
-) -> EvaluationAttemptBatch[CandidateRunnerT]:
+) -> EvaluationAttemptBatch[CandidateRunnerT, ObservationPayload]:
     """Build a success-only attempt batch from scalar observation fixtures."""
     return EvaluationAttemptBatch(
         attempts=tuple(
@@ -150,7 +151,7 @@ class ScipyMinimizeKernelTests:
         *,
         problem: Problem[float | int, float],
         candidate: float,
-    ) -> ProposalBatchQuery[float | int, float]:
+    ) -> ProposalBatchQuery[float | int, float, ObservationPayload]:
         """Return one canonical single-proposal query."""
         return ProposalBatchQuery(
             problem=problem,
@@ -382,8 +383,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def failing_trial_runner(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             proposal = local_query.proposals[0]
             request: EvaluationRequest[float] = EvaluationRequest(proposal=proposal)
             if proposal.candidate == 2.0:
@@ -454,8 +455,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def failing_runner(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             proposal = local_query.proposals[0]
             request: EvaluationRequest[float] = EvaluationRequest(proposal=proposal)
             failure = EvaluationFailure[float](
@@ -528,8 +529,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def malformed_runner(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             proposal = local_query.proposals[0]
             return evaluate_query_directly(
                 ProposalBatchQuery(
@@ -664,8 +665,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def elapsed_runner(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             nonlocal runner_call_count
             runner_call_count += 1
             proposal = local_query.proposals[0]
@@ -789,8 +790,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def counting_runner(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             nonlocal runner_call_count
             runner_call_count += 1
             return evaluate_query_directly(local_query)
@@ -854,8 +855,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def counting_runner(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             nonlocal runner_call_count
             runner_call_count += 1
             return evaluate_query_directly(local_query)
@@ -1145,8 +1146,8 @@ class ScipyMinimizeKernelTests:
         )
 
         def assert_spec_forwarded(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             assert local_query.proposal_evaluation_specs == (spec,)
             proposal = local_query.proposals[0]
             return attempt_batch_from_observations(
@@ -1219,8 +1220,8 @@ class ScipyMinimizeKernelTests:
             )
 
         def assert_spec_forwarded(
-            local_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             assert local_query.proposal_evaluation_specs == (spec,)
             proposal = local_query.proposals[0]
             return attempt_batch_from_observations(
@@ -1502,8 +1503,8 @@ class ScipyMinimizeKernelTests:
             raise AssertionError("empty local-search batch should not prepare codec")
 
         def reject_runner(
-            empty_query: ProposalBatchQuery[float | int, float],
-        ) -> EvaluationAttemptBatch[float]:
+            empty_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
             _ = empty_query
             raise AssertionError("empty local-search batch should not call runner")
 

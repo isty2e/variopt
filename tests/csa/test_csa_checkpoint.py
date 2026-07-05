@@ -77,6 +77,7 @@ from variopt.algorithms.population.csa.scoring.model_state import (
 from variopt.algorithms.population.csa.selection.state import (
     SeedSelectionState,
 )
+from variopt.artifacts import ObservationPayload
 from variopt.evaluators import SequentialEvaluator
 from variopt.json_types import JSONValue
 from variopt.randomness import RandomStateSnapshot
@@ -645,7 +646,7 @@ class CSAOptimizerCheckpointTests:
         space = CategoricalSpace(tuple(range(10)))
 
         def build_study() -> tuple[
-            Study[int, int, CSAEngineState[int], Observation[int]],
+            Study[int, int, CSAEngineState[int], ObservationPayload, Observation[int]],
             CSAOptimizer[int, int],
         ]:
             optimizer = CSAOptimizer.from_space_defaults(

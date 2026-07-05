@@ -249,14 +249,20 @@ def evaluate_request_compatibility_record(
     """
     payload = evaluate_request_payload(problem=problem, request=request)
     if isinstance(payload, ObservationPayload):
-        record = _compatibility_record_from_payload(request=request, payload=payload)
-        _validate_compatibility_record_alignment(request=request, record=record)
-        return record
+        scalar_record = _compatibility_record_from_payload(
+            request=request,
+            payload=payload,
+        )
+        _validate_compatibility_record_alignment(request=request, record=scalar_record)
+        return scalar_record
 
     if isinstance(payload, ObjectiveVectorPayload):
-        record = _compatibility_record_from_payload(request=request, payload=payload)
-        _validate_compatibility_record_alignment(request=request, record=record)
-        return record
+        vector_record = _compatibility_record_from_payload(
+            request=request,
+            payload=payload,
+        )
+        _validate_compatibility_record_alignment(request=request, record=vector_record)
+        return vector_record
 
     if _is_request_aligned_compatibility_payload(payload):
         _validate_compatibility_record_alignment(request=request, record=payload)

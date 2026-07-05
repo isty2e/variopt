@@ -4,15 +4,22 @@ from typing import Protocol
 
 from typing_extensions import TypeVar
 
-from ...artifacts import EvaluationAttemptBatch, EvaluationRequest, Proposal
+from ...artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationAttemptMaterializer,
+    Proposal,
+)
 from ...artifacts.records import RequestAlignedEvaluationRecord
-from ...evaluators.base import Evaluator
 from ...kernel import Kernel, ProposalBatchQuery
 from ...methods import RunMethod
-from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT, RunMethodStateT
-from ..common import StudyEvaluationRecordT
+from ..common import (
+    StudyEvaluationPayload,
+    StudyEvaluator,
+    StudyPayloadT,
+    StudyRecordT,
+)
 
 AssimilationCandidateT = TypeVar("AssimilationCandidateT")
 AssimilatorRecordT = TypeVar(
@@ -23,6 +30,10 @@ AssimilatorRecordT = TypeVar(
 OwnerRunMethodRecordT = TypeVar(
     "OwnerRunMethodRecordT",
     bound=RequestAlignedEvaluationRecord[object],
+)
+OwnerPayloadT = TypeVar(
+    "OwnerPayloadT",
+    bound=StudyEvaluationPayload,
     contravariant=True,
 )
 BoundaryT = TypeVar("BoundaryT")
@@ -46,7 +57,12 @@ class AttemptBatchAssimilator(
 
 
 class StudyRunMethodOwner(
-    Protocol[RunMethodStateT, OwnerRunMethodRecordT],
+    Protocol[
+        CandidateT,
+        RunMethodStateT,
+        OwnerPayloadT,
+        OwnerRunMethodRecordT,
+    ],
 ):
     """Subset of study state required to assimilate exact-async completions.
 
@@ -63,9 +79,26 @@ class StudyRunMethodOwner(
         """Return the run method used to assimilate completed records."""
         ...
 
+    @property
+    def attempt_materializer(
+        self,
+    ) -> EvaluationAttemptMaterializer[
+        CandidateT,
+        OwnerPayloadT,
+        OwnerRunMethodRecordT,
+    ]:
+        """Return the payload-to-record materializer for feedback attempts."""
+        ...
+
 
 class StudyExactAsyncOwner(
-    Protocol[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    Protocol[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyPayloadT,
+        StudyRecordT,
+    ]
 ):
     """Subset of study state required to open and resume exact-async sessions.
 
@@ -78,7 +111,7 @@ class StudyExactAsyncOwner(
     @property
     def problem(
         self,
-    ) -> Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]:
+    ) -> Problem[BoundaryT, CandidateT, StudyPayloadT]:
         """Return the configured problem."""
         ...
 
@@ -88,7 +121,7 @@ class StudyExactAsyncOwner(
     ) -> RunMethod[
         RunMethodStateT,
         Proposal[CandidateT],
-        StudyEvaluationRecordT,
+        StudyRecordT,
     ]:
         """Return the configured run method."""
         ...
@@ -96,11 +129,7 @@ class StudyExactAsyncOwner(
     @property
     def evaluator(
         self,
-    ) -> Evaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-    ]:
+    ) -> StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]:
         """Return the configured evaluator."""
         ...
 
@@ -108,8 +137,19 @@ class StudyExactAsyncOwner(
     def kernel(
         self,
     ) -> Kernel[
-        ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
+        ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT],
     ]:
         """Return the configured kernel."""
+        ...
+
+    @property
+    def attempt_materializer(
+        self,
+    ) -> EvaluationAttemptMaterializer[
+        CandidateT,
+        StudyPayloadT,
+        StudyRecordT,
+    ]:
+        """Return the payload-to-record materializer for feedback attempts."""
         ...

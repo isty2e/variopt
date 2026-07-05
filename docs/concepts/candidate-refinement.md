@@ -45,9 +45,10 @@ Refinement is not owned by `EvaluationProtocol`.
   metadata if it deliberately transforms a candidate before protocol evaluation.
 - `EvaluationProtocol` owns only the meaning of evaluating the actual candidate
   it receives.
-- `Study` transports attempt batches at execution boundaries, records
-  accounting, and preserves aligned successful-outcome refinement metadata in
-  terminal reports.
+- `Study` transports payload attempt batches at execution boundaries,
+  materializes successful payloads into request-aligned records at run-method
+  feedback, records accounting, and preserves aligned successful-outcome
+  refinement metadata in terminal reports.
 - `RunMethod.tell(...)` remains record-based. A run method that needs
   execution-side metadata can override `RunMethod.tell_attempts(...)`.
 

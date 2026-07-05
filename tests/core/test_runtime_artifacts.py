@@ -1,7 +1,7 @@
 """Tests for runtime artifact values and terminal surfaces."""
 
 import pickle
-from dataclasses import fields, replace
+from dataclasses import dataclass, fields, replace
 from inspect import signature
 from typing import cast
 
@@ -39,6 +39,7 @@ from variopt.artifacts import (
     materialize_success_record,
     materialize_success_records,
 )
+from variopt.artifacts.records import RequestAlignedEvaluationRecord
 from variopt.kernel import DirectKernel
 
 
@@ -162,6 +163,26 @@ def make_int_success(
             direction=OptimizationDirection.MINIMIZE,
         ),
         evaluation_count=evaluation_count,
+    )
+
+
+def make_vector_record_success(
+    record: ObjectiveVectorRecord[int],
+    *,
+    refinement: CandidateRefinement[int] | None = None,
+) -> EvaluationSuccess[int, ObjectiveVectorRecord[int]]:
+    """Return a typed vector-record success aligned to the evaluated candidate."""
+    request = EvaluationRequest(
+        proposal=Proposal(
+            candidate=record.candidate,
+            proposal_id=record.proposal.proposal_id,
+        ),
+        proposal_evaluation_spec=record.proposal_evaluation_spec,
+    )
+    return EvaluationSuccess(
+        request=request,
+        payload=record,
+        refinement=refinement,
     )
 
 
@@ -1015,9 +1036,9 @@ class RuntimeArtifactsTests:
             TypeError,
             match="attempts must contain EvaluationSuccess or EvaluationFailure",
         ):
-            _ = EvaluationAttemptBatch[int, ObservationPayload](
-                attempts=(payload,),
-            )
+            batch = EvaluationAttemptBatch[int, ObservationPayload](attempts=())
+            object.__setattr__(batch, "attempts", (payload,))
+            batch.__post_init__()
 
     def test_evaluation_attempt_batch_accepts_all_failures(self) -> None:
         request_one = make_int_request(1, "p-1")
@@ -1131,6 +1152,9 @@ class RuntimeArtifactsTests:
         request = make_int_request(candidate=7, proposal_id="p-7")
 
         class AttributeBagPayload:
+            request: str
+            candidate: int
+
             def __init__(self, candidate: int) -> None:
                 self.request = "not an evaluation request"
                 self.candidate = candidate
@@ -1162,6 +1186,228 @@ class RuntimeArtifactsTests:
         assert materialized.failure_indices == (1,)
         assert materialized.failures == (failure,)
         assert type(materialized.successes[0].payload) is Observation
+
+    def test_materialize_attempt_batch_records_supports_empty_batch(self) -> None:
+        batch: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
+            attempts=(),
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.requests == ()
+        assert materialized.successes == ()
+        assert materialized.failures == ()
+        assert materialized.evaluation_count == 0
+
+    def test_materialize_attempt_batch_records_preserves_all_failure_batch(self) -> None:
+        request_one = make_int_request(candidate=1, proposal_id="p-1")
+        request_two = make_int_request(candidate=2, proposal_id="p-2")
+        failure_one = make_int_failure(request_one, evaluation_count=2)
+        failure_two = make_int_failure(request_two, evaluation_count=3)
+        batch: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
+            attempts=(failure_one, failure_two),
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.requests == (request_one, request_two)
+        assert materialized.successes == ()
+        assert materialized.failures == (failure_one, failure_two)
+        assert materialized.evaluation_count == 5
+
+    def test_materialize_attempt_batch_records_projects_vector_payload(self) -> None:
+        request = make_int_request(candidate=2, proposal_id="p-2")
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+        payload = ObjectiveVectorPayload.from_objective_values(
+            objective_values=(3.0, 5.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MAXIMIZE,
+            ),
+        )
+        success: EvaluationSuccess[int, ObjectiveVectorPayload] = EvaluationSuccess(
+            request=request,
+            payload=payload,
+            refinement=refinement,
+        )
+        batch: EvaluationAttemptBatch[int, ObjectiveVectorPayload] = (
+            EvaluationAttemptBatch(attempts=(success,))
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+        record = materialized.successes[0].payload
+
+        assert type(record) is ObjectiveVectorRecord
+        assert record.candidate == 2
+        assert record.proposal.candidate == 4
+        assert record.proposal.proposal_id == "p-2"
+        assert record.objective_values == (3.0, 5.0)
+        assert record.objective_scores == (3.0, -5.0)
+
+    def test_materialize_attempt_batch_records_preserves_record_payload(self) -> None:
+        request_one = make_int_request(candidate=5, proposal_id="p-5")
+        request_two = make_int_request(candidate=6, proposal_id="p-6")
+        record = LabelRecord(
+            request=request_one,
+            candidate=request_one.candidate,
+            label="five",
+        )
+        success: EvaluationSuccess[int, LabelRecord] = EvaluationSuccess(
+            request=request_one,
+            payload=record,
+        )
+        failure = make_int_failure(request_two, evaluation_count=3)
+        batch: EvaluationAttemptBatch[int, LabelRecord] = EvaluationAttemptBatch(
+            attempts=(success, failure),
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.requests == (request_one, request_two)
+        assert materialized.successes[0].payload is record
+        assert materialized.failures == (failure,)
+        assert materialized.evaluation_count == 4
+
+    def test_materialize_attempt_batch_records_preserves_refined_record_payload(
+        self,
+    ) -> None:
+        source_candidate = 4000
+        refined_candidate = 2000
+        source_request = make_int_request(candidate=source_candidate, proposal_id="p-x")
+        refined_request = make_int_request(
+            candidate=refined_candidate,
+            proposal_id="p-x",
+        )
+        refinement = CandidateRefinement(
+            source_candidate=source_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+        record = LabelRecord(
+            request=source_request,
+            candidate=refined_candidate,
+            label="refined",
+        )
+        success: EvaluationSuccess[int, LabelRecord] = EvaluationSuccess(
+            request=refined_request,
+            payload=record,
+            refinement=refinement,
+        )
+        batch: EvaluationAttemptBatch[int, LabelRecord] = EvaluationAttemptBatch(
+            attempts=(success,),
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.successes[0].payload is record
+
+    def test_materialize_attempt_batch_records_rejects_mismatched_record_request(
+        self,
+    ) -> None:
+        request = make_int_request(candidate=5, proposal_id="p-shared")
+        payload_request = make_int_request(candidate=6, proposal_id="p-shared")
+        record = LabelRecord(
+            request=payload_request,
+            candidate=request.candidate,
+            label="wrong-request",
+        )
+        success: EvaluationSuccess[int, LabelRecord] = EvaluationSuccess(
+            request=request,
+            payload=record,
+        )
+        batch: EvaluationAttemptBatch[int, LabelRecord] = EvaluationAttemptBatch(
+            attempts=(success,),
+        )
+
+        with pytest.raises(TypeError, match="cannot be materialized"):
+            _ = materialize_attempt_batch_records(batch)
+
+    def test_materialize_attempt_batch_records_rejects_refined_request_record(
+        self,
+    ) -> None:
+        source_candidate = 4000
+        refined_candidate = 2000
+        refined_request = make_int_request(
+            candidate=refined_candidate,
+            proposal_id="p-refined",
+        )
+        refinement = CandidateRefinement(
+            source_candidate=source_candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+        record = LabelRecord(
+            request=refined_request,
+            candidate=refined_candidate,
+            label="refined-request",
+        )
+        success: EvaluationSuccess[int, LabelRecord] = EvaluationSuccess(
+            request=refined_request,
+            payload=record,
+            refinement=refinement,
+        )
+        batch: EvaluationAttemptBatch[int, LabelRecord] = EvaluationAttemptBatch(
+            attempts=(success,),
+        )
+
+        with pytest.raises(TypeError, match="cannot be materialized"):
+            _ = materialize_attempt_batch_records(batch)
+
+    def test_materialize_attempt_batch_records_does_not_compare_record_candidates(
+        self,
+    ) -> None:
+        @dataclass(frozen=True, slots=True)
+        class ObjectRecord:
+            request: EvaluationRequest[SpaceOwnedEqualityCandidate]
+            candidate: SpaceOwnedEqualityCandidate
+            label: str
+
+        candidate = SpaceOwnedEqualityCandidate(stable_id=1)
+        request = EvaluationRequest(
+            proposal=Proposal(candidate=candidate, proposal_id="p-object"),
+        )
+        record = ObjectRecord(
+            request=request,
+            candidate=candidate,
+            label="object",
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObjectRecord,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=record,
+        )
+        batch: EvaluationAttemptBatch[
+            SpaceOwnedEqualityCandidate,
+            ObjectRecord,
+        ] = EvaluationAttemptBatch(attempts=(success,))
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.successes[0].payload is record
+
+    def test_evaluation_success_rejects_stale_pre_materialized_observation(
+        self,
+    ) -> None:
+        stale_request = make_int_request(candidate=99, proposal_id="stale")
+        request = make_int_request(candidate=2, proposal_id="p-2")
+        payload = Observation.from_objective_value(
+            request=stale_request,
+            candidate=99,
+            value=12.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+
+        with pytest.raises(ValueError, match="payload candidate"):
+            _ = EvaluationSuccess(
+                request=request,
+                payload=payload,
+            )
 
     def test_evaluation_attempt_batch_merge_rejects_multi_request_attempt(
         self,
@@ -1776,11 +2022,12 @@ class RuntimeArtifactsTests:
             records=(vector_record,),
             failures=(failure,),
         )
+        vector_report = RunReport[int, ObjectiveVectorRecord[int]].from_successes(
+            successes=(make_vector_record_success(vector_record),),
+            failures=(failure,),
+        )
         surface_from_report = NondominatedRunSurface[int].from_report(
-            RunReport[int, ObjectiveVectorRecord[int]].from_records(
-                records=(vector_record,),
-                failures=(failure,),
-            ),
+            vector_report,
         )
 
         assert result.observations == (observation,)
@@ -2376,8 +2623,13 @@ class RuntimeArtifactsTests:
             ),
         )
         trace = Trace(events=(TraceEvent(kind="run", message="completed"),))
-        report = RunReport[int, ObjectiveVectorRecord[int]].from_records(
-            records=(record_one, record_two, record_three, dominated_record),
+        report = RunReport[int, ObjectiveVectorRecord[int]].from_successes(
+            successes=(
+                make_vector_record_success(record_one),
+                make_vector_record_success(record_two),
+                make_vector_record_success(record_three),
+                make_vector_record_success(dominated_record),
+            ),
             evaluation_count=5,
             trace=trace,
         )
@@ -2416,9 +2668,11 @@ class RuntimeArtifactsTests:
             refined_candidate=3,
             changed_leaf_paths=((),),
         )
-        report = RunReport[int, ObjectiveVectorRecord[int]].from_records(
-            records=(record_one, record_two),
-            refinements=(refinement, None),
+        report = RunReport[int, ObjectiveVectorRecord[int]].from_successes(
+            successes=(
+                make_vector_record_success(record_one, refinement=refinement),
+                make_vector_record_success(record_two),
+            ),
         )
 
         surface = NondominatedRunSurface[int].from_report(report)
@@ -2654,7 +2908,7 @@ class RuntimeArtifactsTests:
         )
 
         with pytest.raises(ValueError):
-            _report: RunReport[int, LabelRecord] = RunReport.from_records(
+            _ = RunReport[int, RequestAlignedEvaluationRecord[int]].from_records(
                 records=(record,),
                 evaluation_count=0,
             )

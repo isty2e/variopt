@@ -1,29 +1,46 @@
 """Tests for exact-async Study execution."""
 
+from typing import TypeAlias
+
 import pytest
 from typing_extensions import override
 
 from tests.study_support import (
     AttemptOutOfOrderAsyncEvaluator,
+    BatchQueueOptimizerState,
     ExactAsyncCapableBatchQueueOptimizer,
     FailingCandidateObjective,
     FailureRecordingBatchQueueOptimizer,
+    FailureRecordingBatchQueueOptimizerState,
     NonResumableSessionResumableAsyncEvaluator,
     OutcomeAwareBatchQueueOptimizer,
     OutOfOrderAsyncEvaluator,
+    PayloadResumableOutOfOrderAsyncEvaluator,
     RecordingKernel,
     RefinementKernel,
     ResumableOutOfOrderAsyncEvaluator,
     SessionRecordingAsyncEvaluator,
     ShiftedObservationProtocol,
     SpaceOwnedEqualityAsyncEvaluator,
+    SpaceOwnedEqualityCandidate,
     SpaceOwnedEqualityObjective,
     SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualityOptimizerState,
     SpaceOwnedEqualitySpace,
     SquareObjective,
 )
-from variopt import EvaluationRequest, IntegerSpace, Problem, Proposal, Study
-from variopt.artifacts import ProposalEvaluationSpec
+from variopt import (
+    EvaluationRequest,
+    IntegerSpace,
+    Observation,
+    Problem,
+    Proposal,
+    Study,
+)
+from variopt.artifacts import (
+    ObservationPayload,
+    ProposalEvaluationSpec,
+)
 from variopt.evaluators import EvaluationBatchSessionState, SequentialEvaluator
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -32,6 +49,28 @@ from variopt.execution import (
     ExecutionModel,
 )
 from variopt.study.common import build_evaluation_requests
+
+ExactAsyncScalarStudy: TypeAlias = Study[
+    int,
+    int,
+    BatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+ExactAsyncFailureRecordingStudy: TypeAlias = Study[
+    int,
+    int,
+    FailureRecordingBatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+ExactAsyncSpaceOwnedEqualityStudy: TypeAlias = Study[
+    int | SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityOptimizerState,
+    ObservationPayload,
+    Observation[SpaceOwnedEqualityCandidate],
+]
 
 
 class OutcomeAwareExactAsyncBatchQueueOptimizer(OutcomeAwareBatchQueueOptimizer):
@@ -60,7 +99,11 @@ class StudyExactAsyncTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ExactAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
         state = optimizer.create_initial_state()
 
         with pytest.raises(ValueError, match="ordered_async execution models require an AsyncEvaluator"):
@@ -194,7 +237,13 @@ class StudyExactAsyncTests:
         )
         evaluator = OutOfOrderAsyncEvaluator()
         kernel = RecordingKernel()
-        study = Study(
+        study: Study[
+            int,
+            int,
+            BatchQueueOptimizerState,
+            ObservationPayload,
+            Observation[int],
+        ] = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -226,7 +275,7 @@ class StudyExactAsyncTests:
             ],
         )
         evaluator = OutOfOrderAsyncEvaluator()
-        study = Study(
+        study: ExactAsyncScalarStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -270,7 +319,11 @@ class StudyExactAsyncTests:
             ],
         )
         evaluator = OutOfOrderAsyncEvaluator(attach_refinement=True)
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ExactAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, next_state = study.run(
             max_evaluations=2,
@@ -312,7 +365,11 @@ class StudyExactAsyncTests:
             ],
         )
         evaluator = AttemptOutOfOrderAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ExactAsyncFailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(
             max_evaluations=3,
@@ -324,6 +381,7 @@ class StudyExactAsyncTests:
             "p-1",
             "p-3",
         )
+        assert all(type(success.payload) is Observation for success in report.successes)
         assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
         assert report.evaluation_count == 3
         assert final_state.tell_history == ((report.records[0], report.records[1]),)
@@ -393,7 +451,7 @@ class StudyExactAsyncTests:
                 batch_size=1,
             )
 
-    def test_open_exact_async_step_session_rejects_non_resumable_batch_session(
+    def test_open_exact_async_step_session_rejects_missing_attempt_resume(
         self,
     ) -> None:
         problem = Problem(
@@ -406,7 +464,10 @@ class StudyExactAsyncTests:
         evaluator = NonResumableSessionResumableAsyncEvaluator()
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
-        with pytest.raises(TypeError, match="resumable async evaluator returned a non-resumable batch session"):
+        with pytest.raises(
+            TypeError,
+            match="resumable exact_async evaluator must open and resume attempt-batch sessions",
+        ):
             _ = study.open_exact_async_step_session(
                 optimizer.create_initial_state(),
                 batch_size=1,
@@ -477,6 +538,46 @@ class StudyExactAsyncTests:
                 observation.proposal.proposal_id
                 for observation in next_state.tell_history[0]
             ) == ("p-1", "p-2")
+
+    def test_resume_handle_stores_payload_attempts_until_finish(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = PayloadResumableOutOfOrderAsyncEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        session = study.open_exact_async_step_session(
+            optimizer.create_initial_state(),
+            batch_size=2,
+        )
+        _ = tuple(session.poll())
+        resume_handle = session.suspend()
+        stored_attempt = resume_handle.ordered_attempts[1]
+        assert stored_attempt is not None
+        stored_success = stored_attempt.single_success_or_none()
+
+        assert stored_success is not None
+        assert type(stored_success.payload) is ObservationPayload
+
+        resumed_session = study.resume_exact_async_step_session(resume_handle)
+        observations, next_state = resumed_session.finish()
+
+        assert all(isinstance(observation, Observation) for observation in observations)
+        assert tuple(observation.proposal.proposal_id for observation in observations) == (
+            "p-1",
+            "p-2",
+        )
+        assert tuple(observation.value for observation in observations) == (16.0, 4.0)
+        assert next_state.tell_history == (observations,)
 
     def test_suspend_and_resume_exact_async_step_session_preserves_refinement_payload(
         self,

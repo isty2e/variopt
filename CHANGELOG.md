@@ -30,6 +30,22 @@ format. Stability guarantees for the public surface are documented in the
   rejects equal-but-different scalar runtime types, and non-finite categorical
   float choices or non-canonical structured scalar values are rejected at the
   relevant space boundary.
+- `Study` orchestration now requires native attempt-aware evaluator capability.
+  Custom evaluators used through `Study` must expose `evaluate_attempts(...)`
+  for synchronous execution, or attempt-batch session hooks for async execution.
+  Direct `Evaluator.evaluate(...)` and legacy `EvaluationOutcome` streams remain
+  available on the evaluator facade, but `Study` no longer adapts outcome-only
+  batches or sessions into attempt batches.
+- `Study` now separates evaluator/kernel payload attempts from run-method
+  feedback records. Scalar and vector protocols may return request-free
+  `ObservationPayload` or `ObjectiveVectorPayload` attempts; `Study`
+  materializes successful payloads into request-aligned records immediately
+  before `RunMethod.tell_attempts(...)` in sync, exact-async, and stale-async
+  execution. Custom materializers must preserve attempt slot count, slot order,
+  success/failure variants, request identity, evaluation counts, refinements,
+  diagnostics, and failure metadata while projecting successful payloads into
+  request-aligned records. The public `Study[...]` generic type therefore has
+  separate payload and feedback-record axes.
 
 ### Added
 
@@ -57,6 +73,10 @@ format. Stability guarantees for the public surface are documented in the
 - Outcome-aware `EvaluationAttemptBatch` now stores ordered attempt slots as its
   authoritative state and exposes request/outcome/failure index views as derived
   projections.
+- Added `EvaluationAttemptMaterializer` and
+  `DefaultEvaluationAttemptMaterializer` for integrations that need to describe
+  the typed payload-attempt to feedback-record projection used by `Study`
+  orchestration.
 
 ### Fixed
 

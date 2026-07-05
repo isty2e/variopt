@@ -49,8 +49,8 @@ changes in others:
   flat vector unless the space is one.
 
 Candidate refinement is another boundary case. It is execution-side provenance
-between proposal and evaluation record, carried by `EvaluationOutcome` and
-terminal reports rather than by the evaluation protocol itself. See
+between proposal and evaluation record, carried by successful attempt metadata
+and terminal reports rather than by the evaluation protocol itself. See
 [Candidate Refinement](candidate-refinement.md) for the proposed, refined,
 evaluated, and accepted candidate vocabulary.
 

@@ -115,13 +115,19 @@ records. Successful attempts carry `EvaluationSuccess` metadata for kernel
 diagnostics, evaluation-cost accounting, and candidate-refinement provenance.
 Recorded user-code failures remain separate `EvaluationFailure` attempts.
 
-`Study` preserves successful-outcome metadata in terminal surfaces while
-keeping the semantic feedback payload-based. Run methods normally consume
-successful payload projections through `tell(...)`; methods that adapt from
-execution-side metadata can override `tell_attempts(...)` without making
-refinement or failure reporting part of the evaluation protocol. The older
-`tell_outcomes(...)` hook remains for successful `EvaluationOutcome`
-compatibility streams.
+`Study` keeps evaluator and kernel execution payload-based, then materializes
+successful payload attempts into request-aligned records at the run-method
+feedback boundary. In synchronous execution this happens after the kernel
+returns an aligned attempt batch. In exact async execution it happens when the
+step session finishes. In stale async execution it happens for each completed
+group immediately before incremental feedback. Async session and resume
+storage therefore keep payload attempts, not terminal feedback records.
+
+Run methods consume the materialized record attempts through
+`tell_attempts(...)`; the default implementation still delegates success-only
+batches to record-based `tell(...)`. The older `tell_outcomes(...)` hook remains
+for successful `EvaluationOutcome` compatibility streams and is not an
+outcome-only fallback for `Study` orchestration.
 
 Among the built-in population methods, `CSAOptimizer` consumes recorded failed
 attempts by draining the failed proposal ids from pending CSA lifecycle state

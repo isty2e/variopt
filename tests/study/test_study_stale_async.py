@@ -10,18 +10,22 @@ from tests.study_support import (
     AttemptOutOfOrderAsyncEvaluator,
     FailingCandidateObjective,
     FailureRecordingBatchQueueOptimizer,
+    FailureRecordingBatchQueueOptimizerState,
     OutOfOrderAsyncEvaluator,
+    PayloadResumableOutOfOrderAsyncEvaluator,
     RecordingKernel,
     RollingStaleAsyncOptimizer,
     RollingStaleAsyncOptimizerState,
     SessionRecordingAsyncEvaluator,
     ShiftedObservationProtocol,
     SpaceOwnedEqualityAsyncEvaluator,
+    SpaceOwnedEqualityCandidate,
     SpaceOwnedEqualityObjective,
     SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualityOptimizerState,
     SpaceOwnedEqualitySpace,
     SquareObjective,
-    make_observation_attempt,
+    make_observation_payload_attempt,
 )
 from variopt import (
     EvaluationOutcome,
@@ -30,10 +34,17 @@ from variopt import (
     Observation,
     Problem,
     Proposal,
+    RunExecutionFailed,
     RunReport,
     Study,
+    UnsupportedEvaluationFailureError,
 )
-from variopt.artifacts import EvaluationAttemptBatch, Trace, TraceEvent
+from variopt.artifacts import (
+    EvaluationAttemptBatch,
+    ObservationPayload,
+    Trace,
+    TraceEvent,
+)
 from variopt.evaluators import (
     AsyncEvaluator,
     BatchExecutionFailed,
@@ -45,8 +56,29 @@ from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
 
 StaleAsyncOutcome: TypeAlias = EvaluationOutcome[int, Observation[int]]
 StaleAsyncCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncOutcome]
-StaleAsyncAttemptBatch: TypeAlias = EvaluationAttemptBatch[int, Observation[int]]
+StaleAsyncAttemptBatch: TypeAlias = EvaluationAttemptBatch[int, ObservationPayload]
 StaleAsyncAttemptCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncAttemptBatch]
+StaleAsyncScalarStudy: TypeAlias = Study[
+    int,
+    int,
+    RollingStaleAsyncOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+StaleAsyncFailureRecordingStudy: TypeAlias = Study[
+    int,
+    int,
+    FailureRecordingBatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+StaleAsyncSpaceOwnedEqualityStudy: TypeAlias = Study[
+    int | SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityOptimizerState,
+    ObservationPayload,
+    Observation[SpaceOwnedEqualityCandidate],
+]
 
 
 @runtime_checkable
@@ -201,7 +233,7 @@ class HolAvoidanceAsyncEvaluator(
         )
         self._next_batch_id += 1
         attempts: tuple[StaleAsyncAttemptBatch, ...] = tuple(
-            make_observation_attempt(problem=problem, request=request)
+            make_observation_payload_attempt(problem=problem, request=request)
             for request in requests
         )
         poll_results: tuple[tuple[StaleAsyncAttemptCompletionGroup, ...], ...]
@@ -267,7 +299,11 @@ class StudyStaleAsyncTests:
             proposals=(Proposal(candidate=3, proposal_id="p-1"),),
         )
         evaluator = OutOfOrderAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
         state = optimizer.create_initial_state()
 
         with pytest.raises(
@@ -293,7 +329,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = OutOfOrderAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(
             max_evaluations=4,
@@ -324,7 +364,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = SessionRecordingAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(
             max_evaluations=3,
@@ -341,6 +385,45 @@ class StudyStaleAsyncTests:
             "spawn-p-2",
         )
 
+    def test_run_stale_async_materializes_payload_groups_before_feedback(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = PayloadResumableOutOfOrderAsyncEvaluator()
+        study: Study[
+            int,
+            int,
+            RollingStaleAsyncOptimizerState,
+            ObservationPayload,
+            Observation[int],
+        ] = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert final_state.ask_history == (2, 1)
+        assert all(isinstance(record, Observation) for record in report.records)
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+            "p-1",
+            "spawn-p-2",
+        )
+        assert tuple(
+            record.proposal.proposal_id
+            for record_batch in final_state.tell_history
+            for record in record_batch
+        ) == ("p-2", "p-1", "spawn-p-2")
+
     def test_run_stale_async_polls_ready_later_session_after_empty_earlier_session(
         self,
     ) -> None:
@@ -355,7 +438,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = HolAvoidanceAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(
             max_evaluations=3,
@@ -389,7 +476,11 @@ class StudyStaleAsyncTests:
             ],
         )
         evaluator = AttemptOutOfOrderAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncFailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(
             max_evaluations=3,
@@ -401,6 +492,7 @@ class StudyStaleAsyncTests:
             "p-3",
             "p-1",
         )
+        assert all(type(success.payload) is Observation for success in report.successes)
         assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
         assert report.evaluation_count == 3
         assert tuple(
@@ -428,7 +520,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = AttemptOutOfOrderAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         try:
             _ = study.run(
@@ -437,13 +533,13 @@ class StudyStaleAsyncTests:
                 execution_model=STALE_ASYNC_EXECUTION_MODEL,
             )
         except RuntimeError as raw_exception:
-            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
             assert isinstance(raw_exception, StaleAsyncRunFailure)
-            exception = raw_exception
+            exception: StaleAsyncRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
         else:
             pytest.fail("expected stale-async tell failure")
 
-        assert exception.cause.__class__.__name__ == "UnsupportedEvaluationFailureError"
+        assert isinstance(exception.cause, UnsupportedEvaluationFailureError)
         assert exception.partial_report.records == ()
         assert exception.partial_report.failures == ()
         assert exception.partial_report.evaluation_count == 2
@@ -463,7 +559,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = FailingSecondBatchAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         try:
             _ = study.run(
@@ -472,8 +572,9 @@ class StudyStaleAsyncTests:
                 execution_model=STALE_ASYNC_EXECUTION_MODEL,
             )
         except RuntimeError as exception:
-            assert exception.__class__.__name__ == "RunExecutionFailed"
-            assert "attempt-batch-1" in str(exception)
+            exception_message = str(exception)
+            assert type(exception) is RunExecutionFailed
+            assert "attempt-batch-1" in exception_message
             assert isinstance(exception.__cause__, BatchExecutionFailed)
         else:
             pytest.fail("expected stale-async run failure")
@@ -494,7 +595,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = CancelFailingSecondBatchAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         try:
             _ = study.run(
@@ -503,8 +608,9 @@ class StudyStaleAsyncTests:
                 execution_model=STALE_ASYNC_EXECUTION_MODEL,
             )
         except RuntimeError as exception:
-            assert exception.__class__.__name__ == "RunExecutionFailed"
-            assert "attempt-batch-1" in str(exception)
+            exception_message = str(exception)
+            assert type(exception) is RunExecutionFailed
+            assert "attempt-batch-1" in exception_message
             assert isinstance(exception.__cause__, BatchExecutionFailed)
         else:
             pytest.fail("expected stale-async run failure")
@@ -536,7 +642,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = OutOfOrderAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, _ = study.run(
             max_evaluations=2,
@@ -562,7 +672,11 @@ class StudyStaleAsyncTests:
             ),
         )
         evaluator = OutOfOrderAsyncEvaluator(attach_refinement=True)
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(
             max_evaluations=2,
@@ -599,7 +713,11 @@ class StudyStaleAsyncTests:
         )
         optimizer = SpaceOwnedEqualityOptimizer()
         evaluator = SpaceOwnedEqualityAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncSpaceOwnedEqualityStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, _ = study.run(
             max_evaluations=1,
@@ -623,7 +741,11 @@ class StudyStaleAsyncTests:
         )
         optimizer = SpaceOwnedEqualityOptimizer()
         evaluator = SpaceOwnedEqualityAsyncEvaluator()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: StaleAsyncSpaceOwnedEqualityStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         result, _ = study.optimize(
             max_evaluations=1,

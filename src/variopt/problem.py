@@ -196,6 +196,10 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPa
             msg = "evaluation_protocol normalization failed"
             raise RuntimeError(msg)
 
+        canonical_protocol: (
+            EvaluationProtocol[CandidateT, ProblemPayloadT]
+            | _ObservationProtocolEvaluationProtocolAdapter[CandidateT]
+        )
         objective_compat: Objective[CandidateT] | None
         if objective is not None:
             canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(

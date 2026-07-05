@@ -15,11 +15,11 @@ structured leaf paths changed by refinement. See
 ## EvaluationOutcome
 
 The legacy compatibility pairing of one successful request-aligned payload with
-the evaluation cost it charged against the study budget, optional kernel
-diagnostics, and optional candidate-refinement provenance. New execution
-boundaries prefer `EvaluationSuccess` / `EvaluationFailure` attempt slots;
-`EvaluationOutcome` remains available for compatibility paths that still expose
-successful outcome metadata. See [`EvaluationOutcome`][variopt.EvaluationOutcome].
+the logical evaluation cost, optional kernel diagnostics, and optional
+candidate-refinement provenance. `EvaluationOutcome` remains available for
+direct evaluator compatibility APIs that expose successful outcome metadata.
+`Study` execution boundaries use `EvaluationSuccess` / `EvaluationFailure`
+attempt slots instead. See [`EvaluationOutcome`][variopt.EvaluationOutcome].
 
 ## EvaluationFailure
 
@@ -41,14 +41,14 @@ request-aligned record payloads. See
 
 ## EvaluationAttemptBatch
 
-At the artifact facade, the ordered aggregate whose slots are exactly
-`EvaluationSuccess` or `EvaluationFailure` values. It owns request-slot order,
-success/failure projections, successful payload projection, and total
-evaluation-count accounting. The root execution facade also exposes the current
-outcome-aware `EvaluationAttemptBatch` used by `RunMethod.tell_attempts`, where
-successful slots carry `EvaluationOutcome` metadata. In both cases, ordered
-attempt slots are the authoritative model; success and failure index views are
-derived projections, not parallel storage. See
+The ordered aggregate whose slots are exactly `EvaluationSuccess` or
+`EvaluationFailure` values. It owns request-slot order, success/failure
+projections, successful payload projection, and total evaluation-count
+accounting. Ordered attempt slots are the authoritative model; success and
+failure index views are derived projections, not parallel storage. `Study`
+transports payload attempt batches through evaluator and kernel execution, then
+materializes successful payloads into feedback records at the run-method
+boundary. See
 [`EvaluationAttemptBatch`][variopt.artifacts.EvaluationAttemptBatch].
 
 ## DiversityMetric
@@ -90,13 +90,15 @@ The wrapped `Proposal` that an `Evaluator` receives and forwards to the
 
 ## Evaluator
 
-The component that owns execution mechanics — how a batch of
-`EvaluationRequest`s becomes successful `EvaluationOutcome`s or, through
-built-in evaluator `evaluate_attempts` hooks, a dense `EvaluationAttemptBatch`
-whose ordered attempt slots preserve recorded user-code `EvaluationFailure`s.
-Backends include
-`SequentialEvaluator`, `JoblibEvaluator`, `AsyncJoblibEvaluator`, and
-`MpiEvaluator`. See
+The component that owns execution mechanics. The direct evaluator compatibility
+API can turn a batch of `EvaluationRequest`s into successful
+`EvaluationOutcome`s. `Study` orchestration requires native attempt-aware
+capability instead: synchronous evaluators expose `evaluate_attempts(...)`, and
+async evaluators expose attempt-batch session hooks, so recorded user-code
+`EvaluationFailure`s remain separate from successful attempts. Those Study
+attempts may carry request-free scalar/vector payloads; Study materializes them
+before run-method feedback. Backends include `SequentialEvaluator`,
+`JoblibEvaluator`, `AsyncJoblibEvaluator`, and `MpiEvaluator`. See
 [`Evaluator`][variopt.Evaluator].
 
 ## ExecutionResources
@@ -204,9 +206,10 @@ and prioritized structured leaf paths. See
 ## RunMethod
 
 The search-state owner. Proposes candidates via `ask`, consumes successful
-payload projections via `tell`, may opt into legacy successful-outcome metadata
-through `tell_outcomes`, consumes dense attempt batches through `tell_attempts`,
-and owns the persistent search-state object. Population optimizers
+request-aligned records via `tell`, may opt into legacy successful-outcome
+metadata through `tell_outcomes`, consumes dense materialized record-attempt
+batches through `tell_attempts`, and owns the persistent search-state object.
+Population optimizers
 (`CSAOptimizer`, `DifferentialEvolutionOptimizer`,
 `GeneticAlgorithmOptimizer`) are `RunMethod` implementations. See
 [`RunMethod`][variopt.RunMethod].
@@ -231,12 +234,15 @@ checkpoint-safe report and state when one was reached. See
 ## RunReport
 
 The generic terminal report produced by `Study.run(...)`. Stores ordered
-request-owned `EvaluationSuccess` history for any payload type and exposes
-`records` as the legacy payload projection. `CandidateRefinement` provenance
-aligns with successes when a kernel or evaluator changed candidates before
-evaluation. Recorded evaluation failures are exposed separately through
-`RunReport.failures`; they are not mixed into `RunReport.successes` or
-`RunReport.records`. See
+request-owned `EvaluationSuccess` history. For Study-produced reports,
+successful payloads have already been materialized into request-aligned feedback
+records, so `records` is the legacy record projection. If you construct a report
+manually from arbitrary request-free payloads, read those payloads through
+`successes` unless they are built-in scalar/vector payloads or already
+request-aligned records. `CandidateRefinement` provenance aligns with successes
+when a kernel or evaluator changed candidates before evaluation. Recorded
+evaluation failures are exposed separately through `RunReport.failures`; they
+are not mixed into `RunReport.successes` or `RunReport.records`. See
 [`RunReport`][variopt.RunReport].
 
 ## RunResult
@@ -265,7 +271,9 @@ See [`StructuredSearchSpace`][variopt.spaces.StructuredSearchSpace].
 
 The orchestration layer that wires a `Problem`, `RunMethod`, optional
 `Kernel`, and `Evaluator` into one `optimize` or `run` call. Does not own
-search semantics. See [`Study`][variopt.Study].
+search semantics. It transports evaluator/kernel payload attempts, then
+materializes successful payloads into request-aligned records immediately before
+run-method feedback. See [`Study`][variopt.Study].
 
 ## Trace
 

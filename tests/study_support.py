@@ -55,6 +55,7 @@ from variopt.execution import (
     SYNC_BATCH_EXECUTION_MODEL,
     ExecutionModel,
     ExecutionResources,
+    NestedParallelismPolicy,
 )
 from variopt.kernel import (
     ProposalBatchQuery,
@@ -194,9 +195,9 @@ class SpaceOwnedEqualityRefinementKernel(
         ProposalBatchQuery[
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ],
-        EvaluationAttemptBatch[SpaceOwnedEqualityCandidate],
+        EvaluationAttemptBatch[SpaceOwnedEqualityCandidate, ObservationPayload],
     ],
 ):
     """Kernel that emits distinct but space-equal refined candidate instances."""
@@ -207,19 +208,19 @@ class SpaceOwnedEqualityRefinementKernel(
         query: ProposalBatchQuery[
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ],
         runner: Callable[
             [
                 ProposalBatchQuery[
                     int | SpaceOwnedEqualityCandidate,
                     SpaceOwnedEqualityCandidate,
-                    Observation[SpaceOwnedEqualityCandidate],
+                    ObservationPayload,
                 ],
             ],
-            EvaluationAttemptBatch[SpaceOwnedEqualityCandidate],
+            EvaluationAttemptBatch[SpaceOwnedEqualityCandidate, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[SpaceOwnedEqualityCandidate]:
+    ) -> EvaluationAttemptBatch[SpaceOwnedEqualityCandidate, ObservationPayload]:
         _ = runner
         proposal = query.proposals[0]
         record_candidate = SpaceOwnedEqualityCandidate(1)
@@ -230,18 +231,16 @@ class SpaceOwnedEqualityRefinementKernel(
                 proposal_id=proposal.proposal_id,
             ),
         )
-        observation = Observation.from_objective_value(
-            request=request,
-            candidate=record_candidate,
+        payload = ObservationPayload.from_objective_value(
             value=1.0,
             direction=query.problem.direction,
         )
         success: EvaluationSuccess[
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ] = EvaluationSuccess(
             request=request,
-            payload=observation,
+            payload=payload,
             refinement=CandidateRefinement(
                 source_candidate=proposal.candidate,
                 refined_candidate=refinement_candidate,
@@ -259,7 +258,7 @@ class SpaceOwnedEqualityAsyncEvaluator(
         Problem[
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ],
         EvaluationRequest[SpaceOwnedEqualityCandidate],
         EvaluationOutcome[SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]],
@@ -286,7 +285,7 @@ class SpaceOwnedEqualityAsyncEvaluator(
             CompletionGroup[
                 EvaluationAttemptBatch[
                     SpaceOwnedEqualityCandidate,
-                    Observation[SpaceOwnedEqualityCandidate],
+                    ObservationPayload,
                 ]
             ],
             ...,
@@ -304,7 +303,7 @@ class SpaceOwnedEqualityAsyncEvaluator(
         problem: Problem[
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ],
         requests: Sequence[EvaluationRequest[SpaceOwnedEqualityCandidate]],
     ) -> EvaluationBatchHandle:
@@ -367,13 +366,13 @@ class SpaceOwnedEqualityAsyncEvaluator(
         problem: Problem[
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ],
         requests: Sequence[EvaluationRequest[SpaceOwnedEqualityCandidate]],
     ) -> EvaluationBatchSession[
         EvaluationAttemptBatch[
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ]
     ]:
         handle = EvaluationBatchHandle(
@@ -402,7 +401,7 @@ class SpaceOwnedEqualityAsyncEvaluator(
         CompletionGroup[
             EvaluationAttemptBatch[
                 SpaceOwnedEqualityCandidate,
-                Observation[SpaceOwnedEqualityCandidate],
+                ObservationPayload,
             ]
         ]
     ]:
@@ -434,7 +433,7 @@ def _make_space_owned_equality_outcome(
     problem: Problem[
         int | SpaceOwnedEqualityCandidate,
         SpaceOwnedEqualityCandidate,
-        Observation[SpaceOwnedEqualityCandidate],
+        ObservationPayload,
     ],
     request: EvaluationRequest[SpaceOwnedEqualityCandidate],
 ) -> EvaluationOutcome[SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]]:
@@ -461,12 +460,12 @@ def _make_space_owned_equality_attempt(
     problem: Problem[
         int | SpaceOwnedEqualityCandidate,
         SpaceOwnedEqualityCandidate,
-        Observation[SpaceOwnedEqualityCandidate],
+        ObservationPayload,
     ],
     request: EvaluationRequest[SpaceOwnedEqualityCandidate],
 ) -> EvaluationAttemptBatch[
     SpaceOwnedEqualityCandidate,
-    Observation[SpaceOwnedEqualityCandidate],
+    ObservationPayload,
 ]:
     outcome = _make_space_owned_equality_outcome(problem=problem, request=request)
     observation = outcome.observation
@@ -481,7 +480,11 @@ def _make_space_owned_equality_attempt(
         attempts=(
             EvaluationSuccess(
                 request=success_request,
-                payload=observation,
+                payload=ObservationPayload.from_objective_value(
+                    value=observation.value,
+                    direction=problem.direction,
+                    elapsed_seconds=observation.elapsed_seconds,
+                ),
                 evaluation_count=outcome.evaluation_count,
                 refinement=outcome.refinement,
                 candidate_equal=problem.space.candidates_equal,
@@ -495,7 +498,7 @@ class _SpaceOwnedEqualityAttemptBatchSession(
     EvaluationBatchSession[
         EvaluationAttemptBatch[
             SpaceOwnedEqualityCandidate,
-            Observation[SpaceOwnedEqualityCandidate],
+            ObservationPayload,
         ]
     ]
 ):
@@ -516,7 +519,7 @@ class _SpaceOwnedEqualityAttemptBatchSession(
         CompletionGroup[
             EvaluationAttemptBatch[
                 SpaceOwnedEqualityCandidate,
-                Observation[SpaceOwnedEqualityCandidate],
+                ObservationPayload,
             ]
         ]
     ]:
@@ -644,28 +647,27 @@ def _make_async_evaluation_attempt(
     request: EvaluationRequest[int],
     *,
     attach_refinement: bool,
-) -> EvaluationAttemptBatch[int, Observation[int]]:
+) -> EvaluationAttemptBatch[int, ObservationPayload]:
     attempt = evaluate_request_attempt(problem=problem, request=request)
     attempt_slots: list[
-        EvaluationSuccess[int, Observation[int]] | EvaluationFailure[int]
+        EvaluationSuccess[int, ObservationPayload] | EvaluationFailure[int]
     ] = []
     for attempt_slot in attempt.attempts:
-        if type(attempt_slot) is EvaluationFailure:
+        if isinstance(attempt_slot, EvaluationFailure):
             attempt_slots.append(attempt_slot)
             continue
 
-        observation = attempt_slot.scalar_observation()
         refinement = None
         if attach_refinement:
             refinement = CandidateRefinement(
                 source_candidate=request.candidate,
-                refined_candidate=observation.candidate,
+                refined_candidate=attempt_slot.request.candidate,
                 changed_leaf_paths=((),),
             )
         attempt_slots.append(
             EvaluationSuccess(
-                request=observation.request,
-                payload=observation,
+                request=attempt_slot.request,
+                payload=attempt_slot.payload,
                 evaluation_count=attempt_slot.evaluation_count,
                 refinement=refinement,
                 kernel_diagnostics=attempt_slot.kernel_diagnostics,
@@ -707,25 +709,24 @@ def _is_int_observation_record(
     return isinstance(record, Observation)
 
 
-def make_observation_attempt(
+def make_observation_payload_attempt(
     *,
     problem: Problem[int, int],
     request: EvaluationRequest[int],
-) -> EvaluationAttemptBatch[int, Observation[int]]:
+) -> EvaluationAttemptBatch[int, ObservationPayload]:
     attempt = evaluate_request_attempt(problem=problem, request=request)
     attempt_slots: list[
-        EvaluationSuccess[int, Observation[int]] | EvaluationFailure[int]
+        EvaluationSuccess[int, ObservationPayload] | EvaluationFailure[int]
     ] = []
     for attempt_slot in attempt.attempts:
-        if type(attempt_slot) is EvaluationFailure:
+        if isinstance(attempt_slot, EvaluationFailure):
             attempt_slots.append(attempt_slot)
             continue
 
-        observation = attempt_slot.scalar_observation()
         attempt_slots.append(
             EvaluationSuccess(
-                request=observation.request,
-                payload=observation,
+                request=attempt_slot.request,
+                payload=attempt_slot.payload,
                 evaluation_count=attempt_slot.evaluation_count,
                 refinement=attempt_slot.refinement,
                 kernel_diagnostics=attempt_slot.kernel_diagnostics,
@@ -738,8 +739,8 @@ def make_observation_attempt(
 
 class DecrementKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Kernel that deterministically moves candidates toward zero."""
@@ -747,13 +748,13 @@ class DecrementKernel(
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[int]:
-        successes: list[EvaluationSuccess[int, Observation[int]]] = []
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        successes: list[EvaluationSuccess[int, ObservationPayload]] = []
         for proposal_index, proposal in enumerate(query.proposals):
             refined_candidate = max(0, proposal.candidate - 1)
             local_attempts = runner(
@@ -764,7 +765,7 @@ class DecrementKernel(
                 )
             )
             local_success = local_attempts.successes[0]
-            local_observation = local_success.scalar_observation()
+            local_payload = local_success.payload
             refinement = None
             if refined_candidate != proposal.candidate:
                 refinement = CandidateRefinement(
@@ -784,16 +785,15 @@ class DecrementKernel(
                 ),
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
-            observation = Observation.from_objective_value(
-                request=request,
-                candidate=refined_candidate,
-                value=local_observation.value,
+            payload = ObservationPayload.from_objective_value(
+                value=local_payload.value,
                 direction=query.problem.direction,
+                elapsed_seconds=local_payload.elapsed_seconds,
             )
             successes.append(
                 EvaluationSuccess(
                     request=request,
-                    payload=observation,
+                    payload=payload,
                     evaluation_count=local_success.evaluation_count,
                     refinement=refinement,
                 )
@@ -803,8 +803,8 @@ class DecrementKernel(
 
 class RefinementKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Kernel that emits explicit refinement metadata when it changes a candidate."""
@@ -812,13 +812,13 @@ class RefinementKernel(
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[int]:
-        successes: list[EvaluationSuccess[int, Observation[int]]] = []
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        successes: list[EvaluationSuccess[int, ObservationPayload]] = []
         for proposal_index, proposal in enumerate(query.proposals):
             refined_candidate = max(0, proposal.candidate - 1)
             local_attempts = runner(
@@ -829,7 +829,7 @@ class RefinementKernel(
                 )
             )
             local_success = local_attempts.successes[0]
-            local_observation = local_success.scalar_observation()
+            local_payload = local_success.payload
             refinement = None
             if refined_candidate != proposal.candidate:
                 refinement = CandidateRefinement(
@@ -849,16 +849,15 @@ class RefinementKernel(
                 ),
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
-            observation = Observation.from_objective_value(
-                request=request,
-                candidate=refined_candidate,
-                value=local_observation.value,
+            payload = ObservationPayload.from_objective_value(
+                value=local_payload.value,
                 direction=query.problem.direction,
+                elapsed_seconds=local_payload.elapsed_seconds,
             )
             successes.append(
                 EvaluationSuccess(
                     request=request,
-                    payload=observation,
+                    payload=payload,
                     evaluation_count=local_success.evaluation_count,
                     refinement=refinement,
                 )
@@ -868,8 +867,8 @@ class RefinementKernel(
 
 class ScoringKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Kernel that returns precomputed candidate scores and cost."""
@@ -877,14 +876,14 @@ class ScoringKernel(
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[int]:
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
         _ = runner
-        successes: list[EvaluationSuccess[int, Observation[int]]] = []
+        successes: list[EvaluationSuccess[int, ObservationPayload]] = []
         for proposal_index, proposal in enumerate(query.proposals):
             refined_candidate = max(0, proposal.candidate - 2)
             refinement = None
@@ -906,16 +905,14 @@ class ScoringKernel(
                 ),
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
-            observation = Observation.from_objective_value(
-                request=request,
-                candidate=refined_candidate,
+            payload = ObservationPayload.from_objective_value(
                 value=float(refined_candidate * refined_candidate),
                 direction=query.problem.direction,
             )
             successes.append(
                 EvaluationSuccess(
                     request=request,
-                    payload=observation,
+                    payload=payload,
                     evaluation_count=7,
                     kernel_diagnostics=KernelDiagnostics(
                         backend="test",
@@ -931,8 +928,8 @@ class ScoringKernel(
 
 class RecordingExecutionResourcesKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Kernel that records received execution resources."""
@@ -943,12 +940,12 @@ class RecordingExecutionResourcesKernel(
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[int]:
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
         self.last_execution_resources = query.execution_resources
         return runner(query)
 
@@ -1327,7 +1324,7 @@ class OutOfOrderAsyncEvaluator(
     ]
     _pending_attempt_groups: dict[
         str,
-        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...],
     ]
     _attach_refinement: bool
 
@@ -1396,7 +1393,7 @@ class OutOfOrderAsyncEvaluator(
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         handle = EvaluationBatchHandle(
             batch_id=f"attempt-batch-{self._next_batch_id}",
             request_count=len(requests),
@@ -1420,7 +1417,7 @@ class OutOfOrderAsyncEvaluator(
     def poll_attempts(
         self,
         handle: EvaluationBatchHandle,
-    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         pending_groups = self._pending_attempt_groups.get(handle.batch_id)
         if pending_groups is None:
             msg = f"unknown async attempt batch handle: {handle.batch_id}"
@@ -1466,14 +1463,208 @@ class SessionRecordingAsyncEvaluator(OutOfOrderAsyncEvaluator):
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         self.opened_batch_sizes += (len(requests),)
         return super().open_attempt_session(problem, requests)
 
 
 @dataclass(slots=True)
+class PayloadAttemptBatchSession(
+    ResumableBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]
+):
+    """Resumable session that streams payload attempt batches."""
+
+    evaluator: "PayloadResumableOutOfOrderAsyncEvaluator"
+    _handle: EvaluationBatchHandle
+    _completed_count: int = 0
+
+    @property
+    @override
+    def handle(self) -> EvaluationBatchHandle:
+        return self._handle
+
+    @override
+    def poll(
+        self,
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
+        completion_groups = self.evaluator.poll_attempts(self.handle)
+        self._completed_count += sum(
+            len(completion_group.outcomes)
+            for completion_group in completion_groups
+        )
+        return completion_groups
+
+    @override
+    def cancel(self) -> None:
+        self.evaluator.cancel(self.handle)
+
+    @override
+    def suspend(self) -> EvaluationBatchResumeHandle:
+        return self.evaluator.suspend_attempt_batch(
+            self.handle,
+            completed_count=self._completed_count,
+        )
+
+
+class PayloadResumableOutOfOrderAsyncEvaluator(
+    ResumableAsyncEvaluator[
+        Problem[int, int, ObservationPayload],
+        EvaluationRequest[int],
+        EvaluationAttemptBatch[int, ObservationPayload],
+    ],
+):
+    """Resumable async evaluator that emits request-free scalar payload attempts."""
+
+    _next_batch_id: int
+    _pending_attempt_groups: dict[
+        str,
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...],
+    ]
+    _suspended_attempt_groups: dict[
+        str,
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...],
+    ]
+
+    def __init__(self) -> None:
+        self._next_batch_id = 0
+        self._pending_attempt_groups = {}
+        self._suspended_attempt_groups = {}
+
+    @override
+    def execution_resources(self) -> ExecutionResources:
+        return ExecutionResources(
+            parallel_owner="evaluator",
+            nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+        )
+
+    @override
+    def submit_batch(
+        self,
+        problem: Problem[int, int, ObservationPayload],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchHandle:
+        handle = self._new_handle(request_count=len(requests))
+        self._pending_attempt_groups[handle.batch_id] = self._completion_groups(
+            problem=problem,
+            requests=requests,
+        )
+        return handle
+
+    @override
+    def poll(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
+        return self.poll_attempts(handle)
+
+    @override
+    def cancel(self, handle: EvaluationBatchHandle) -> None:
+        _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+        _ = self._suspended_attempt_groups.pop(handle.batch_id, None)
+
+    @override
+    def resume_session(
+        self,
+        handle: EvaluationBatchResumeHandle,
+    ) -> PayloadAttemptBatchSession:
+        return self.resume_attempt_session(handle)
+
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int, ObservationPayload],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> PayloadAttemptBatchSession:
+        handle = self.submit_batch(problem, requests)
+        return PayloadAttemptBatchSession(evaluator=self, _handle=handle)
+
+    def resume_attempt_session(
+        self,
+        handle: EvaluationBatchResumeHandle,
+    ) -> PayloadAttemptBatchSession:
+        pending_groups = self._suspended_attempt_groups.pop(handle.batch_id)
+        self._pending_attempt_groups[handle.batch_id] = pending_groups
+        return PayloadAttemptBatchSession(
+            evaluator=self,
+            _handle=EvaluationBatchHandle(
+                batch_id=handle.batch_id,
+                request_count=handle.request_count,
+            ),
+            _completed_count=handle.completed_count,
+        )
+
+    def poll_attempts(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...]:
+        pending_groups = self._pending_attempt_groups[handle.batch_id]
+        completion_group = pending_groups[0]
+        remaining_groups = pending_groups[1:]
+        if len(remaining_groups) == 0:
+            _ = self._pending_attempt_groups.pop(handle.batch_id)
+        else:
+            self._pending_attempt_groups[handle.batch_id] = remaining_groups
+        return (completion_group,)
+
+    def suspend_attempt_batch(
+        self,
+        handle: EvaluationBatchHandle,
+        *,
+        completed_count: int,
+    ) -> EvaluationBatchResumeHandle:
+        pending_groups = self._pending_attempt_groups.pop(handle.batch_id)
+        self._suspended_attempt_groups[handle.batch_id] = pending_groups
+        return EvaluationBatchResumeHandle(
+            batch_id=handle.batch_id,
+            request_count=handle.request_count,
+            completed_count=completed_count,
+        )
+
+    def _new_handle(self, *, request_count: int) -> EvaluationBatchHandle:
+        handle = EvaluationBatchHandle(
+            batch_id=f"payload-attempt-batch-{self._next_batch_id}",
+            request_count=request_count,
+        )
+        self._next_batch_id += 1
+        return handle
+
+    def _completion_groups(
+        self,
+        *,
+        problem: Problem[int, int, ObservationPayload],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...]:
+        return tuple(
+            CompletionGroup(
+                start_index=index,
+                outcomes=(self._payload_attempt(problem=problem, request=request),),
+            )
+            for index, request in reversed(tuple(enumerate(requests)))
+        )
+
+    def _payload_attempt(
+        self,
+        *,
+        problem: Problem[int, int, ObservationPayload],
+        request: EvaluationRequest[int],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        payload = ObservationPayload.from_objective_value(
+            value=float(request.candidate * request.candidate),
+            direction=problem.direction,
+        )
+        return EvaluationAttemptBatch(
+            attempts=(
+                EvaluationSuccess(
+                    request=request,
+                    payload=payload,
+                    evaluation_count=1,
+                ),
+            ),
+        )
+
+
+@dataclass(slots=True)
 class _AttemptOutOfOrderBatchSession(
-    EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]
+    EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]
 ):
     """Attempt-aware exact-async session for failure-recording tests."""
 
@@ -1488,7 +1679,7 @@ class _AttemptOutOfOrderBatchSession(
     @override
     def poll(
         self,
-    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         return self.evaluator.poll_attempts(self.handle)
 
     @override
@@ -1502,18 +1693,19 @@ class AttemptOutOfOrderAsyncEvaluator(OutOfOrderAsyncEvaluator):
 
     _pending_attempt_groups: dict[
         str,
-        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...],
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self._pending_attempt_groups = {}
 
+    @override
     def open_attempt_session(
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         handle = EvaluationBatchHandle(
             batch_id=f"attempt-batch-{self._next_batch_id}",
             request_count=len(requests),
@@ -1534,10 +1726,11 @@ class AttemptOutOfOrderAsyncEvaluator(OutOfOrderAsyncEvaluator):
         )
         return _AttemptOutOfOrderBatchSession(evaluator=self, _handle=handle)
 
+    @override
     def poll_attempts(
         self,
         handle: EvaluationBatchHandle,
-    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         pending_groups = self._pending_attempt_groups.get(handle.batch_id)
         if pending_groups is None:
             msg = f"unknown async attempt batch handle: {handle.batch_id}"
@@ -1558,6 +1751,7 @@ class AttemptOutOfOrderAsyncEvaluator(OutOfOrderAsyncEvaluator):
             self._pending_attempt_groups[handle.batch_id] = remaining_groups
         return (completion_group,)
 
+    @override
     def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
         _ = self._pending_attempt_groups.pop(handle.batch_id, None)
 
@@ -1602,7 +1796,7 @@ class _ResumableOutOfOrderBatchSession(
 
 @dataclass(slots=True)
 class _ResumableAttemptOutOfOrderBatchSession(
-    ResumableBatchSession[EvaluationAttemptBatch[int, Observation[int]]]
+    ResumableBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]
 ):
     """Resumable attempt-aware async session for study orchestration tests."""
 
@@ -1618,7 +1812,7 @@ class _ResumableAttemptOutOfOrderBatchSession(
     @override
     def poll(
         self,
-    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         completion_groups = tuple(self.evaluator.poll_attempts(self.handle))
         self._completed_count += sum(
             len(completion_group.outcomes)
@@ -1659,11 +1853,11 @@ class ResumableOutOfOrderAsyncEvaluator(
     ]
     _pending_attempt_groups: dict[
         str,
-        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...],
     ]
     _suspended_attempt_groups: dict[
         str,
-        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]], ...],
     ]
 
     def __init__(self, *, attach_refinement: bool = False) -> None:
@@ -1689,7 +1883,7 @@ class ResumableOutOfOrderAsyncEvaluator(
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         handle = EvaluationBatchHandle(
             batch_id=f"resumable-attempt-batch-{self._next_batch_id}",
             request_count=len(requests),
@@ -1810,7 +2004,7 @@ class ResumableOutOfOrderAsyncEvaluator(
     def poll_attempts(
         self,
         handle: EvaluationBatchHandle,
-    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         pending_groups = self._pending_attempt_groups.get(handle.batch_id)
         if pending_groups is None:
             msg = f"unknown async attempt batch handle: {handle.batch_id}"
@@ -1856,7 +2050,7 @@ class ResumableOutOfOrderAsyncEvaluator(
     def resume_attempt_session(
         self,
         handle: EvaluationBatchResumeHandle,
-    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         pending_groups = self._suspended_attempt_groups.pop(handle.batch_id, None)
         if pending_groups is None:
             msg = f"unknown suspended attempt batch handle: {handle.batch_id}"
@@ -1911,7 +2105,7 @@ class NonResumableSessionResumableAsyncEvaluator(
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         return self._delegate.open_attempt_session(problem, requests)
 
     @override
@@ -1948,12 +2142,14 @@ class MisorderedEvaluator(
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationAttemptBatch[int, Observation[int]]:
-        return EvaluationAttemptBatch.concatenate(
-            tuple(
-                make_observation_attempt(problem=problem, request=request)
-                for request in reversed(requests)
-            )
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        request_attempts: tuple[EvaluationAttemptBatch[int, ObservationPayload], ...]
+        request_attempts = tuple(
+            make_observation_payload_attempt(problem=problem, request=request)
+            for request in reversed(requests)
+        )
+        return EvaluationAttemptBatch[int, ObservationPayload].concatenate(
+            request_attempts,
         )
 
 
@@ -1993,38 +2189,40 @@ class HardFailingEvaluator(
         self,
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
-    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
         self._call_count += 1
         if self._call_count == self._fail_on_call:
             raise RuntimeError(f"hard evaluator failure {self._call_count}")
 
-        return EvaluationAttemptBatch.concatenate(
-            tuple(
-                make_observation_attempt(problem=problem, request=request)
-                for request in requests
-            )
+        request_attempts: tuple[EvaluationAttemptBatch[int, ObservationPayload], ...]
+        request_attempts = tuple(
+            make_observation_payload_attempt(problem=problem, request=request)
+            for request in requests
+        )
+        return EvaluationAttemptBatch[int, ObservationPayload].concatenate(
+            request_attempts,
         )
 
 
 class RecordingKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Pass-through kernel that records received queries."""
 
     def __init__(self) -> None:
-        self.queries: list[ProposalBatchQuery[int, int, Observation[int]]] = []
+        self.queries: list[ProposalBatchQuery[int, int, ObservationPayload]] = []
 
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[int]:
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
         self.queries.append(query)
         return runner(query)

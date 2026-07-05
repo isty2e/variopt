@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Generic, Protocol
+from typing import Generic, Protocol, runtime_checkable
 
 import numpy as np
 from typing_extensions import TypeVar
@@ -233,6 +233,7 @@ class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
         )
 
 
+@runtime_checkable
 class RequestAlignedEvaluationRecord(
     Protocol[RequestAlignedEvaluationRecordCandidateT]
 ):

@@ -27,6 +27,12 @@ RecordPayloadT = TypeVar(
     bound=RequestAlignedEvaluationRecord[object],
 )
 ProjectedPayloadT = TypeVar("ProjectedPayloadT")
+MaterializerPayloadT = TypeVar("MaterializerPayloadT", contravariant=True)
+MaterializerRecordT = TypeVar(
+    "MaterializerRecordT",
+    bound=RequestAlignedEvaluationRecord[object],
+    covariant=True,
+)
 ScalarObservationCandidateT = TypeVar("ScalarObservationCandidateT")
 _ScalarObservationViewCandidateT = TypeVar(
     "_ScalarObservationViewCandidateT",
@@ -821,17 +827,18 @@ def _is_materializable_record_payload(
     if payload.candidate is not success.request.candidate:
         return False
 
-    if payload.request is success.request:
-        return True
+    if payload.request is not success.request:
+        if payload.request.proposal_id != success.request.proposal_id:
+            return False
 
-    if payload.request.proposal_id != success.request.proposal_id:
-        return False
-
-    if payload.request.proposal_evaluation_spec != success.request.proposal_evaluation_spec:
-        return False
+        if payload.request.proposal_evaluation_spec != success.request.proposal_evaluation_spec:
+            return False
 
     refinement = success.refinement
-    return refinement is None or payload.request.candidate is refinement.source_candidate
+    if refinement is None:
+        return payload.request.candidate is success.request.candidate
+
+    return payload.request.candidate is refinement.source_candidate
 
 
 def _is_evaluation_request_for_candidate(
@@ -1303,3 +1310,89 @@ def materialize_attempt_batch_records(
         raise TypeError(msg)
 
     return EvaluationAttemptBatch(attempts=tuple(materialized_attempts))
+
+
+class EvaluationAttemptMaterializer(
+    Protocol[CandidateT, MaterializerPayloadT, MaterializerRecordT]
+):
+    """Typed boundary that projects evaluator payload attempts into records.
+
+    Notes
+    -----
+    This protocol owns the associated-type relation that the standalone
+    materialization overloads cannot express for generic ``Study`` execution:
+    one evaluator payload family maps to one run-method feedback record family.
+    """
+
+    def materialize_attempts(
+        self,
+        attempts: EvaluationAttemptBatch[CandidateT, MaterializerPayloadT],
+    ) -> EvaluationAttemptBatch[CandidateT, MaterializerRecordT]:
+        """Project one ordered attempt batch into feedback records.
+
+        Parameters
+        ----------
+        attempts : EvaluationAttemptBatch[CandidateT, MaterializerPayloadT]
+            Evaluator or kernel attempt batch carrying request-owned payloads.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, MaterializerRecordT]
+            Attempt batch with identical request/failure slots and materialized
+            success records.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class DefaultEvaluationAttemptMaterializer(
+    Generic[CandidateT],
+):
+    """Default materializer for built-in scalar, vector, and record payloads."""
+
+    @overload
+    def materialize_attempts(
+        self,
+        attempts: EvaluationAttemptBatch[CandidateT, ObservationPayload],
+    ) -> EvaluationAttemptBatch[CandidateT, Observation[CandidateT]]: ...
+
+    @overload
+    def materialize_attempts(
+        self,
+        attempts: EvaluationAttemptBatch[CandidateT, ObjectiveVectorPayload],
+    ) -> EvaluationAttemptBatch[CandidateT, ObjectiveVectorRecord[CandidateT]]: ...
+
+    @overload
+    def materialize_attempts(
+        self,
+        attempts: EvaluationAttemptBatch[
+            CandidateT,
+            RequestAlignedEvaluationRecord[CandidateT],
+        ],
+    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord[CandidateT]]: ...
+
+    def materialize_attempts(
+        self,
+        attempts: (
+            EvaluationAttemptBatch[CandidateT, ObservationPayload]
+            | EvaluationAttemptBatch[CandidateT, ObjectiveVectorPayload]
+            | EvaluationAttemptBatch[
+                CandidateT,
+                RequestAlignedEvaluationRecord[CandidateT],
+            ]
+        ),
+    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord[object]]:
+        """Project one ordered attempt batch with the default artifact rules.
+
+        Parameters
+        ----------
+        attempts : EvaluationAttemptBatch[CandidateT, MaterializableEvaluationPayload[CandidateT]]
+            Attempt batch whose successes carry built-in scalar/vector payloads
+            or already request-aligned records.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord[object]]
+            Request-aligned record attempts suitable for run-method feedback.
+        """
+        return materialize_attempt_batch_records(attempts)

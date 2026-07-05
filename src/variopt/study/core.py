@@ -11,14 +11,13 @@ from variopt.generic_runtime import (
 )
 
 from ..artifacts import (
+    DefaultEvaluationAttemptMaterializer,
     EvaluationAttemptBatch,
-    EvaluationRequest,
+    EvaluationAttemptMaterializer,
     Proposal,
     RunReport,
     RunResult,
 )
-from ..artifacts.records import RequestAlignedEvaluationRecord
-from ..evaluators.base import Evaluator
 from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,
@@ -26,10 +25,9 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT, RunMethodStateT
-from .common import StudyEvaluationRecordT
+from .common import StudyEvaluator, StudyPayloadT, StudyRecordT
 from .exact_async.artifacts import (
     StudyExactAsyncStepResumeHandle,
 )
@@ -52,21 +50,23 @@ BoundaryT = TypeVar("BoundaryT")
 @dataclass(frozen=True, slots=True, init=False)
 class Study(
     FrozenGenericSlotsCompat,
-    Generic[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT],
+    Generic[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT],
 ):
     """User-facing facade for running an optimization study.
 
     Parameters
     ----------
-    problem : Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    problem : Problem[BoundaryT, CandidateT, StudyPayloadT]
         Problem that defines the search space and evaluation semantics.
-    run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyEvaluationRecordT]
+    run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyRecordT]
         Stateful optimizer that owns cross-step search memory.
-    evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
-        Execution backend that turns requests into evaluation outcomes.
-    kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]] | None, optional
+    evaluator : StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+        Execution backend that exposes native attempt-batch execution resources.
+    kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT], EvaluationAttemptBatch[CandidateT, StudyPayloadT]] | None, optional
         Optional within-step refinement kernel. Defaults to
         :class:`~variopt.kernel.DirectKernel`.
+    attempt_materializer : EvaluationAttemptMaterializer[CandidateT, StudyPayloadT, StudyRecordT] | None, optional
+        Payload-to-record boundary used before run-method feedback.
 
     Notes
     -----
@@ -75,54 +75,69 @@ class Study(
     object, then exposes sync, exact-async, and stale-async execution methods.
     """
 
-    problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    problem: Problem[BoundaryT, CandidateT, StudyPayloadT]
     run_method: RunMethod[
         RunMethodStateT,
         Proposal[CandidateT],
-        StudyEvaluationRecordT,
+        StudyRecordT,
     ]
-    evaluator: Evaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-    ]
+    evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
     kernel: Kernel[
-        ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
+        ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT],
+    ]
+    attempt_materializer: EvaluationAttemptMaterializer[
+        CandidateT,
+        StudyPayloadT,
+        StudyRecordT,
     ]
 
     def __init__(
         self,
         *,
-        problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
+        problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
         run_method: RunMethod[
             RunMethodStateT,
             Proposal[CandidateT],
-            StudyEvaluationRecordT,
+            StudyRecordT,
         ],
-        evaluator: Evaluator[
-            Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-            EvaluationRequest[CandidateT],
-            EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
+        evaluator: StudyEvaluator[
+            BoundaryT,
+            CandidateT,
+            StudyPayloadT,
         ],
         kernel: Kernel[
-            ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-            EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
+            ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
+            EvaluationAttemptBatch[CandidateT, StudyPayloadT],
         ]
         | None = None,
+        attempt_materializer: (
+            EvaluationAttemptMaterializer[
+                CandidateT,
+                StudyPayloadT,
+                StudyRecordT,
+            ]
+            | None
+        ) = None,
     ) -> None:
         """Create a study over one problem and execution stack.
 
         Parameters
         ----------
-        problem : Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+        problem : Problem[BoundaryT, CandidateT, StudyPayloadT]
             Problem that defines candidate validity and evaluation semantics.
-        run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyEvaluationRecordT]
+        run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyRecordT]
             Stateful optimizer that emits proposals and assimilates records.
-        evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
-            Execution backend that evaluates requests.
-        kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]] | None, optional
+        evaluator : StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+            Execution backend that evaluates requests through native attempt
+            batches or attempt sessions.
+        kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT], EvaluationAttemptBatch[CandidateT, StudyPayloadT]] | None, optional
             Optional within-step refinement kernel.
+        attempt_materializer : EvaluationAttemptMaterializer[CandidateT, StudyPayloadT, StudyRecordT] | None, optional
+            Materializer used to project evaluator payload attempts into
+            run-method feedback records. Defaults to the built-in scalar,
+            vector, and same-record pass-through materializer. Custom
+            payload-to-record mappings must provide an explicit materializer.
         """
         object.__setattr__(self, "problem", problem)
         object.__setattr__(self, "run_method", run_method)
@@ -131,6 +146,15 @@ class Study(
             self,
             "kernel",
             DirectKernel() if kernel is None else kernel,
+        )
+        object.__setattr__(
+            self,
+            "attempt_materializer",
+            (
+                DefaultEvaluationAttemptMaterializer()
+                if attempt_materializer is None
+                else attempt_materializer
+            ),
         )
 
     def open_exact_async_step_session(
@@ -141,7 +165,8 @@ class Study(
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ]:
         """Open a resumable exact-async step session.
 
@@ -154,7 +179,7 @@ class Study(
 
         Returns
         -------
-        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
             Open session that can be polled, suspended, resumed, and eventually
             committed back into the run method.
         """
@@ -169,24 +194,25 @@ class Study(
         handle: StudyExactAsyncStepResumeHandle[
             CandidateT,
             RunMethodStateT,
-            StudyEvaluationRecordT,
+            StudyPayloadT,
         ],
     ) -> StudyExactAsyncStepSession[
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ]:
         """Resume a suspended exact-async step session.
 
         Parameters
         ----------
-        handle : StudyExactAsyncStepResumeHandle[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        handle : StudyExactAsyncStepResumeHandle[CandidateT, RunMethodStateT, StudyPayloadT]
             Resume handle produced when an exact-async session was suspended.
 
         Returns
         -------
-        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
             Resumed session ready for further polling or completion.
         """
         return resume_exact_async_step_session_for_study(self, handle)
@@ -207,7 +233,7 @@ class Study(
         batch_size: int = 1,
         *,
         execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
-    ) -> tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]:
+    ) -> tuple[tuple[StudyRecordT, ...], RunMethodStateT]:
         """Run one ask/evaluate/tell step.
 
         Parameters
@@ -222,7 +248,7 @@ class Study(
 
         Returns
         -------
-        tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]
+        tuple[tuple[StudyRecordT, ...], RunMethodStateT]
             Step records followed by the next run-method state.
         """
         return step_study(
@@ -241,7 +267,7 @@ class Study(
         count_evaluation_cost: bool = True,
         initial_state: RunMethodStateT | None = None,
         stop_at_checkpoint_boundary: bool = False,
-    ) -> tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
+    ) -> tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]:
         """Run the study until the evaluation budget is exhausted.
 
         Parameters
@@ -263,7 +289,7 @@ class Study(
 
         Returns
         -------
-        tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]
+        tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]
             Terminal run report followed by the final run-method state.
         """
         if execution_model == STALE_ASYNC_EXECUTION_MODEL:

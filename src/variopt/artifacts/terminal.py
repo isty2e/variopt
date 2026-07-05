@@ -13,8 +13,7 @@ from ..typevars import CandidateT
 from .attempts import (
     EvaluationFailure,
     EvaluationSuccess,
-    MaterializableEvaluationPayload,
-    materialize_success_record,
+    materialize_success_records,
 )
 from .records import (
     ObjectiveVectorPayload,
@@ -27,7 +26,7 @@ from .refinement import CandidateRefinement
 from .requests import EvaluationRequest, Proposal
 
 RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord[object])
-RunPayloadT = TypeVar("RunPayloadT", bound=MaterializableEvaluationPayload[object])
+SuccessPayloadT = TypeVar("SuccessPayloadT")
 TerminalRecordCandidateT = TypeVar("TerminalRecordCandidateT")
 
 
@@ -139,9 +138,9 @@ def _successes_from_vector_records(
 
 def _normalize_successes(
     *,
-    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+    successes: Sequence[EvaluationSuccess[CandidateT, SuccessPayloadT]],
     candidate_equal: CandidateEquality[CandidateT] | None,
-) -> tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]:
+) -> tuple[EvaluationSuccess[CandidateT, SuccessPayloadT], ...]:
     success_tuple = tuple(successes)
     for success in success_tuple:
         if type(success) is not EvaluationSuccess:
@@ -165,7 +164,7 @@ def _normalize_successes(
 
 
 def _success_refinements(
-    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+    successes: Sequence[EvaluationSuccess[CandidateT, SuccessPayloadT]],
 ) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
     refinements = tuple(success.refinement for success in successes)
     if all(refinement is None for refinement in refinements):
@@ -175,10 +174,10 @@ def _success_refinements(
 
 def _successes_with_refinements(
     *,
-    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+    successes: Sequence[EvaluationSuccess[CandidateT, SuccessPayloadT]],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
     candidate_equal: CandidateEquality[CandidateT] | None,
-) -> tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]:
+) -> tuple[EvaluationSuccess[CandidateT, SuccessPayloadT], ...]:
     success_tuple = tuple(successes)
     refinement_tuple = tuple(refinements)
     if len(refinement_tuple) != len(success_tuple):
@@ -210,13 +209,13 @@ def _successes_with_refinements(
 
 
 def _success_evaluation_count(
-    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+    successes: Sequence[EvaluationSuccess[CandidateT, SuccessPayloadT]],
 ) -> int:
     return sum(success.evaluation_count for success in successes)
 
 
 def _projection_proposal_for_success(
-    success: EvaluationSuccess[CandidateT, RunPayloadT],
+    success: EvaluationSuccess[CandidateT, SuccessPayloadT],
 ) -> Proposal[CandidateT]:
     refinement = success.refinement
     if refinement is None:
@@ -377,12 +376,12 @@ class Trace:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
+class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     """Terminal report for one completed study run.
 
     Parameters
     ----------
-    successes : tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]
+    successes : tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
         Full ordered successful attempt history produced by the run.
     evaluation_count : int
         Total logical evaluation cost accrued during the run.
@@ -393,7 +392,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
         ``successes`` only.
     """
 
-    successes: tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]
+    successes: tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
@@ -402,7 +401,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
     def __init__(
         self,
         *,
-        successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]] | None = None,
+        successes: Sequence[EvaluationSuccess[CandidateT, RunRecordT]] | None = None,
         evaluation_count: int,
         trace: Trace | None = None,
         failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
@@ -410,7 +409,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
     ) -> None:
         """Create one terminal report from request-owned successes."""
-        normalized_successes: tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]
+        normalized_successes: tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
         if successes is None:
             normalized_successes = ()
         else:
@@ -458,9 +457,9 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
             raise ValueError(msg)
 
     @property
-    def records(self) -> tuple[RequestAlignedEvaluationRecord, ...]:
+    def records(self) -> tuple[RunRecordT, ...]:
         """Return successful attempts as request-aligned record projections."""
-        return tuple(materialize_success_record(success) for success in self.successes)
+        return materialize_success_records(self.successes)
 
     @property
     def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
@@ -470,7 +469,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
     @classmethod
     def from_successes(
         cls,
-        successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+        successes: Sequence[EvaluationSuccess[CandidateT, RunRecordT]],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         failures: Sequence[EvaluationFailure[CandidateT]] | None = None,

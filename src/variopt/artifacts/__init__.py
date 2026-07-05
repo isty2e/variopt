@@ -11,8 +11,10 @@ implementation is split by ontology tier:
 """
 
 from .attempts import (
+    DefaultEvaluationAttemptMaterializer,
     EvaluationAttempt,
     EvaluationAttemptBatch,
+    EvaluationAttemptMaterializer,
     EvaluationExceptionSnapshot,
     EvaluationFailure,
     EvaluationSuccess,
@@ -45,10 +47,12 @@ from .terminal import (
 
 __all__ = [
     "CandidateRefinement",
+    "DefaultEvaluationAttemptMaterializer",
     "EvaluationAttempt",
     "EvaluationAttemptBatch",
     "EvaluationExceptionSnapshot",
     "EvaluationFailure",
+    "EvaluationAttemptMaterializer",
     "EvaluationRequest",
     "EvaluationSuccess",
     "InteractionEvaluationSpec",

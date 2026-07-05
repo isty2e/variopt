@@ -1,9 +1,9 @@
 """Shared helpers for study orchestration."""
 
 from collections.abc import Sequence
-from typing import Generic, Protocol, TypeGuard, cast, runtime_checkable
+from typing import Protocol, TypeAlias, TypeGuard, runtime_checkable
 
-from typing_extensions import TypeVar, override
+from typing_extensions import TypeVar
 
 from ..artifacts import (
     EvaluationAttemptBatch,
@@ -15,19 +15,14 @@ from ..artifacts import (
     Proposal,
     ProposalEvaluationSpec,
 )
+from ..artifacts.attempts import MaterializableEvaluationPayload
 from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.async_evaluator.artifacts import (
     CompletionGroup,
-    EvaluationBatchHandle,
     EvaluationBatchResumeHandle,
 )
-from ..evaluators.async_evaluator.contracts import AsyncEvaluator
-from ..evaluators.async_evaluator.sessions import (
-    EvaluationBatchSession,
-    ResumableBatchSession,
-)
-from ..evaluators.base import Evaluator
-from ..outcomes import EvaluationOutcome, validate_outcome_refinement_alignment
+from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
+from ..execution import ExecutionResources
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..spaces.equality import scalar_candidate_equality
@@ -35,47 +30,50 @@ from ..typevars import CandidateT
 
 BoundaryT = TypeVar("BoundaryT")
 CompletionT = TypeVar("CompletionT")
-EvaluationT = TypeVar("EvaluationT")
-LegacyOutcomeRecordT = TypeVar(
-    "LegacyOutcomeRecordT",
-    bound=RequestAlignedEvaluationRecord,
+StudyEvaluationPayload: TypeAlias = MaterializableEvaluationPayload[object]
+StudyPayloadT = TypeVar(
+    "StudyPayloadT",
+    bound=StudyEvaluationPayload,
 )
-StudyEvaluationRecordT = TypeVar(
-    "StudyEvaluationRecordT",
-    bound=RequestAlignedEvaluationRecord,
-)
-ResumableStudyEvaluationRecordT = TypeVar(
-    "ResumableStudyEvaluationRecordT",
-    bound=RequestAlignedEvaluationRecord,
-    covariant=True,
+StudyRecordT = TypeVar(
+    "StudyRecordT",
+    bound=RequestAlignedEvaluationRecord[object],
 )
 
 
 @runtime_checkable
-class AttemptBatchEvaluator(Protocol[BoundaryT, CandidateT, StudyEvaluationRecordT]):
-    """Evaluator capability that can return request-aligned attempt batches."""
+class AttemptBatchEvaluator(Protocol[BoundaryT, CandidateT, StudyPayloadT]):
+    """Evaluator capability that returns request-owned payload attempts."""
+
+    def execution_resources(self) -> ExecutionResources:
+        """Return execution resources owned by this evaluator."""
+        ...
 
     def evaluate_attempts(
         self,
-        problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
+        problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]:
+    ) -> EvaluationAttemptBatch[CandidateT, StudyPayloadT]:
         """Execute requests and preserve success/failure attempt slots."""
         ...
 
 
 @runtime_checkable
 class AttemptBatchSessionEvaluator(
-    Protocol[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    Protocol[BoundaryT, CandidateT, StudyPayloadT]
 ):
-    """Async evaluator capability that can stream attempt batches by slot."""
+    """Async evaluator capability that streams payload attempts by slot."""
+
+    def execution_resources(self) -> ExecutionResources:
+        """Return execution resources owned by this evaluator."""
+        ...
 
     def open_attempt_session(
         self,
-        problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
+        problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
     ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
     ]:
         """Open a session that emits one-slot attempt batches."""
         ...
@@ -83,198 +81,63 @@ class AttemptBatchSessionEvaluator(
 
 @runtime_checkable
 class ResumableAttemptBatchSessionEvaluator(
-    Protocol[CandidateT, ResumableStudyEvaluationRecordT]
+    Protocol[BoundaryT, CandidateT, StudyPayloadT]
 ):
-    """Async evaluator capability that resumes native attempt-batch sessions."""
+    """Async evaluator capability that opens and resumes attempt sessions."""
+
+    def execution_resources(self) -> ExecutionResources:
+        """Return execution resources owned by this evaluator."""
+        ...
+
+    def open_attempt_session(
+        self,
+        problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
+        requests: Sequence[EvaluationRequest[CandidateT]],
+    ) -> EvaluationBatchSession[
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
+    ]:
+        """Open a session that emits one-slot attempt batches."""
+        ...
 
     def resume_attempt_session(
         self,
         handle: EvaluationBatchResumeHandle,
     ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, ResumableStudyEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
     ]:
         """Resume a session that emits one-slot attempt batches."""
         ...
 
 
+StudyEvaluator: TypeAlias = (
+    AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+    | AttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+)
+
+
 def supports_attempt_batches(
-    evaluator: Evaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationT,
-    ],
-) -> TypeGuard[AttemptBatchEvaluator[BoundaryT, CandidateT, StudyEvaluationRecordT]]:
+    evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT],
+) -> TypeGuard[AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT]]:
     """Return whether ``evaluator`` exposes dense attempt-batch evaluation."""
     return isinstance(evaluator, AttemptBatchEvaluator)
 
 
 def supports_attempt_batch_sessions(
-    evaluator: AsyncEvaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationT,
-    ],
+    evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT],
 ) -> TypeGuard[
-    AttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    AttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyPayloadT]
 ]:
     """Return whether ``evaluator`` exposes attempt-aware async sessions."""
     return isinstance(evaluator, AttemptBatchSessionEvaluator)
 
 
 def supports_resumable_attempt_batch_sessions(
-    evaluator: AsyncEvaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationT,
-    ],
+    evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT],
 ) -> TypeGuard[
-    ResumableAttemptBatchSessionEvaluator[CandidateT, StudyEvaluationRecordT]
+    ResumableAttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyPayloadT]
 ]:
     """Return whether ``evaluator`` can resume native attempt-batch sessions."""
     return isinstance(evaluator, ResumableAttemptBatchSessionEvaluator)
-
-
-class OutcomeToAttemptBatchSession(
-    EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]],
-    Generic[CandidateT, LegacyOutcomeRecordT],
-):
-    """Adapt an outcome-only async session into a success-only attempt session."""
-
-    requests: tuple[EvaluationRequest[CandidateT], ...]
-    outcome_session: EvaluationBatchSession[
-        EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
-    ]
-    candidate_equal_fn: CandidateEquality[CandidateT]
-
-    def __init__(
-        self,
-        *,
-        requests: tuple[EvaluationRequest[CandidateT], ...],
-        outcome_session: EvaluationBatchSession[
-            EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
-        ],
-        candidate_equal: CandidateEquality[CandidateT],
-    ) -> None:
-        """Create one outcome-session adapter."""
-        self.requests = requests
-        self.outcome_session = outcome_session
-        self.candidate_equal_fn = candidate_equal
-
-    @property
-    @override
-    def handle(self) -> EvaluationBatchHandle:
-        """Return the wrapped evaluator-owned batch handle."""
-        return self.outcome_session.handle
-
-    @override
-    def poll(
-        self,
-    ) -> Sequence[
-        CompletionGroup[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]]
-    ]:
-        """Return newly completed success-only attempt groups."""
-        return tuple(
-            self._attempt_completion_group(completion_group)
-            for completion_group in self.outcome_session.poll()
-        )
-
-    @override
-    def wait(
-        self,
-        *,
-        timeout: float | None = None,
-    ) -> Sequence[
-        CompletionGroup[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]]
-    ]:
-        """Wait for newly completed success-only attempt groups."""
-        return tuple(
-            self._attempt_completion_group(completion_group)
-            for completion_group in self.outcome_session.wait(timeout=timeout)
-        )
-
-    @override
-    def cancel(self) -> None:
-        """Cancel the wrapped session."""
-        self.outcome_session.cancel()
-
-    def _attempt_completion_group(
-        self,
-        completion_group: CompletionGroup[
-            EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
-        ],
-    ) -> CompletionGroup[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]]:
-        end_index = completion_group.start_index + len(completion_group.outcomes)
-        if end_index > len(self.requests):
-            msg = "completion group exceeds logical batch bounds"
-            raise ValueError(msg)
-
-        group_requests = self.requests[completion_group.start_index : end_index]
-        validate_aligned_outcomes(
-            group_requests,
-            completion_group.outcomes,
-            candidate_equal=self.candidate_equal_fn,
-        )
-        return CompletionGroup(
-            start_index=completion_group.start_index,
-            outcomes=tuple(
-                EvaluationAttemptBatch(
-                    attempts=(
-                        EvaluationSuccess(
-                            request=request,
-                            payload=outcome.record,
-                            evaluation_count=outcome.evaluation_count,
-                            refinement=outcome.refinement,
-                            kernel_diagnostics=outcome.kernel_diagnostics,
-                            candidate_equal=self.candidate_equal_fn,
-                        ),
-                    ),
-                )
-                for request, outcome in zip(
-                    group_requests,
-                    completion_group.outcomes,
-                    strict=True,
-                )
-            ),
-        )
-
-
-class ResumableOutcomeToAttemptBatchSession(
-    OutcomeToAttemptBatchSession[CandidateT, LegacyOutcomeRecordT],
-    ResumableBatchSession[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]],
-    Generic[CandidateT, LegacyOutcomeRecordT],
-):
-    """Adapt a resumable outcome-only session into a resumable attempt session."""
-
-    def __init__(
-        self,
-        *,
-        requests: tuple[EvaluationRequest[CandidateT], ...],
-        outcome_session: ResumableBatchSession[
-            EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
-        ],
-        candidate_equal: CandidateEquality[CandidateT],
-    ) -> None:
-        """Create one resumable outcome-session adapter."""
-        super().__init__(
-            requests=requests,
-            outcome_session=outcome_session,
-            candidate_equal=candidate_equal,
-        )
-
-    @override
-    def suspend(self) -> EvaluationBatchResumeHandle:
-        """Suspend the wrapped outcome session."""
-        return require_resumable_batch_session(self.outcome_session).suspend()
-
-
-def require_resumable_batch_session(
-    batch_session: EvaluationBatchSession[EvaluationT],
-) -> ResumableBatchSession[EvaluationT]:
-    """Return ``batch_session`` when it advertises resumable capability."""
-    if not isinstance(batch_session, ResumableBatchSession):
-        msg = "resumable async evaluator returned a non-resumable batch session"
-        raise TypeError(msg)
-    return batch_session
 
 
 def build_evaluation_requests(
@@ -359,48 +222,21 @@ def store_completion_group(
     return len(completion_group.outcomes)
 
 
-def finalize_ordered_outcomes(
-    ordered_outcomes: list[EvaluationOutcome[CandidateT, LegacyOutcomeRecordT] | None],
-) -> tuple[EvaluationOutcome[CandidateT, LegacyOutcomeRecordT], ...]:
-    """Return one fully populated ordered outcome tuple.
-
-    Parameters
-    ----------
-    ordered_outcomes : list[EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None]
-        Mutable ordered outcome buffer for an exact-async batch.
-
-    Returns
-    -------
-    tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
-        Fully populated ordered outcome tuple.
-
-    Raises
-    ------
-    RuntimeError
-        If any outcome slot is still missing.
-    """
-    if any(outcome is None for outcome in ordered_outcomes):
-        msg = "exact_async completion left missing request outcomes"
-        raise RuntimeError(msg)
-
-    return tuple(outcome for outcome in ordered_outcomes if outcome is not None)
-
-
 def finalize_ordered_attempts(
     ordered_attempts: list[
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None
     ],
-) -> EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]:
+) -> EvaluationAttemptBatch[CandidateT, StudyPayloadT]:
     """Return one fully populated ordered attempt batch.
 
     Parameters
     ----------
-    ordered_attempts : list[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None]
+    ordered_attempts : list[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None]
         Mutable ordered attempt-slot buffer for an exact-async batch.
 
     Returns
     -------
-    EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+    EvaluationAttemptBatch[CandidateT, StudyPayloadT]
         Dense attempt batch preserving logical request order.
 
     Raises
@@ -414,67 +250,15 @@ def finalize_ordered_attempts(
 
     return EvaluationAttemptBatch[
         CandidateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
     ].from_single_request_attempts(
         tuple(attempt for attempt in ordered_attempts if attempt is not None),
     )
 
 
-def validate_aligned_outcomes(
-    requests: tuple[EvaluationRequest[CandidateT], ...],
-    outcomes: tuple[EvaluationOutcome[CandidateT, LegacyOutcomeRecordT], ...],
-    *,
-    candidate_equal: CandidateEquality[CandidateT] | None = None,
-) -> None:
-    """Reject evaluator outcomes that do not align with input requests.
-
-    Parameters
-    ----------
-    requests : tuple[EvaluationRequest[CandidateT], ...]
-        Evaluation requests submitted to the evaluator.
-    outcomes : tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
-        Evaluation outcomes returned by the evaluator.
-    candidate_equal : CandidateEquality[CandidateT] | None, optional
-        Explicit candidate equality predicate used to validate refinement
-        alignment. When absent, strict scalar Python equality is used.
-
-    Raises
-    ------
-    ValueError
-        If the evaluator returns the wrong number of outcomes or if any outcome
-        record is not aligned with its input request.
-
-    Notes
-    -----
-    ``Study`` only accepts request-aligned records in its canonical execution
-    stack. Interaction-aware records belong to ``InteractionProblem`` and do
-    not participate in this request-local study tier.
-    """
-    if len(outcomes) != len(requests):
-        msg = "evaluator must return exactly one outcome per request"
-        raise ValueError(msg)
-
-    for request, outcome in zip(requests, outcomes, strict=True):
-        # Legacy outcome records erase the candidate parameter at the protocol
-        # bound; EvaluationOutcome still binds this compatibility edge to
-        # CandidateT.
-        record_request = cast(EvaluationRequest[CandidateT], outcome.record.request)
-        if not _requests_match(
-            request,
-            record_request,
-            candidate_equal=candidate_equal,
-        ):
-            msg = "evaluator outcomes must align with input request order"
-            raise ValueError(msg)
-        validate_outcome_refinement_alignment(
-            outcome,
-            candidate_equal=candidate_equal,
-        )
-
-
 def validate_aligned_attempts(
     requests: tuple[EvaluationRequest[CandidateT], ...],
-    attempts: EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
+    attempts: EvaluationAttemptBatch[CandidateT, StudyPayloadT],
     *,
     candidate_equal: CandidateEquality[CandidateT] | None = None,
 ) -> None:
@@ -484,7 +268,7 @@ def validate_aligned_attempts(
     ----------
     requests : tuple[EvaluationRequest[CandidateT], ...]
         Canonical request slots submitted to the evaluator or kernel.
-    attempts : EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+    attempts : EvaluationAttemptBatch[CandidateT, StudyPayloadT]
         Dense attempt batch returned for those slots.
     candidate_equal : CandidateEquality[CandidateT] | None, optional
         Explicit candidate equality predicate used to validate refinement
@@ -541,6 +325,131 @@ def validate_aligned_attempts(
         )
 
 
+def validate_materialized_attempts(
+    source_attempts: EvaluationAttemptBatch[CandidateT, StudyPayloadT],
+    materialized_attempts: EvaluationAttemptBatch[CandidateT, StudyRecordT],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None = None,
+) -> None:
+    """Reject materialized batches that mutate attempt-slot semantics.
+
+    Parameters
+    ----------
+    source_attempts : EvaluationAttemptBatch[CandidateT, StudyPayloadT]
+        Pre-materialization evaluator/kernel attempts.
+    materialized_attempts : EvaluationAttemptBatch[CandidateT, StudyRecordT]
+        Post-materialization feedback attempts.
+    candidate_equal : CandidateEquality[CandidateT] | None, optional
+        Explicit candidate equality predicate used to revalidate refinement and
+        request-aligned record payloads.
+
+    Raises
+    ------
+    TypeError
+        If a materialized success payload is not request-aligned.
+    ValueError
+        If the materializer drops, reorders, flips, or rewrites attempt slots or
+        protected attempt metadata.
+    """
+    if len(materialized_attempts.attempts) != len(source_attempts.attempts):
+        msg = "materialized attempt batch must preserve attempt slot count"
+        raise ValueError(msg)
+
+    for source_attempt, materialized_attempt in zip(
+        source_attempts.attempts,
+        materialized_attempts.attempts,
+        strict=True,
+    ):
+        if type(source_attempt) is EvaluationFailure:
+            _validate_materialized_failure_slot(source_attempt, materialized_attempt)
+            continue
+
+        if type(source_attempt) is EvaluationSuccess:
+            _validate_materialized_success_slot(
+                source_attempt,
+                materialized_attempt,
+                candidate_equal=candidate_equal,
+            )
+            continue
+
+        msg = "source attempt batch contains an unknown attempt variant"
+        raise TypeError(msg)
+
+
+def _validate_materialized_failure_slot(
+    source_failure: EvaluationFailure[CandidateT],
+    materialized_attempt: EvaluationSuccess[CandidateT, StudyRecordT]
+    | EvaluationFailure[CandidateT],
+) -> None:
+    if type(materialized_attempt) is not EvaluationFailure:
+        msg = "materialized attempt batch must preserve failure slots"
+        raise ValueError(msg)
+
+    if materialized_attempt.request is not source_failure.request:
+        msg = "materialized failure request must preserve source request identity"
+        raise ValueError(msg)
+
+    if (
+        materialized_attempt.exception != source_failure.exception
+        or materialized_attempt.evaluation_count != source_failure.evaluation_count
+    ):
+        msg = (
+            "materialized failure metadata must preserve exception and "
+            "evaluation_count"
+        )
+        raise ValueError(msg)
+
+
+def _validate_materialized_success_slot(
+    source_success: EvaluationSuccess[CandidateT, StudyPayloadT],
+    materialized_attempt: EvaluationSuccess[CandidateT, StudyRecordT]
+    | EvaluationFailure[CandidateT],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> None:
+    if type(materialized_attempt) is not EvaluationSuccess:
+        msg = "materialized attempt batch must preserve success slots"
+        raise ValueError(msg)
+
+    if materialized_attempt.request is not source_success.request:
+        msg = "materialized success request must preserve source request identity"
+        raise ValueError(msg)
+
+    if materialized_attempt.evaluation_count != source_success.evaluation_count:
+        msg = "materialized success metadata must preserve evaluation_count"
+        raise ValueError(msg)
+
+    if materialized_attempt.refinement is not source_success.refinement:
+        msg = "materialized success metadata must preserve refinement"
+        raise ValueError(msg)
+
+    if materialized_attempt.kernel_diagnostics is not source_success.kernel_diagnostics:
+        msg = "materialized success metadata must preserve kernel_diagnostics"
+        raise ValueError(msg)
+
+    if not _is_request_aligned_record_payload(materialized_attempt.payload):
+        msg = "materialized success payload must be a request-aligned record"
+        raise TypeError(msg)
+
+    _ = EvaluationSuccess(
+        request=materialized_attempt.request,
+        payload=materialized_attempt.payload,
+        evaluation_count=materialized_attempt.evaluation_count,
+        refinement=materialized_attempt.refinement,
+        kernel_diagnostics=materialized_attempt.kernel_diagnostics,
+        candidate_equal=candidate_equal,
+    )
+
+
+def _is_request_aligned_record_payload(
+    payload: object,
+) -> TypeGuard[RequestAlignedEvaluationRecord[object]]:
+    if not isinstance(payload, RequestAlignedEvaluationRecord):
+        return False
+
+    return type(payload.request) is EvaluationRequest
+
+
 def _requests_match(
     left_request: EvaluationRequest[CandidateT],
     right_request: EvaluationRequest[CandidateT],
@@ -561,7 +470,7 @@ def _requests_match(
 
 
 def _success_matches_expected_request(
-    success: EvaluationSuccess[CandidateT, StudyEvaluationRecordT],
+    success: EvaluationSuccess[CandidateT, StudyPayloadT],
     expected_request: EvaluationRequest[CandidateT],
     *,
     candidate_equal: CandidateEquality[CandidateT] | None,
@@ -619,13 +528,13 @@ def _require_bool_candidate_match(candidates_match: object) -> bool:
 
 
 def trace_value_for_records(
-    records: tuple[StudyEvaluationRecordT, ...],
+    records: tuple[StudyRecordT, ...],
 ) -> float | None:
     """Return one scalar trace value when the batch records are observations.
 
     Parameters
     ----------
-    records : tuple[StudyEvaluationRecordT, ...]
+    records : tuple[StudyRecordT, ...]
         Batch records produced by a study step.
 
     Returns

@@ -86,10 +86,16 @@ def _require_observation_records(
 
 
 def _successful_observation_records(
-    attempts: EvaluationAttemptBatch[int, RequestAlignedEvaluationRecord],
+    attempts: EvaluationAttemptBatch[
+        AttemptCandidateT,
+        RequestAlignedEvaluationRecord,
+    ],
 ) -> tuple[Observation[int], ...]:
     """Project successful scalar attempts into observation compatibility records."""
-    return tuple(success.scalar_observation() for success in attempts.successes)
+    records: list[RequestAlignedEvaluationRecord] = []
+    for success in attempts.successes:
+        records.append(success.scalar_observation())
+    return _require_observation_records(records)
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,6 +9,7 @@ from typing_extensions import TypeVar
 
 from ..artifacts import (
     EvaluationAttemptBatch,
+    EvaluationAttemptMaterializer,
     EvaluationFailure,
     EvaluationRequest,
     EvaluationSuccess,
@@ -17,13 +18,9 @@ from ..artifacts import (
     RunReport,
     Trace,
     TraceEvent,
-    materialize_attempt_batch_records,
     materialize_success_records,
 )
-from ..artifacts.records import RequestAlignedEvaluationRecord
-from ..evaluators.async_evaluator.contracts import AsyncEvaluator
 from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
-from ..evaluators.base import Evaluator
 from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
     EvaluationBudget,
@@ -31,16 +28,18 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
-    StudyEvaluationRecordT,
+    StudyEvaluator,
+    StudyPayloadT,
+    StudyRecordT,
     build_evaluation_requests,
     supports_attempt_batch_sessions,
     trace_value_for_records,
     validate_aligned_attempts,
+    validate_materialized_attempts,
 )
 from .failures import RunExecutionFailed
 from .validation import require_async_evaluator, validate_execution_request
@@ -50,14 +49,20 @@ _STALE_ASYNC_IDLE_SLEEP_SECONDS = 0.001
 
 
 class _StudyStaleAsyncOwner(
-    Protocol[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    Protocol[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyPayloadT,
+        StudyRecordT,
+    ]
 ):
     """Protocol for the subset of Study state stale-async orchestration needs."""
 
     @property
     def problem(
         self,
-    ) -> Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]:
+    ) -> Problem[BoundaryT, CandidateT, StudyPayloadT]:
         """Return the configured problem."""
         ...
 
@@ -67,7 +72,7 @@ class _StudyStaleAsyncOwner(
     ) -> RunMethod[
         RunMethodStateT,
         Proposal[CandidateT],
-        StudyEvaluationRecordT,
+        StudyRecordT,
     ]:
         """Return the configured run method."""
         ...
@@ -75,11 +80,7 @@ class _StudyStaleAsyncOwner(
     @property
     def evaluator(
         self,
-    ) -> Evaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-    ]:
+    ) -> StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]:
         """Return the configured evaluator."""
         ...
 
@@ -87,22 +88,33 @@ class _StudyStaleAsyncOwner(
     def kernel(
         self,
     ) -> Kernel[
-        ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT],
+        ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT],
     ]:
         """Return the configured kernel."""
         ...
 
+    @property
+    def attempt_materializer(
+        self,
+    ) -> EvaluationAttemptMaterializer[
+        CandidateT,
+        StudyPayloadT,
+        StudyRecordT,
+    ]:
+        """Return the payload-to-record materializer for feedback attempts."""
+        ...
+
 
 @dataclass(slots=True)
-class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
+class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyPayloadT]):
     """Run-owned active async batch with incremental stale assimilation tracking.
 
     Parameters
     ----------
     requests : tuple[EvaluationRequest[CandidateT], ...]
         Logical request batch owned by the session.
-    batch_session : EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]]
+    batch_session : EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyPayloadT]]
         Evaluator-owned async batch session that executes ``requests``.
     completed_indices : set[int], default=set()
         Logical request indices already emitted through completed groups.
@@ -110,7 +122,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
 
     requests: tuple[EvaluationRequest[CandidateT], ...]
     batch_session: EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
     ]
     candidate_equal: CandidateEquality[CandidateT]
     completed_indices: set[int] = field(default_factory=set)
@@ -123,10 +135,10 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
 
     def poll_completed_groups(
         self,
-    ) -> tuple[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT], ...]:
+    ) -> tuple[EvaluationAttemptBatch[CandidateT, StudyPayloadT], ...]:
         """Poll and validate newly completed groups for one stale-async session."""
         completed_groups: list[
-            EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+            EvaluationAttemptBatch[CandidateT, StudyPayloadT]
         ] = []
         for completion_group in self.batch_session.poll():
             end_index = completion_group.start_index + len(completion_group.outcomes)
@@ -137,7 +149,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
             group_requests = self.requests[completion_group.start_index : end_index]
             attempts = EvaluationAttemptBatch[
                 CandidateT,
-                StudyEvaluationRecordT,
+                StudyPayloadT,
             ].from_single_request_attempts(completion_group.outcomes)
             validate_aligned_attempts(
                 group_requests,
@@ -168,7 +180,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyEvaluationRecordT]):
 
 def _cancel_active_stale_async_sessions(
     active_sessions: Sequence[
-        StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
+        StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]
     ],
 ) -> None:
     """Cancel all active stale-async sessions while preserving the run failure."""
@@ -183,12 +195,8 @@ def _cancel_active_stale_async_sessions(
 
 def open_stale_async_batch_session(
     *,
-    async_evaluator: AsyncEvaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-    ],
-    problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
+    async_evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT],
+    problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
     run_method_ask: Callable[
         ...,
         tuple[tuple[Proposal[CandidateT], ...], RunMethodStateT],
@@ -201,15 +209,16 @@ def open_stale_async_batch_session(
     batch_size: int,
     evaluation_budget: EvaluationBudget | None = None,
 ) -> tuple[
-    StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT], RunMethodStateT
+    StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT], RunMethodStateT
 ]:
     """Ask one batch and open its stale-async evaluator session.
 
     Parameters
     ----------
-    async_evaluator : AsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
-        Async evaluator used to open the backend session.
-    problem : Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    async_evaluator : StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+        Evaluator exposing native attempt-session capability for the stale
+        async batch.
+    problem : Problem[BoundaryT, CandidateT, StudyPayloadT]
         Problem being optimized.
     run_method_ask : Callable[..., tuple[tuple[Proposal[CandidateT], ...], RunMethodStateT]]
         ``RunMethod.ask``-compatible callable.
@@ -224,7 +233,7 @@ def open_stale_async_batch_session(
 
     Returns
     -------
-    tuple[StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT], RunMethodStateT]
+    tuple[StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT], RunMethodStateT]
         Opened active batch session and the post-ask run-method state.
 
     Raises
@@ -264,7 +273,10 @@ def open_stale_async_batch_session(
     return (
         StaleAsyncActiveBatchSession(
             requests=requests,
-            batch_session=async_evaluator.open_attempt_session(problem, requests),
+            batch_session=async_evaluator.open_attempt_session(
+                problem,
+                requests,
+            ),
             candidate_equal=problem.space.candidates_equal,
         ),
         next_state,
@@ -276,7 +288,8 @@ def _validate_stale_async_run_request(
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ],
     *,
     batch_size: int,
@@ -297,14 +310,15 @@ def _open_stale_async_batch_session_for_study(
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ],
     state: RunMethodStateT,
     *,
     batch_size: int,
     evaluation_budget: EvaluationBudget | None = None,
 ) -> tuple[
-    StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT],
+    StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT],
     RunMethodStateT,
 ]:
     """Ask one direct batch and open one active stale-async evaluator session."""
@@ -316,8 +330,9 @@ def _open_stale_async_batch_session_for_study(
         msg = "stale_async execution model currently requires DirectKernel"
         raise ValueError(msg)
 
+    require_async_evaluator(study)
     return open_stale_async_batch_session(
-        async_evaluator=require_async_evaluator(study),
+        async_evaluator=study.evaluator,
         problem=study.problem,
         run_method_ask=study.run_method.ask,
         proposal_evaluation_specs_for=study.run_method.proposal_evaluation_specs,
@@ -332,7 +347,8 @@ def run_stale_async(
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ],
     *,
     max_evaluations: int,
@@ -340,12 +356,12 @@ def run_stale_async(
     count_evaluation_cost: bool,
     initial_state: RunMethodStateT | None,
     stop_at_checkpoint_boundary: bool = False,
-) -> tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
+) -> tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]:
     """Run stale-incremental async orchestration with rolling batch refill.
 
     Parameters
     ----------
-    study : _StudyStaleAsyncOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    study : _StudyStaleAsyncOwner[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
         Study-like owner providing problem, run method, evaluator, and kernel.
     max_evaluations : int
         Evaluation budget for the run.
@@ -362,12 +378,12 @@ def run_stale_async(
 
     Returns
     -------
-    tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]
+    tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]
         Run report and terminal run-method state.
     """
     _validate_stale_async_run_request(study, batch_size=batch_size)
 
-    successes: list[EvaluationSuccess[CandidateT, StudyEvaluationRecordT]] = []
+    successes: list[EvaluationSuccess[CandidateT, StudyRecordT]] = []
     failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
@@ -380,7 +396,7 @@ def run_stale_async(
         else initial_state
     )
     safe_successes: tuple[
-        EvaluationSuccess[CandidateT, StudyEvaluationRecordT],
+        EvaluationSuccess[CandidateT, StudyRecordT],
         ...,
     ] | None = None
     safe_failures: tuple[EvaluationFailure[CandidateT], ...] = ()
@@ -390,7 +406,7 @@ def run_stale_async(
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
         safe_successes = ()
     active_sessions: list[
-        StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
+        StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]
     ] = []
 
     try:
@@ -431,8 +447,13 @@ def run_stale_async(
                 if len(completed_groups) > 0:
                     completed_any = True
                 for completed_group in completed_groups:
-                    feedback_group = materialize_attempt_batch_records(
+                    feedback_group = study.attempt_materializer.materialize_attempts(
                         completed_group
+                    )
+                    validate_materialized_attempts(
+                        completed_group,
+                        feedback_group,
+                        candidate_equal=study.problem.space.candidates_equal,
                     )
                     group_successes = feedback_group.successes
                     group_records = materialize_success_records(group_successes)
@@ -511,7 +532,7 @@ def run_stale_async(
         _cancel_active_stale_async_sessions(active_sessions)
         partial_report = RunReport[
             CandidateT,
-            StudyEvaluationRecordT,
+            StudyRecordT,
         ].from_successes(
             successes=tuple(successes),
             evaluation_count=(
@@ -525,13 +546,13 @@ def run_stale_async(
         )
         checkpoint_safe_report: RunReport[
             CandidateT,
-            StudyEvaluationRecordT,
+            StudyRecordT,
         ] | None = None
         checkpoint_safe_state: RunMethodStateT | None = None
         if safe_successes is not None:
             checkpoint_safe_report = RunReport[
                 CandidateT,
-                StudyEvaluationRecordT,
+                StudyRecordT,
             ].from_successes(
                 successes=safe_successes,
                 evaluation_count=safe_evaluation_count,
@@ -543,7 +564,7 @@ def run_stale_async(
         raise RunExecutionFailed[
             CandidateT,
             RunMethodStateT,
-            StudyEvaluationRecordT,
+            StudyRecordT,
         ](
             partial_report=partial_report,
             partial_state=state,
@@ -564,7 +585,7 @@ def run_stale_async(
             )
             raise RuntimeError(msg)
         return (
-            RunReport[CandidateT, StudyEvaluationRecordT].from_successes(
+            RunReport[CandidateT, StudyRecordT].from_successes(
                 successes=safe_successes,
                 evaluation_count=safe_evaluation_count,
                 trace=safe_trace,
@@ -575,7 +596,7 @@ def run_stale_async(
         )
 
     return (
-        RunReport[CandidateT, StudyEvaluationRecordT].from_successes(
+        RunReport[CandidateT, StudyRecordT].from_successes(
             successes=successes,
             evaluation_count=(
                 max_evaluations - record_budget_remaining

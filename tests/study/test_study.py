@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Protocol, cast, runtime_checkable
+from typing import Protocol, TypeAlias, runtime_checkable
 
 import pytest
 from typing_extensions import override
@@ -15,12 +15,15 @@ from tests.study_support import (
     DecrementKernel,
     FailingCandidateObjective,
     FailureRecordingBatchQueueOptimizer,
+    FailureRecordingBatchQueueOptimizerState,
     HardFailingEvaluator,
     LabelBatchQueueOptimizer,
+    LabelBatchQueueOptimizerState,
     LabelProtocol,
     LabelRecord,
     MisorderedEvaluator,
     OutcomeAwareBatchQueueOptimizer,
+    OutOfOrderAsyncEvaluator,
     RecordingExecutionResourcesKernel,
     RecordingKernel,
     RefinementKernel,
@@ -29,6 +32,7 @@ from tests.study_support import (
     SpaceOwnedEqualityCandidate,
     SpaceOwnedEqualityObjective,
     SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualityOptimizerState,
     SpaceOwnedEqualityRefinementKernel,
     SpaceOwnedEqualitySpace,
     SquareObjective,
@@ -37,7 +41,6 @@ from variopt import (
     CandidateRefinement,
     EvaluationAttemptBatch,
     EvaluationBudgetExhausted,
-    EvaluationOutcome,
     EvaluationRequest,
     IntegerSpace,
     Objective,
@@ -45,11 +48,16 @@ from variopt import (
     OptimizationDirection,
     Problem,
     Proposal,
+    RunExecutionFailed,
     RunReport,
     Study,
 )
 from variopt.artifacts import (
+    DefaultEvaluationAttemptMaterializer,
+    EvaluationAttemptMaterializer,
+    EvaluationFailure,
     EvaluationSuccess,
+    ObservationPayload,
     ProposalEvaluationSpec,
     Trace,
     TraceEvent,
@@ -66,8 +74,37 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from variopt.study.common import build_evaluation_requests, validate_aligned_outcomes
-from variopt.study.execution import evaluate_batch_sync
+from variopt.study.common import build_evaluation_requests
+from variopt.study.execution import evaluate_attempts_sync
+
+ScalarBatchStudy: TypeAlias = Study[
+    int,
+    int,
+    BatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+FailureRecordingStudy: TypeAlias = Study[
+    int,
+    int,
+    FailureRecordingBatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+LabelStudy: TypeAlias = Study[
+    int,
+    int,
+    LabelBatchQueueOptimizerState,
+    LabelRecord,
+    LabelRecord,
+]
+SpaceOwnedEqualityStudy: TypeAlias = Study[
+    int | SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityOptimizerState,
+    ObservationPayload,
+    Observation[SpaceOwnedEqualityCandidate],
+]
 
 
 @runtime_checkable
@@ -99,10 +136,55 @@ class KeyboardInterruptObjective(Objective[int]):
         raise KeyboardInterrupt
 
 
+class CountingObservationMaterializer(
+    EvaluationAttemptMaterializer[int, ObservationPayload, Observation[int]],
+):
+    """Observation materializer that records optimize/run boundary calls."""
+
+    calls: int
+    _default: DefaultEvaluationAttemptMaterializer[int]
+    _value_offset: float
+
+    def __init__(self, *, value_offset: float = 0.0) -> None:
+        self.calls = 0
+        self._default = DefaultEvaluationAttemptMaterializer()
+        self._value_offset = value_offset
+
+    @override
+    def materialize_attempts(
+        self,
+        attempts: EvaluationAttemptBatch[int, ObservationPayload],
+    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+        self.calls += 1
+        materialized_attempts = self._default.materialize_attempts(attempts)
+        if self._value_offset == 0.0:
+            return materialized_attempts
+
+        shifted_attempts: list[
+            EvaluationSuccess[int, Observation[int]] | EvaluationFailure[int]
+        ] = []
+        for attempt in materialized_attempts.attempts:
+            if isinstance(attempt, EvaluationFailure):
+                shifted_attempts.append(attempt)
+                continue
+
+            observation = attempt.payload
+            shifted_observation = Observation(
+                request=observation.request,
+                candidate=observation.candidate,
+                value=observation.value + self._value_offset,
+                score=observation.score + self._value_offset,
+                elapsed_seconds=observation.elapsed_seconds,
+            )
+            shifted_attempts.append(attempt.with_payload(shifted_observation))
+
+        return EvaluationAttemptBatch(attempts=tuple(shifted_attempts))
+
+
 class RepeatingSubqueryKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int, Observation[int]],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Kernel that intentionally reuses one trial subquery object."""
@@ -110,12 +192,12 @@ class RepeatingSubqueryKernel(
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int, Observation[int]],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
         subquery = ProposalBatchQuery(
             problem=query.problem,
             proposals=(Proposal(candidate=max(0, query.proposals[0].candidate - 1)),),
@@ -123,12 +205,12 @@ class RepeatingSubqueryKernel(
         )
         first_success = runner(subquery).successes[0]
         second_success = runner(subquery).successes[0]
-        refined_record = second_success.scalar_observation()
+        refined_candidate = second_success.request.candidate
         refinement = None
-        if refined_record.candidate != query.proposals[0].candidate:
+        if refined_candidate != query.proposals[0].candidate:
             refinement = CandidateRefinement(
                 source_candidate=query.proposals[0].candidate,
-                refined_candidate=refined_record.candidate,
+                refined_candidate=refined_candidate,
                 changed_leaf_paths=((),),
             )
         proposal_evaluation_spec = None
@@ -136,20 +218,19 @@ class RepeatingSubqueryKernel(
             proposal_evaluation_spec = query.proposal_evaluation_specs[0]
         request = EvaluationRequest(
             proposal=Proposal(
-                candidate=refined_record.candidate,
+                candidate=refined_candidate,
                 proposal_id=query.proposals[0].proposal_id,
             ),
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
-        observation = Observation.from_objective_value(
-            request=request,
-            candidate=refined_record.candidate,
-            value=refined_record.value,
+        payload = ObservationPayload.from_objective_value(
+            value=second_success.payload.value,
             direction=query.problem.direction,
+            elapsed_seconds=second_success.payload.elapsed_seconds,
         )
         success = EvaluationSuccess(
             request=request,
-            payload=observation,
+            payload=payload,
             evaluation_count=(
                 first_success.evaluation_count + second_success.evaluation_count
             ),
@@ -157,6 +238,52 @@ class RepeatingSubqueryKernel(
         )
         return EvaluationAttemptBatch(
             attempts=(success,),
+        )
+
+
+class PayloadRefinementKernel(
+    Kernel[
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
+    ],
+):
+    """Kernel that returns refined scalar payloads before record materialization."""
+
+    @override
+    def run(
+        self,
+        query: ProposalBatchQuery[int, int, ObservationPayload],
+        runner: Callable[
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
+        ],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        refined_candidate = query.proposals[0].candidate - 1
+        refined_proposal = Proposal(
+            candidate=refined_candidate,
+            proposal_id=query.proposals[0].proposal_id,
+        )
+        subquery = ProposalBatchQuery(
+            problem=query.problem,
+            proposals=(refined_proposal,),
+            execution_resources=query.execution_resources,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        refined_success = runner(subquery).successes[0]
+        refinement = CandidateRefinement(
+            source_candidate=query.proposals[0].candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+        return EvaluationAttemptBatch(
+            attempts=(
+                EvaluationSuccess(
+                    request=refined_success.request,
+                    payload=refined_success.payload,
+                    evaluation_count=refined_success.evaluation_count,
+                    refinement=refinement,
+                ),
+            ),
         )
 
 
@@ -233,16 +360,14 @@ class RequestAwareObjective(Objective[int]):
         request: EvaluationRequest[int],
         *,
         direction: OptimizationDirection,
-    ) -> Observation[int]:
+    ) -> ObservationPayload:
         self.request_evaluation_count += 1
         spec_bonus = (
             100.0
             if isinstance(request.proposal_evaluation_spec, LocalProposalEvaluationSpec)
             else 0.0
         )
-        return Observation.from_objective_value(
-            request=request,
-            candidate=request.candidate,
+        return ObservationPayload.from_objective_value(
             value=float(request.candidate) + spec_bonus,
             direction=direction,
         )
@@ -261,7 +386,11 @@ class StudyTests:
         )
         evaluator = SequentialEvaluator[int, int]()
 
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         assert isinstance(study.kernel, DirectKernel)
 
@@ -319,10 +448,12 @@ class StudyTests:
         contexts = kernel.queries[0].proposal_kernel_hints
         assert contexts is not None
         assert contexts is not None
-        assert all(
-            isinstance(context, ProposalLocalSearchContext) for context in contexts
+        typed_contexts = tuple(
+            context
+            for context in contexts
+            if isinstance(context, ProposalLocalSearchContext)
         )
-        typed_contexts = cast(tuple[ProposalLocalSearchContext, ...], contexts)
+        assert len(typed_contexts) == len(contexts)
         assert tuple(context.local_budget for context in typed_contexts) == (1, 2)
 
     def test_step_runs_ask_evaluate_tell_once(self) -> None:
@@ -334,7 +465,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
         state = optimizer.create_initial_state()
 
         observations, next_state = study.step(state, batch_size=1)
@@ -380,7 +515,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         _ = study.step(optimizer.create_initial_state(), batch_size=1)
 
@@ -419,7 +558,7 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(
+        study: ScalarBatchStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -478,7 +617,7 @@ class StudyTests:
         assert observations[0].candidate == 2
         assert build_call_count == 3
 
-    def test_evaluate_batch_sync_uses_supplied_requests_without_rebuilding(
+    def test_evaluate_attempts_sync_uses_supplied_requests_without_rebuilding(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -505,7 +644,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
         proposals = (Proposal(candidate=3, proposal_id="p-1"),)
         requests = build_evaluation_requests(
             proposals,
@@ -517,40 +660,35 @@ class StudyTests:
             execution_resources=evaluator.execution_resources(),
         )
 
-        outcomes = evaluate_batch_sync(study, query, requests=requests)
+        attempts = evaluate_attempts_sync(study, query, requests=requests)
+        success = attempts.successes[0]
 
-        assert outcomes[0].record.candidate == 3
-        assert outcomes[0].record.value == 9.0
+        assert success.request is requests[0]
+        assert success.candidate == 3
+        assert type(success.payload) is ObservationPayload
+        assert success.payload.value == 9.0
 
-    def test_validate_aligned_outcomes_uses_candidate_equal_for_request_alignment(
-        self,
-    ) -> None:
-        expected_request = EvaluationRequest(
-            proposal=Proposal(
-                candidate=SpaceOwnedEqualityCandidate(3),
-                proposal_id="p-1",
-            ),
+    def test_sync_execution_rejects_attempt_session_only_evaluator(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
         )
-        outcome_request = EvaluationRequest(
-            proposal=Proposal(
-                candidate=SpaceOwnedEqualityCandidate(3),
-                proposal_id="p-1",
-            ),
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
-        outcome = EvaluationOutcome(
-            record=Observation(
-                request=outcome_request,
-                candidate=outcome_request.candidate,
-                value=9.0,
-                score=9.0,
-            ),
+        evaluator = OutOfOrderAsyncEvaluator()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
         )
+        state = optimizer.create_initial_state()
 
-        validate_aligned_outcomes(
-            (expected_request,),
-            (outcome,),
-            candidate_equal=SpaceOwnedEqualitySpace().candidates_equal,
-        )
+        with pytest.raises(
+            TypeError,
+            match="sync execution models require evaluator.evaluate_attempts",
+        ):
+            _ = study.step(state)
 
     def test_step_uses_problem_evaluation_protocol_basis(self) -> None:
         problem = Problem(
@@ -561,7 +699,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         observations, _ = study.step(optimizer.create_initial_state(), batch_size=1)
 
@@ -580,7 +722,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int, LabelRecord]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: LabelStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         records, next_state = study.step(optimizer.create_initial_state(), batch_size=1)
 
@@ -599,7 +745,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int, LabelRecord]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: LabelStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         with pytest.raises(TypeError):
             _ = study.optimize(max_evaluations=1)
@@ -618,7 +768,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int, LabelRecord]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: LabelStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(max_evaluations=2)
 
@@ -651,7 +805,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         result, _ = study.optimize(max_evaluations=3, batch_size=2)
 
@@ -691,7 +849,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         result, final_state = study.optimize(max_evaluations=3, batch_size=2)
 
@@ -716,6 +878,74 @@ class StudyTests:
             tuple(observation.proposal.proposal_id for observation in batch)
             for batch in final_state.tell_history
         ) == (("p-1", "p-2"), ("p-3",))
+
+    def test_optimize_uses_custom_materializer_instead_of_fast_path(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        materializer = CountingObservationMaterializer()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            attempt_materializer=materializer,
+        )
+
+        result, final_state = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert materializer.calls == 1
+        assert tuple(observation.candidate for observation in result.observations) == (
+            4,
+            2,
+        )
+        assert tuple(
+            tuple(type(record) is Observation for record in batch)
+            for batch in final_state.tell_history
+        ) == ((True, True),)
+
+    def test_optimize_uses_custom_materialized_records_for_result(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        materializer = CountingObservationMaterializer(value_offset=100.0)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            attempt_materializer=materializer,
+        )
+
+        result, final_state = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert materializer.calls == 1
+        assert tuple(observation.value for observation in result.observations) == (
+            116.0,
+            104.0,
+        )
+        assert tuple(
+            tuple(record.value for record in batch)
+            for batch in final_state.tell_history
+        ) == ((116.0, 104.0),)
 
     def test_optimize_fast_path_preserves_outcome_aware_tell_hook(self) -> None:
         problem = Problem(
@@ -818,9 +1048,9 @@ class StudyTests:
         try:
             _ = study.optimize(max_evaluations=1)
         except RuntimeError as raw_exception:
-            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
             assert isinstance(raw_exception, BatchQueueRunFailure)
-            exception = raw_exception
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
         else:
             pytest.fail("expected invalid candidate hard failure")
 
@@ -869,7 +1099,7 @@ class StudyTests:
                 evaluator=evaluator,
             ).optimize(max_evaluations=1)
         except RuntimeError as raw_exception:
-            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
+            assert type(raw_exception) is RunExecutionFailed
             assert isinstance(raw_exception, BatchQueueRunFailure)
             assert isinstance(raw_exception.cause, ValueError)
             assert "proposal_evaluation_specs" in str(raw_exception.cause)
@@ -883,7 +1113,7 @@ class StudyTests:
                 evaluator=evaluator,
             ).optimize(max_evaluations=1)
         except RuntimeError as raw_exception:
-            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
+            assert type(raw_exception) is RunExecutionFailed
             assert isinstance(raw_exception, BatchQueueRunFailure)
             assert isinstance(raw_exception.cause, ValueError)
             assert "proposal_kernel_hints" in str(raw_exception.cause)
@@ -983,7 +1213,7 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(
+        study: ScalarBatchStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -1013,6 +1243,33 @@ class StudyTests:
             tuple(report.records[2:]),
         )
 
+    def test_run_materializes_refined_scalar_payloads_before_feedback(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=PayloadRefinementKernel(),
+        )
+
+        report, final_state = study.run(max_evaluations=1, batch_size=1)
+
+        assert tuple(record.candidate for record in report.records) == (3,)
+        assert isinstance(report.records[0], Observation)
+        assert final_state.tell_history == ((report.records[0],),)
+        assert len(report.refinements) == 1
+        refinement = report.refinements[0]
+        assert refinement is not None
+        assert refinement.source_candidate == 4
+        assert refinement.refined_candidate == 3
+
     def test_run_records_sync_mixed_evaluation_failures(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
@@ -1028,7 +1285,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(max_evaluations=3, batch_size=3)
 
@@ -1036,6 +1297,7 @@ class StudyTests:
             "p-1",
             "p-3",
         )
+        assert all(type(success.payload) is Observation for success in report.successes)
         assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
         assert report.failures[0].exception.exception_type == "builtins.ValueError"
         assert report.evaluation_count == 3
@@ -1064,7 +1326,11 @@ class StudyTests:
             ],
         )
         evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(max_evaluations=3, batch_size=3)
 
@@ -1087,7 +1353,11 @@ class StudyTests:
             ],
         )
         evaluator = HardFailingEvaluator(fail_on_call=2)
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         try:
             _ = study.run(
@@ -1096,9 +1366,9 @@ class StudyTests:
                 stop_at_checkpoint_boundary=True,
             )
         except RuntimeError as raw_exception:
-            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
             assert isinstance(raw_exception, BatchQueueRunFailure)
-            exception = raw_exception
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
         else:
             pytest.fail("expected hard evaluator failure")
 
@@ -1107,6 +1377,10 @@ class StudyTests:
             record.proposal.proposal_id
             for record in exception.partial_report.records
         ) == ("p-1",)
+        assert all(
+            type(success.payload) is Observation
+            for success in exception.partial_report.successes
+        )
         assert exception.partial_report.evaluation_count == 2
         assert exception.partial_state.tell_history == (
             (exception.partial_report.records[0],),
@@ -1118,6 +1392,10 @@ class StudyTests:
         assert tuple(
             record.proposal.proposal_id for record in checkpoint_report.records
         ) == ("p-1",)
+        assert all(
+            type(success.payload) is Observation
+            for success in checkpoint_report.successes
+        )
         assert checkpoint_report.evaluation_count == 1
         assert checkpoint_state.tell_history == ((checkpoint_report.records[0],),)
 
@@ -1132,7 +1410,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=2, proposal_id="p-1"),)],
         )
         evaluator = HardFailingEvaluator(fail_on_call=1)
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         try:
             _ = study.run(
@@ -1141,9 +1423,9 @@ class StudyTests:
                 stop_at_checkpoint_boundary=True,
             )
         except RuntimeError as raw_exception:
-            assert raw_exception.__class__.__name__ == "RunExecutionFailed"
             assert isinstance(raw_exception, BatchQueueRunFailure)
-            exception = raw_exception
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
         else:
             pytest.fail("expected hard evaluator failure")
 
@@ -1302,7 +1584,7 @@ class StudyTests:
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
         ]()
-        study = Study(
+        study: SpaceOwnedEqualityStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,

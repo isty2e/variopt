@@ -8,7 +8,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...evaluators.async_evaluator.artifacts import EvaluationBatchResumeHandle
 from ...typevars import CandidateT, RunMethodStateT
-from ..common import StudyEvaluationRecordT
+from ..common import StudyPayloadT
 
 StudyExactAsyncSessionLifecycle = Literal[
     "active",
@@ -21,7 +21,7 @@ StudyExactAsyncSessionLifecycle = Literal[
 
 @dataclass(frozen=True, slots=True)
 class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
-    Generic[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    Generic[CandidateT, RunMethodStateT, StudyPayloadT]
 ):
     """Study-owned resume handle for one suspended exact-async step session.
 
@@ -33,7 +33,7 @@ class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
         Requests issued for the suspended step.
     post_ask_state : RunMethodStateT
         Run-method state captured immediately after the corresponding ``ask``.
-    ordered_attempts : tuple[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None, ...]
+    ordered_attempts : tuple[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None, ...]
         Attempt slots aligned to ``requests``. Completed entries contain
         one-request attempt batches; unfinished entries are ``None``.
     """
@@ -42,7 +42,7 @@ class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
     requests: tuple[EvaluationRequest[CandidateT], ...]
     post_ask_state: RunMethodStateT
     ordered_attempts: tuple[
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT] | None,
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None,
         ...,
     ]
 

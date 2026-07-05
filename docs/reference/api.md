@@ -41,13 +41,22 @@ Execution-related public artifacts are documented through the root facade and
 `variopt.artifacts`: `CandidateRefinement`, `EvaluationOutcome`,
 `EvaluationFailure`, `EvaluationExceptionSnapshot`, `EvaluationSuccess`,
 `ObservationPayload`, `ObjectiveVectorPayload`, `EvaluationAttemptBatch`,
+`EvaluationAttemptMaterializer`, `DefaultEvaluationAttemptMaterializer`,
 `RunReport`, `RunResult`, and `NondominatedRunSurface`. The root execution
 facade still exposes outcome-aware execution metadata such as
 `EvaluationOutcome`; the artifact facade also exposes request-owned success and
 payload artifacts for integrations that need to keep request identity separate
-from objective payloads. Run-method attempt assimilation exposes
+from objective payloads, plus the materializer protocol used to project
+payload attempts into feedback records. Custom payload-to-record mappings should
+provide an explicit `EvaluationAttemptMaterializer` when constructing a
+`Study`; materializers may change successful payload representation, but must
+not drop, reorder, flip, or rewrite attempt slots or their accounting and
+provenance metadata. Run-method attempt assimilation exposes
 `UnsupportedEvaluationFailureError` for optimizers that cannot safely consume
 recorded failures; study orchestration exposes `RunExecutionFailed` for hard
 failures with partial run state. Kernel implementation contracts used by those
 examples, including `ProposalBatchQuery`, `KernelDiagnostics`, `KernelStatus`,
 `ExecutionResources`, and `NestedParallelismPolicy`, are also root-facade names.
+Supported diagnostics import paths are `from variopt import KernelDiagnostics,
+KernelStatus` and `from variopt.artifacts import KernelDiagnostics,
+KernelStatus`; `variopt.kernel` is not a supported diagnostics facade.

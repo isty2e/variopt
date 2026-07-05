@@ -2,60 +2,28 @@
 
 from typing import Protocol
 
-from typing_extensions import TypeVar
-
-from ..artifacts import EvaluationRequest, Proposal
-from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.async_evaluator.contracts import (
     AsyncEvaluator,
     ResumableAsyncEvaluator,
 )
-from ..evaluators.base import Evaluator
 from ..execution import (
     SEQUENTIAL_EXECUTION_MODEL,
     ExecutionCompletionMode,
     ExecutionModel,
 )
-from ..methods import RunMethod
-from ..outcomes import EvaluationOutcome
-from ..problem import Problem
-from ..typevars import CandidateT, RunMethodStateT
-from .common import StudyEvaluationRecordT
-
-BoundaryT = TypeVar("BoundaryT")
 
 
-class StudyValidationOwner(
-    Protocol[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
-):
-    """Protocol for the subset of Study state shared by validation helpers.
+class AsyncEvaluatorValidationOwner(Protocol):
+    """Study-like owner for async evaluator capability validation.
 
     Notes
     -----
-    Validation helpers use this protocol so they can operate on the concrete
-    :class:`variopt.study.Study` class and internal orchestration shims
-    uniformly.
+    Async capability checks only need the evaluator object. Execution-model
+    validation has a separate owner protocol for run-method capability checks.
     """
 
     @property
-    def run_method(
-        self,
-    ) -> RunMethod[
-        RunMethodStateT,
-        Proposal[CandidateT],
-        StudyEvaluationRecordT,
-    ]:
-        """Return the configured run method."""
-        ...
-
-    @property
-    def evaluator(
-        self,
-    ) -> Evaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-    ]:
+    def evaluator(self) -> object:
         """Return the configured evaluator."""
         ...
 
@@ -129,28 +97,14 @@ def validate_execution_request(
 
 
 def require_async_evaluator(
-    study: StudyValidationOwner[
-        BoundaryT,
-        CandidateT,
-        RunMethodStateT,
-        StudyEvaluationRecordT,
-    ],
-) -> AsyncEvaluator[
-    Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-    EvaluationRequest[CandidateT],
-    EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-]:
-    """Return the configured async evaluator after prior capability checks.
+    study: AsyncEvaluatorValidationOwner,
+) -> None:
+    """Require the configured evaluator to expose async capability.
 
     Parameters
     ----------
-    study : StudyValidationOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    study : AsyncEvaluatorValidationOwner
         Study-like owner exposing the evaluator.
-
-    Returns
-    -------
-    AsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
-        Async evaluator configured on ``study``.
 
     Raises
     ------
@@ -160,43 +114,27 @@ def require_async_evaluator(
     if not isinstance(study.evaluator, AsyncEvaluator):
         msg = "ordered_async execution models require an AsyncEvaluator"
         raise TypeError(msg)
-    return study.evaluator
 
 
 def require_resumable_async_evaluator(
-    study: StudyValidationOwner[
-        BoundaryT,
-        CandidateT,
-        RunMethodStateT,
-        StudyEvaluationRecordT,
-    ],
-) -> ResumableAsyncEvaluator[
-    Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-    EvaluationRequest[CandidateT],
-    EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-]:
-    """Return the configured resumable async evaluator after prior checks.
+    study: AsyncEvaluatorValidationOwner,
+) -> None:
+    """Require the configured evaluator to expose resumable async capability.
 
     Parameters
     ----------
-    study : StudyValidationOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    study : AsyncEvaluatorValidationOwner
         Study-like owner exposing the evaluator.
-
-    Returns
-    -------
-    ResumableAsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
-        Resumable async evaluator configured on ``study``.
 
     Raises
     ------
     TypeError
         If the evaluator does not support resumable async sessions.
     """
-    async_evaluator = require_async_evaluator(study)
-    if not isinstance(async_evaluator, ResumableAsyncEvaluator):
+    require_async_evaluator(study)
+    if not isinstance(study.evaluator, ResumableAsyncEvaluator):
         msg = (
             "study-level resumable exact_async orchestration requires a "
             "ResumableAsyncEvaluator"
         )
         raise TypeError(msg)
-    return async_evaluator
