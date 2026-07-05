@@ -549,21 +549,39 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         if count <= 0 or len(overflow_members) == 0:
             return ()
 
-        chosen_members: list[ClearingGAPopulationMember[CandidateT]] = []
-        remaining_members = list(overflow_members)
-        while len(chosen_members) < count and len(remaining_members) > 0:
-            anchor_members = selected_members + tuple(chosen_members)
-            next_member = max(
-                remaining_members,
-                key=lambda member: (
-                    self._minimum_distance_to_population(member, anchor_members),
-                    -member.score,
+        chosen_indices: list[int] = []
+        remaining_indices = list(range(len(overflow_members)))
+        minimum_distances = [
+            self._minimum_distance_to_population(member, selected_members)
+            for member in overflow_members
+        ]
+
+        while len(chosen_indices) < count and len(remaining_indices) > 0:
+            next_index = max(
+                remaining_indices,
+                key=lambda index: (
+                    minimum_distances[index],
+                    -overflow_members[index].score,
                 ),
             )
-            chosen_members.append(next_member)
-            remaining_members.remove(next_member)
+            chosen_indices.append(next_index)
+            remaining_indices.remove(next_index)
 
-        return tuple(chosen_members)
+            if len(chosen_indices) >= count or len(remaining_indices) == 0:
+                continue
+
+            new_anchor = overflow_members[next_index]
+            for index in remaining_indices:
+                distance_to_anchor = self.diversity_metric.distance(
+                    overflow_members[index].candidate,
+                    new_anchor.candidate,
+                )
+                minimum_distances[index] = min(
+                    minimum_distances[index],
+                    distance_to_anchor,
+                )
+
+        return tuple(overflow_members[index] for index in chosen_indices)
 
     def _minimum_distance_to_population(
         self,

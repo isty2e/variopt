@@ -1,6 +1,7 @@
 """Tests for the clearing genetic algorithm optimizer."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TypeVar
 
 import numpy as np
@@ -17,6 +18,7 @@ from variopt import (
     PermutationSpace,
     Problem,
     Proposal,
+    SearchSpace,
     UnsupportedEvaluationFailureError,
 )
 from variopt.algorithms import (
@@ -34,6 +36,7 @@ from variopt.algorithms.population.species_ga.state import (
 from variopt.diversity import DiversityMetric
 from variopt.evaluators import SequentialEvaluator
 from variopt.operators import VariationOperator
+from variopt.randomness import random_state_randint
 from variopt.sampling import CandidateSampler
 
 CandidateT = TypeVar("CandidateT")
@@ -113,6 +116,94 @@ class IntegerDistance(DiversityMetric[int]):
         return float(abs(left - right))
 
 
+class CountingIntegerDistance(DiversityMetric[int]):
+    """Integer distance metric that records call count."""
+
+    count: int
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.count += 1
+        return float(abs(left - right))
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class EqualityHostileCandidate:
+    """Candidate whose value equality must never be used by backfill."""
+
+    coordinate: int
+    stable_id: int
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ = other
+        msg = "candidate equality must not be used"
+        raise RuntimeError(msg)
+
+
+class EqualityHostileSpace(
+    SearchSpace[EqualityHostileCandidate, EqualityHostileCandidate],
+):
+    """Minimal search space for equality-hostile candidates."""
+
+    @override
+    def normalize(
+        self,
+        raw_candidate: EqualityHostileCandidate,
+    ) -> EqualityHostileCandidate:
+        self.validate(raw_candidate)
+        return raw_candidate
+
+    @override
+    def validate(self, candidate: EqualityHostileCandidate) -> None:
+        if type(candidate) is not EqualityHostileCandidate:
+            msg = "candidate must be an EqualityHostileCandidate"
+            raise TypeError(msg)
+
+    @override
+    def sample(
+        self,
+        random_state: np.random.RandomState,
+    ) -> EqualityHostileCandidate:
+        return EqualityHostileCandidate(
+            coordinate=random_state_randint(random_state, 0, 100),
+            stable_id=0,
+        )
+
+
+class EqualityHostileDistance(DiversityMetric[EqualityHostileCandidate]):
+    """Coordinate distance for equality-hostile candidates."""
+
+    @override
+    def distance(
+        self,
+        left: EqualityHostileCandidate,
+        right: EqualityHostileCandidate,
+    ) -> float:
+        return float(abs(left.coordinate - right.coordinate))
+
+
+class EqualityHostileMutation(VariationOperator[EqualityHostileCandidate]):
+    """No-op mutation for constructing equality-hostile optimizers."""
+
+    @property
+    @override
+    def arity(self) -> int:
+        return 1
+
+    @override
+    def apply(
+        self,
+        parents: Sequence[EqualityHostileCandidate],
+        random_state: np.random.RandomState,
+    ) -> EqualityHostileCandidate:
+        _ = random_state
+        return parents[0]
+
+
 class TestableClearingGA(ClearingGeneticAlgorithmOptimizer[int, int]):
     """Test-only clearing GA that exposes one survival seam."""
 
@@ -123,6 +214,47 @@ class TestableClearingGA(ClearingGeneticAlgorithmOptimizer[int, int]):
         offspring: tuple[ClearingGAPopulationMember[int], ...],
     ) -> tuple[ClearingGAPopulationMember[int], ...]:
         return self._build_next_population(parents=parents, offspring=offspring)
+
+    def build_diverse_backfill_for_test(
+        self,
+        *,
+        selected_members: tuple[ClearingGAPopulationMember[int], ...],
+        overflow_members: tuple[ClearingGAPopulationMember[int], ...],
+        count: int,
+    ) -> tuple[ClearingGAPopulationMember[int], ...]:
+        return self._build_diverse_backfill(
+            selected_members=selected_members,
+            overflow_members=overflow_members,
+            count=count,
+        )
+
+
+class TestableEqualityHostileClearingGA(
+    ClearingGeneticAlgorithmOptimizer[
+        EqualityHostileCandidate,
+        EqualityHostileCandidate,
+    ],
+):
+    """Test-only clearing GA for equality-hostile backfill candidates."""
+
+    def build_diverse_backfill_for_test(
+        self,
+        *,
+        selected_members: tuple[
+            ClearingGAPopulationMember[EqualityHostileCandidate],
+            ...,
+        ],
+        overflow_members: tuple[
+            ClearingGAPopulationMember[EqualityHostileCandidate],
+            ...,
+        ],
+        count: int,
+    ) -> tuple[ClearingGAPopulationMember[EqualityHostileCandidate], ...]:
+        return self._build_diverse_backfill(
+            selected_members=selected_members,
+            overflow_members=overflow_members,
+            count=count,
+        )
 
 
 class TestableSpeciesGA(SpeciesConservingGeneticAlgorithmOptimizer[int, int]):
@@ -285,6 +417,143 @@ class ClearingGeneticAlgorithmOptimizerTests:
 
         assert tuple(member.candidate for member in clearing_population) == (0, 2, 6, 10)
         assert tuple(member.candidate for member in species_population) == (0, 1, 6, 10)
+
+    def test_clearing_backfill_updates_running_distances_incrementally(self) -> None:
+        diversity_metric = CountingIntegerDistance()
+        optimizer = TestableClearingGA(
+            space=IntegerSpace(0, 120),
+            population_size=5,
+            diversity_metric=diversity_metric,
+            mutation_operator=StepTowardZeroMutation(),
+        )
+        selected_members = tuple(
+            ClearingGAPopulationMember(
+                candidate=value,
+                value=float(value),
+                score=float(value),
+            )
+            for value in (0, 100)
+        )
+        overflow_members = tuple(
+            ClearingGAPopulationMember(
+                candidate=value,
+                value=float(value),
+                score=float(value),
+            )
+            for value in (10, 20, 50, 70, 90, 110)
+        )
+
+        backfill = optimizer.build_diverse_backfill_for_test(
+            selected_members=selected_members,
+            overflow_members=overflow_members,
+            count=3,
+        )
+
+        assert tuple(member.candidate for member in backfill) == (50, 20, 70)
+        assert diversity_metric.count == 21
+
+    def test_clearing_backfill_removes_by_index_not_value_equality(self) -> None:
+        optimizer = TestableEqualityHostileClearingGA(
+            space=EqualityHostileSpace(),
+            population_size=2,
+            diversity_metric=EqualityHostileDistance(),
+            mutation_operator=EqualityHostileMutation(),
+        )
+        selected_members = (
+            ClearingGAPopulationMember(
+                candidate=EqualityHostileCandidate(coordinate=0, stable_id=0),
+                value=0.0,
+                score=0.0,
+            ),
+        )
+        overflow_members = tuple(
+            ClearingGAPopulationMember(
+                candidate=candidate,
+                value=float(candidate.coordinate),
+                score=float(candidate.coordinate),
+            )
+            for candidate in (
+                EqualityHostileCandidate(coordinate=10, stable_id=1),
+                EqualityHostileCandidate(coordinate=50, stable_id=2),
+                EqualityHostileCandidate(coordinate=30, stable_id=3),
+            )
+        )
+
+        backfill = optimizer.build_diverse_backfill_for_test(
+            selected_members=selected_members,
+            overflow_members=overflow_members,
+            count=1,
+        )
+
+        assert tuple(member.candidate.coordinate for member in backfill) == (50,)
+
+    def test_clearing_backfill_handles_empty_anchor_population(self) -> None:
+        optimizer = TestableClearingGA(
+            space=IntegerSpace(0, 100),
+            population_size=2,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+        )
+        overflow_members = (
+            ClearingGAPopulationMember(candidate=0, value=0.0, score=10.0),
+            ClearingGAPopulationMember(candidate=100, value=100.0, score=0.0),
+            ClearingGAPopulationMember(candidate=40, value=40.0, score=5.0),
+        )
+
+        backfill = optimizer.build_diverse_backfill_for_test(
+            selected_members=(),
+            overflow_members=overflow_members,
+            count=2,
+        )
+
+        assert tuple(member.candidate for member in backfill) == (100, 0)
+
+    def test_clearing_backfill_preserves_score_tiebreak(self) -> None:
+        optimizer = TestableClearingGA(
+            space=IntegerSpace(0, 120),
+            population_size=1,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=ClearingGAProfile(tournament_size=1),
+        )
+        selected_members = (
+            ClearingGAPopulationMember(candidate=100, value=100.0, score=0.0),
+        )
+        overflow_members = (
+            ClearingGAPopulationMember(candidate=90, value=90.0, score=1.0),
+            ClearingGAPopulationMember(candidate=110, value=110.0, score=2.0),
+        )
+
+        backfill = optimizer.build_diverse_backfill_for_test(
+            selected_members=selected_members,
+            overflow_members=overflow_members,
+            count=1,
+        )
+
+        assert tuple(member.candidate for member in backfill) == (90,)
+
+    def test_clearing_backfill_stops_when_overflow_is_exhausted(self) -> None:
+        optimizer = TestableClearingGA(
+            space=IntegerSpace(0, 100),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+        )
+        selected_members = (
+            ClearingGAPopulationMember(candidate=0, value=0.0, score=0.0),
+        )
+        overflow_members = (
+            ClearingGAPopulationMember(candidate=10, value=10.0, score=10.0),
+            ClearingGAPopulationMember(candidate=30, value=30.0, score=30.0),
+        )
+
+        backfill = optimizer.build_diverse_backfill_for_test(
+            selected_members=selected_members,
+            overflow_members=overflow_members,
+            count=5,
+        )
+
+        assert tuple(member.candidate for member in backfill) == (30, 10)
 
     def test_from_permutation_space_defaults_can_optimize(self) -> None:
         space = PermutationSpace(size=6)
