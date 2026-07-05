@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from typing_extensions import override
 
+from tests.study_support import BatchQueueOptimizer
 from variopt import (
     ArraySpace,
     CategoricalSpace,
@@ -22,6 +23,7 @@ from variopt import (
     Problem,
     Proposal,
     RealSpace,
+    Study,
 )
 from variopt.algorithms.local_search import (
     StructuredHillClimbKernel,
@@ -33,6 +35,7 @@ from variopt.algorithms.local_search import (
     StructuredVariableNeighborhoodStage,
 )
 from variopt.artifacts import EvaluationSuccess, KernelStatus, ObservationPayload
+from variopt.evaluators import SequentialEvaluator
 from variopt.execution import (
     ExecutionResources,
     NestedParallelismPolicy,
@@ -435,12 +438,94 @@ class StructuredHillClimbKernelTests:
         attempts = kernel.run(query, fail_neighbor_four)
 
         assert attempts.success_indices == (0,)
-        assert attempts.failure_indices == (1,)
+        assert attempts.failure_indices == ()
         assert attempts.successes[0].scalar_observation().candidate == 5
         assert attempts.successes[0].kernel_diagnostics is not None
+        assert attempts.successes[0].kernel_diagnostics.failed_attempt_count == 1
+        assert attempts.successes[0].kernel_diagnostics.failed_evaluation_count == 1
         assert attempts.successes[0].refinement is None
-        assert attempts.failures[0].candidate == 4
-        assert attempts.failures[0].exception.message == "bad structured trial"
+        assert attempts.evaluation_count == 2
+
+    def test_study_run_accepts_successful_hill_climb_with_inner_failure(self) -> None:
+        class FailsAtFourObjective(Objective[int]):
+            """Objective that records a user-code failure for one inner trial."""
+
+            @override
+            def evaluate(self, candidate: int) -> float:
+                if candidate == 4:
+                    raise ValueError("bad structured trial")
+                return float((candidate - 2) ** 2)
+
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=FailsAtFourObjective(),
+        )
+        study = Study(
+            problem=problem,
+            run_method=BatchQueueOptimizer(
+                [(Proposal(candidate=5, proposal_id="p-1"),)]
+            ),
+            evaluator=SequentialEvaluator(),
+            kernel=StructuredHillClimbKernel[int, int](max_steps=8),
+        )
+
+        report, _state = study.run(max_evaluations=2)
+
+        assert len(report.successes) == 1
+        assert report.failures == ()
+        assert report.evaluation_count == 2
+        diagnostics = report.successes[0].kernel_diagnostics
+        assert diagnostics is not None
+        assert diagnostics.failed_attempt_count == 1
+        assert diagnostics.failed_evaluation_count == 1
+
+    def test_study_run_keeps_multi_proposal_alignment_with_inner_failure(
+        self,
+    ) -> None:
+        class FailsAtFourObjective(Objective[int]):
+            """Objective that records a user-code failure for one inner trial."""
+
+            @override
+            def evaluate(self, candidate: int) -> float:
+                if candidate == 4:
+                    raise ValueError("bad structured trial")
+                return float((candidate - 2) ** 2)
+
+        problem = Problem(
+            space=IntegerSpace(0, 5),
+            objective=FailsAtFourObjective(),
+        )
+        study = Study(
+            problem=problem,
+            run_method=BatchQueueOptimizer(
+                [
+                    (
+                        Proposal(candidate=5, proposal_id="p-1"),
+                        Proposal(candidate=3, proposal_id="p-2"),
+                    )
+                ]
+            ),
+            evaluator=SequentialEvaluator(),
+            kernel=StructuredHillClimbKernel[int, int](max_steps=8),
+        )
+
+        report, _state = study.run(max_evaluations=5, batch_size=2)
+
+        assert len(report.successes) == 2
+        assert report.failures == ()
+        assert report.successes[0].proposal_id == "p-1"
+        assert report.successes[1].proposal_id == "p-2"
+        first_diagnostics = report.successes[0].kernel_diagnostics
+        second_diagnostics = report.successes[1].kernel_diagnostics
+        assert first_diagnostics is not None
+        assert first_diagnostics.failed_attempt_count == 1
+        assert first_diagnostics.failed_evaluation_count == 1
+        assert second_diagnostics is not None
+        assert second_diagnostics.failed_attempt_count == 0
+        assert second_diagnostics.failed_evaluation_count == 0
+        assert report.evaluation_count == sum(
+            success.evaluation_count for success in report.successes
+        )
 
     def test_initial_hill_climb_failure_returns_failure_only_attempt(self) -> None:
         problem = Problem(

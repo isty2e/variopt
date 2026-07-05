@@ -34,6 +34,7 @@ def _normalize_scalar_record_float(
     value: object,
     *,
     field_name: str,
+    finite_error_message: str | None = None,
 ) -> float:
     """Return one finite canonical float for scalar record fields."""
     if type(value) is bool or isinstance(value, np.bool_):
@@ -46,7 +47,11 @@ def _normalize_scalar_record_float(
 
     normalized_value = float(value)
     if not np.isfinite(normalized_value):
-        msg = f"{field_name} must be finite"
+        msg = (
+            f"{field_name} must be finite"
+            if finite_error_message is None
+            else finite_error_message
+        )
         raise ValueError(msg)
     return normalized_value
 
@@ -79,21 +84,28 @@ class ObservationPayload(FrozenGenericSlotsCompat):
             If ``value`` or ``score`` is non-finite, or if
             ``elapsed_seconds`` is negative.
         """
-        if not np.isfinite(self.value):
-            msg = "value must be finite"
-            raise ValueError(msg)
+        normalized_value = _normalize_scalar_record_float(
+            self.value,
+            field_name="value",
+        )
+        normalized_score = _normalize_scalar_record_float(
+            self.score,
+            field_name="score",
+        )
 
-        if not np.isfinite(self.score):
-            msg = "score must be finite"
-            raise ValueError(msg)
-
+        normalized_elapsed_seconds = None
         if self.elapsed_seconds is not None:
-            if not np.isfinite(self.elapsed_seconds):
-                msg = "elapsed_seconds must be finite"
-                raise ValueError(msg)
-            if self.elapsed_seconds < 0.0:
+            normalized_elapsed_seconds = _normalize_scalar_record_float(
+                self.elapsed_seconds,
+                field_name="elapsed_seconds",
+            )
+            if normalized_elapsed_seconds < 0.0:
                 msg = "elapsed_seconds must be non-negative"
                 raise ValueError(msg)
+
+        object.__setattr__(self, "value", normalized_value)
+        object.__setattr__(self, "score", normalized_score)
+        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
 
     @staticmethod
     def from_objective_value(
@@ -119,7 +131,10 @@ class ObservationPayload(FrozenGenericSlotsCompat):
         ObservationPayload
             Request-free scalar objective payload.
         """
-        normalized_value = float(value)
+        normalized_value = _normalize_scalar_record_float(
+            value,
+            field_name="value",
+        )
         return ObservationPayload(
             value=normalized_value,
             score=direction.normalize_objective_value(normalized_value),
@@ -171,10 +186,18 @@ class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
             values=objective_scores,
             field_name="objective_scores",
         )
+        normalized_elapsed_seconds = (
+            None
+            if elapsed_seconds is None
+            else _normalize_scalar_record_float(
+                elapsed_seconds,
+                field_name="elapsed_seconds",
+            )
+        )
         object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "objective_values", normalized_objective_values)
         object.__setattr__(self, "objective_scores", normalized_objective_scores)
-        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
+        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -186,17 +209,31 @@ class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
             If the objective vectors have different lengths or if
             ``elapsed_seconds`` is negative.
         """
-        if len(self.objective_values) != len(self.objective_scores):
+        normalized_objective_values = normalize_objective_vector(
+            values=self.objective_values,
+            field_name="objective_values",
+        )
+        normalized_objective_scores = normalize_objective_vector(
+            values=self.objective_scores,
+            field_name="objective_scores",
+        )
+        if len(normalized_objective_values) != len(normalized_objective_scores):
             msg = "objective_values and objective_scores must have the same length"
             raise ValueError(msg)
 
+        normalized_elapsed_seconds = None
         if self.elapsed_seconds is not None:
-            if not np.isfinite(self.elapsed_seconds):
-                msg = "elapsed_seconds must be finite"
-                raise ValueError(msg)
-            if self.elapsed_seconds < 0.0:
+            normalized_elapsed_seconds = _normalize_scalar_record_float(
+                self.elapsed_seconds,
+                field_name="elapsed_seconds",
+            )
+            if normalized_elapsed_seconds < 0.0:
                 msg = "elapsed_seconds must be non-negative"
                 raise ValueError(msg)
+
+        object.__setattr__(self, "objective_values", normalized_objective_values)
+        object.__setattr__(self, "objective_scores", normalized_objective_scores)
+        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
 
     @staticmethod
     def from_objective_values(
@@ -515,7 +552,14 @@ def normalize_objective_vector(
     ValueError
         If ``values`` is empty or contains a non-finite number.
     """
-    normalized_values = tuple(float(value) for value in values)
+    normalized_values = tuple(
+        _normalize_scalar_record_float(
+            value,
+            field_name=field_name,
+            finite_error_message=f"{field_name} must contain only finite values",
+        )
+        for value in values
+    )
     if len(normalized_values) == 0:
         msg = f"{field_name} must not be empty"
         raise ValueError(msg)

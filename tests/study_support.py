@@ -1334,6 +1334,11 @@ class OutOfOrderAsyncEvaluator(
         self._pending_attempt_groups = {}
         self._attach_refinement = attach_refinement
 
+    @property
+    def pending_attempt_batch_ids(self) -> tuple[str, ...]:
+        """Return pending attempt-batch ids still owned by this evaluator."""
+        return tuple(self._pending_attempt_groups)
+
     @override
     def submit_batch(
         self,
@@ -2082,6 +2087,11 @@ class NonResumableSessionResumableAsyncEvaluator(
     def __init__(self) -> None:
         self._delegate = OutOfOrderAsyncEvaluator()
 
+    @property
+    def pending_attempt_batch_ids(self) -> tuple[str, ...]:
+        """Return non-resumable attempt batches still owned by the delegate."""
+        return self._delegate.pending_attempt_batch_ids
+
     @override
     def submit_batch(
         self,
@@ -2107,6 +2117,14 @@ class NonResumableSessionResumableAsyncEvaluator(
         requests: Sequence[EvaluationRequest[int]],
     ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
         return self._delegate.open_attempt_session(problem, requests)
+
+    def resume_attempt_session(
+        self,
+        handle: EvaluationBatchResumeHandle,
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, ObservationPayload]]:
+        _ = handle
+        msg = "test double does not support resumed non-resumable attempt sessions"
+        raise RuntimeError(msg)
 
     @override
     def resume_session(

@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import Protocol, TypeAlias, runtime_checkable
+from typing import Protocol, TypeAlias, TypeVar, runtime_checkable
 
 import pytest
 from typing_extensions import override
@@ -105,6 +105,7 @@ SpaceOwnedEqualityStudy: TypeAlias = Study[
     ObservationPayload,
     Observation[SpaceOwnedEqualityCandidate],
 ]
+TestOutcomeCandidateT = TypeVar("TestOutcomeCandidateT")
 
 
 @runtime_checkable
@@ -118,6 +119,17 @@ class BatchQueueRunFailure(Protocol):
     cause: Exception
 
 
+@runtime_checkable
+class FailureRecordingRunFailure(Protocol):
+    """Typed shape for hard failures over failure-recording run methods."""
+
+    partial_report: RunReport[int, Observation[int]]
+    partial_state: FailureRecordingBatchQueueOptimizerState
+    checkpoint_safe_report: RunReport[int, Observation[int]] | None
+    checkpoint_safe_state: FailureRecordingBatchQueueOptimizerState | None
+    cause: Exception
+
+
 class UnsafeCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
     """Batch-queue optimizer that never exposes a checkpoint-safe state."""
 
@@ -125,6 +137,41 @@ class UnsafeCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
     def is_checkpoint_safe_state(self, state: BatchQueueOptimizerState) -> bool:
         _ = state
         return False
+
+
+class TellFailingFailureRecordingBatchQueueOptimizer(
+    FailureRecordingBatchQueueOptimizer
+):
+    """Failure-recording optimizer that fails during attempt assimilation."""
+
+    _fail_on_tell_call: int
+
+    def __init__(
+        self,
+        proposal_batches: list[tuple[Proposal[int], ...]],
+        *,
+        fail_on_tell_call: int = 1,
+    ) -> None:
+        """Create an optimizer that fails on a selected tell-attempt call."""
+        if fail_on_tell_call < 1:
+            msg = "fail_on_tell_call must be positive"
+            raise ValueError(msg)
+        super().__init__(proposal_batches)
+        self._fail_on_tell_call = fail_on_tell_call
+
+    @override
+    def tell_attempts(
+        self,
+        state: FailureRecordingBatchQueueOptimizerState,
+        attempts: EvaluationAttemptBatch[TestOutcomeCandidateT, Observation[int]],
+    ) -> FailureRecordingBatchQueueOptimizerState:
+        tell_call = len(state.tell_history) + 1
+        if tell_call != self._fail_on_tell_call:
+            return super().tell_attempts(state, attempts)
+
+        _ = attempts
+        msg = "forced sync tell failure"
+        raise RuntimeError(msg)
 
 
 class SequencedEvaluationCountKernel(
@@ -1396,6 +1443,168 @@ class StudyTests:
         )
         assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
         assert final_state.failure_history == (("p-2",),)
+
+    def test_run_tell_failure_preserves_mixed_attempts_in_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-ok"),
+                    Proposal(candidate=5, proposal_id="p-fail"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(max_evaluations=2, batch_size=2)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected sync tell failure")
+
+        assert isinstance(exception.cause, RuntimeError)
+        assert str(exception.cause) == "forced sync tell failure"
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-ok",)
+        assert tuple(
+            success.request.proposal.proposal_id
+            for success in exception.partial_report.successes
+        ) == ("p-ok",)
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-fail",)
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 1 succeeded, 1 failed"
+        )
+
+    def test_run_tell_failure_preserves_prior_checkpoint_safe_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=3, proposal_id="p-safe"),),
+                (
+                    Proposal(candidate=2, proposal_id="p-ok"),
+                    Proposal(candidate=5, proposal_id="p-fail"),
+                ),
+            ],
+            fail_on_tell_call=2,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=3,
+                batch_size=2,
+                stop_at_checkpoint_boundary=True,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected sync tell failure")
+
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-safe", "p-ok")
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-fail",)
+        assert exception.partial_report.evaluation_count == 3
+        assert exception.partial_state.tell_history == (
+            (exception.partial_report.records[0],),
+        )
+        assert exception.partial_state.failure_history == ((),)
+
+        checkpoint_report = exception.checkpoint_safe_report
+        checkpoint_state = exception.checkpoint_safe_state
+        assert checkpoint_report is not None
+        assert checkpoint_state is not None
+        assert tuple(
+            record.proposal.proposal_id for record in checkpoint_report.records
+        ) == ("p-safe",)
+        assert checkpoint_report.failures == ()
+        assert checkpoint_report.evaluation_count == 1
+        assert checkpoint_state.tell_history == ((checkpoint_report.records[0],),)
+        assert checkpoint_state.failure_history == ((),)
+
+    def test_run_tell_failure_preserves_failure_only_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(2, 5)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-first"),
+                    Proposal(candidate=5, proposal_id="p-second"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=2,
+                count_evaluation_cost=False,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected sync tell failure")
+
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.successes == ()
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-first", "p-second")
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 0 succeeded, 2 failed"
+        )
 
     def test_run_hard_failure_carries_partial_and_checkpoint_safe_report(self) -> None:
         problem = Problem(

@@ -153,6 +153,11 @@ def open_exact_async_step_session(
         requests,
     )
     if not isinstance(batch_session, ResumableBatchSession):
+        try:
+            batch_session.cancel()
+        except Exception:
+            # Cleanup is best-effort; preserve the validation failure below.
+            pass
         msg = "resumable async evaluator returned a non-resumable batch session"
         raise TypeError(msg)
 

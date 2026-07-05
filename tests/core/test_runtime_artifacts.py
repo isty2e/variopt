@@ -21,6 +21,7 @@ from variopt import (
     EvaluationFailure,
     EvaluationOutcome,
     EvaluationRequest,
+    KernelDiagnostics,
     NondominatedRunSurface,
     ObjectiveVectorRecord,
     Observation,
@@ -271,6 +272,88 @@ class RuntimeArtifactsTests:
         with pytest.raises(ValueError, match="elapsed_seconds must be finite"):
             _ = ObservationPayload(value=1.0, score=1.0, elapsed_seconds=float("nan"))
 
+    def test_observation_payload_normalizes_numeric_fields(self) -> None:
+        payload = ObservationPayload(
+            value=cast(float, cast(object, np.int64(4))),
+            score=cast(float, cast(object, np.float64(-4.0))),
+            elapsed_seconds=cast(float, cast(object, np.float64(0.25))),
+        )
+
+        assert payload.value == 4.0
+        assert type(payload.value) is float
+        assert payload.score == -4.0
+        assert type(payload.score) is float
+        assert payload.elapsed_seconds == 0.25
+        assert type(payload.elapsed_seconds) is float
+
+    def test_observation_payload_rejects_bool_numeric_fields(self) -> None:
+        with pytest.raises(TypeError, match="value must be a real number"):
+            _ = ObservationPayload(value=cast(float, True), score=1.0)
+
+        with pytest.raises(TypeError, match="value must be a real number"):
+            _ = ObservationPayload(
+                value=cast(float, cast(object, np.bool_(True))),
+                score=1.0,
+            )
+
+        with pytest.raises(TypeError, match="score must be a real number"):
+            _ = ObservationPayload(value=1.0, score=cast(float, False))
+
+        with pytest.raises(TypeError, match="elapsed_seconds must be a real number"):
+            _ = ObservationPayload(
+                value=1.0,
+                score=1.0,
+                elapsed_seconds=cast(float, cast(object, np.bool_(False))),
+            )
+
+    def test_kernel_diagnostics_tracks_inner_failed_attempt_accounting(self) -> None:
+        diagnostics = KernelDiagnostics(
+            backend="local-search",
+            failed_attempt_count=2,
+            failed_evaluation_count=3,
+        )
+
+        updated = diagnostics.with_failed_attempts(
+            failed_attempt_count=5,
+            failed_evaluation_count=8,
+        )
+
+        assert updated.backend == "local-search"
+        assert updated.failed_attempt_count == 5
+        assert updated.failed_evaluation_count == 8
+        assert diagnostics.failed_attempt_count == 2
+        assert diagnostics.failed_evaluation_count == 3
+
+    def test_kernel_diagnostics_rejects_invalid_failed_attempt_accounting(
+        self,
+    ) -> None:
+        with pytest.raises(TypeError, match="failed_attempt_count must be int"):
+            _ = KernelDiagnostics(
+                backend="local-search",
+                failed_attempt_count=True,
+            )
+
+        with pytest.raises(ValueError, match="failed_attempt_count must be non-negative"):
+            _ = KernelDiagnostics(
+                backend="local-search",
+                failed_attempt_count=-1,
+            )
+
+        with pytest.raises(TypeError, match="failed_evaluation_count must be int"):
+            _ = KernelDiagnostics(
+                backend="local-search",
+                failed_evaluation_count=False,
+            )
+
+        with pytest.raises(
+            ValueError,
+            match="failed_evaluation_count must be non-negative",
+        ):
+            _ = KernelDiagnostics(
+                backend="local-search",
+                failed_evaluation_count=-1,
+            )
+
     def test_objective_vector_payload_is_request_free(self) -> None:
         payload = ObjectiveVectorPayload.from_objective_values(
             objective_values=(2.0, 3.0),
@@ -329,6 +412,54 @@ class RuntimeArtifactsTests:
 
         with pytest.raises(ValueError, match="objective_values must not be empty"):
             _ = ObjectiveVectorPayload(objective_values=(), objective_scores=())
+
+    def test_objective_vector_payload_normalizes_numeric_fields(self) -> None:
+        payload = ObjectiveVectorPayload(
+            objective_values=(
+                cast(float, cast(object, np.int64(2))),
+                cast(float, cast(object, np.float64(3.5))),
+            ),
+            objective_scores=(
+                cast(float, cast(object, np.float64(2.0))),
+                cast(float, cast(object, np.int64(-3))),
+            ),
+            elapsed_seconds=cast(float, cast(object, np.float64(0.3))),
+        )
+
+        assert payload.objective_values == (2.0, 3.5)
+        assert all(type(value) is float for value in payload.objective_values)
+        assert payload.objective_scores == (2.0, -3.0)
+        assert all(type(score) is float for score in payload.objective_scores)
+        assert payload.elapsed_seconds == 0.3
+        assert type(payload.elapsed_seconds) is float
+
+    def test_objective_vector_payload_rejects_bool_and_non_finite_numbers(
+        self,
+    ) -> None:
+        with pytest.raises(TypeError, match="objective_values must be a real number"):
+            _ = ObjectiveVectorPayload(
+                objective_values=(cast(float, True),),
+                objective_scores=(1.0,),
+            )
+
+        with pytest.raises(TypeError, match="objective_scores must be a real number"):
+            _ = ObjectiveVectorPayload(
+                objective_values=(1.0,),
+                objective_scores=(cast(float, cast(object, np.bool_(True))),),
+            )
+
+        with pytest.raises(ValueError, match="objective_values must contain only finite"):
+            _ = ObjectiveVectorPayload.from_objective_values(
+                objective_values=(float("inf"),),
+                directions=(OptimizationDirection.MINIMIZE,),
+            )
+
+        with pytest.raises(TypeError, match="elapsed_seconds must be a real number"):
+            _ = ObjectiveVectorPayload(
+                objective_values=(1.0,),
+                objective_scores=(1.0,),
+                elapsed_seconds=cast(float, False),
+            )
 
     def test_evaluation_success_owns_request_and_payload(self) -> None:
         request = make_int_request(candidate=5, proposal_id="p-5")
@@ -591,6 +722,45 @@ class RuntimeArtifactsTests:
         )
 
         assert projected.payload.value == 3.0
+        assert revalidated.refinement is not projected.refinement
+
+    def test_evaluation_success_with_kernel_diagnostics_preserves_candidate_equality(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2))
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(value=1.0),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        projected = success.with_kernel_diagnostics(
+            KernelDiagnostics(
+                backend="local-search",
+                failed_attempt_count=1,
+                failed_evaluation_count=1,
+            )
+        )
+        revalidated = replace(
+            projected,
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+        )
+
+        assert projected.kernel_diagnostics is not None
+        assert projected.kernel_diagnostics.failed_attempt_count == 1
         assert revalidated.refinement is not projected.refinement
 
     def test_evaluation_success_pickle_preserves_refined_record_payload_cache(
@@ -1364,6 +1534,29 @@ class RuntimeArtifactsTests:
         assert record.proposal.candidate == 4
         assert record.proposal.proposal_id == "p-2"
         assert record.value == 4.0
+
+    def test_evaluation_success_scalar_observation_projects_refinement_source(
+        self,
+    ) -> None:
+        request = make_int_request(candidate=2, proposal_id="p-2")
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+        success: EvaluationSuccess[int, ObservationPayload] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(value=4.0),
+            refinement=refinement,
+        )
+
+        observation = success.scalar_observation()
+        record = materialize_success_record(success)
+
+        assert type(record) is Observation
+        assert observation == record
+        assert observation.proposal.candidate == 4
+        assert observation.candidate == 2
 
     def test_materialize_success_records_preserves_existing_record_payload(self) -> None:
         request = make_int_request(candidate=7, proposal_id="p-7")
@@ -2541,6 +2734,85 @@ class RuntimeArtifactsTests:
 
         assert report.refinements == (refinement, None)
 
+    def test_run_report_rejects_divergent_record_without_refinement(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+        record = LabelRecord(
+            request=EvaluationRequest(proposal=proposal),
+            candidate=3,
+            label="parity:1",
+        )
+
+        with pytest.raises(ValueError, match="refinement is required"):
+            _ = RunReport[int, LabelRecord].from_records(records=(record,))
+
+    def test_run_report_requires_candidate_equal_for_non_scalar_unrefined_records(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        evaluated_candidate = SpaceOwnedEqualityCandidate(1)
+        record = Observation(
+            proposal=Proposal(candidate=source_candidate, proposal_id="p-1"),
+            candidate=evaluated_candidate,
+            value=1.0,
+            score=1.0,
+        )
+
+        with pytest.raises(TypeError, match="candidate equality"):
+            _ = RunReport[
+                SpaceOwnedEqualityCandidate,
+                Observation[SpaceOwnedEqualityCandidate],
+            ].from_records(records=(record,))
+
+    def test_run_report_accepts_semantically_equal_unrefined_records(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        evaluated_candidate = SpaceOwnedEqualityCandidate(1)
+        record = Observation(
+            proposal=Proposal(candidate=source_candidate, proposal_id="p-1"),
+            candidate=evaluated_candidate,
+            value=1.0,
+            score=1.0,
+        )
+
+        report = RunReport[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ].from_records(
+            records=(record,),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        projected_record = report.records[0]
+        assert projected_record.candidate is evaluated_candidate
+        assert projected_record.request.candidate is evaluated_candidate
+        assert projected_record.request.proposal_id == "p-1"
+        assert report.refinements == ()
+
+    def test_run_result_rejects_divergent_observation_without_refinement(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=2,
+            value=4.0,
+            score=4.0,
+        )
+
+        with pytest.raises(ValueError, match="refinement is required"):
+            _ = RunResult[int].from_observations(observations=(observation,))
+
+    def test_nondominated_surface_rejects_divergent_record_without_refinement(
+        self,
+    ) -> None:
+        record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=2,
+            objective_values=(4.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+
+        with pytest.raises(ValueError, match="refinement is required"):
+            _ = NondominatedRunSurface[int].from_records(records=(record,))
+
     def test_run_report_rejects_unaligned_refinements(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
         record = LabelRecord(
@@ -2578,13 +2850,14 @@ class RuntimeArtifactsTests:
     def test_run_report_skips_candidate_equality_for_all_none_refinements(
         self,
     ) -> None:
+        candidate = SpaceOwnedEqualityCandidate(1)
         proposal = Proposal(
-            candidate=SpaceOwnedEqualityCandidate(1),
+            candidate=candidate,
             proposal_id="p-1",
         )
         record = Observation(
             proposal=proposal,
-            candidate=SpaceOwnedEqualityCandidate(1),
+            candidate=candidate,
             value=1.0,
             score=1.0,
         )

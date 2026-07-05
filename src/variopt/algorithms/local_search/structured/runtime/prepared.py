@@ -23,6 +23,10 @@ from .....kernel import (
     ProposalLocalSearchContext,
 )
 from .....spaces import LeafPath
+from ...diagnostics import (
+    diagnostics_with_failed_attempts,
+    top_level_failure_from_failed_attempts,
+)
 from ..neighborhood import (
     BoundaryT,
     DiscreteLeafSpace,
@@ -65,23 +69,21 @@ def structured_episode_attempt_batch(
     Returns
     -------
     EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
-        Dense attempt batch with the selected success first when present,
-        followed by recorded failures.
+        One top-level attempt slot for the original proposal. Inner failed
+        local-search attempts are summarized in successful kernel diagnostics;
+        if the episode has no success, the representative failed attempt keeps
+        the total failed evaluation cost.
     """
-    attempts: list[
-        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
-    ] = []
     if success is not None:
-        attempts.append(
-            EvaluationAttemptBatch(
-                attempts=(success,),
-            )
+        diagnostics = diagnostics_with_failed_attempts(
+            success.kernel_diagnostics,
+            failed_attempts,
         )
-    attempts.extend(failed_attempts)
-    return EvaluationAttemptBatch[
-        StructuredCandidateT,
-        ObservationPayload,
-    ].from_single_request_attempts(tuple(attempts))
+        return EvaluationAttemptBatch(
+            attempts=(success.with_kernel_diagnostics(diagnostics),),
+        )
+
+    return top_level_failure_from_failed_attempts(failed_attempts)
 
 
 @dataclass(frozen=True, slots=True)

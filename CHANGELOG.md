@@ -70,8 +70,10 @@ format. Stability guarantees for the public surface are documented in the
   `evaluate_attempts(...)` hooks that return `EvaluationAttemptBatch` values and
   preserve user-code evaluation failures separately from successful outcomes.
 - Direct and built-in local-search kernels now use `EvaluationAttemptBatch`
-  runner/result contracts so failed local-search trials remain visible instead
-  of being collapsed into successful optimized outcomes.
+  runner/result contracts. Failed inner local-search trials are charged to the
+  visible top-level attempt's `evaluation_count` and summarized in
+  `KernelDiagnostics`; if no local-search attempt succeeds, the top-level slot
+  remains an `EvaluationFailure`.
 - Outcome-aware `EvaluationAttemptBatch` now stores ordered attempt slots as its
   authoritative state and exposes request/outcome/failure index views as derived
   projections.

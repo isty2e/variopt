@@ -9,6 +9,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..spaces import CandidateEquality
+from ..spaces.equality import require_candidate_match
 from ..typevars import CandidateT
 from .attempts import (
     EvaluationFailure,
@@ -30,13 +31,58 @@ SuccessPayloadT = TypeVar("SuccessPayloadT")
 TerminalRecordCandidateT = TypeVar("TerminalRecordCandidateT")
 
 
-def _record_candidate_request(
+def _candidate_matches(
+    *,
+    left_candidate: TerminalRecordCandidateT,
+    right_candidate: TerminalRecordCandidateT,
+    candidate_equal: CandidateEquality[TerminalRecordCandidateT] | None,
+) -> bool:
+    mismatch_message = "candidate mismatch"
+    try:
+        require_candidate_match(
+            left_candidate=left_candidate,
+            right_candidate=right_candidate,
+            mismatch_message=mismatch_message,
+            candidate_equal=candidate_equal,
+        )
+    except ValueError as exception:
+        if str(exception) != mismatch_message:
+            raise
+        return False
+    return True
+
+
+def _record_success_request(
     record: RequestAlignedEvaluationRecord[TerminalRecordCandidateT],
+    *,
+    refinement: CandidateRefinement[TerminalRecordCandidateT] | None,
+    candidate_equal: CandidateEquality[TerminalRecordCandidateT] | None,
 ) -> EvaluationRequest[TerminalRecordCandidateT]:
     source_request = record.request
     record_candidate = record.candidate
     if source_request.candidate is record_candidate:
         return source_request
+
+    if _candidate_matches(
+        left_candidate=source_request.candidate,
+        right_candidate=record_candidate,
+        candidate_equal=candidate_equal,
+    ):
+        return EvaluationRequest(
+            proposal=Proposal(
+                candidate=record_candidate,
+                proposal_id=source_request.proposal_id,
+            ),
+            proposal_evaluation_spec=source_request.proposal_evaluation_spec,
+        )
+
+    if refinement is None:
+        msg = (
+            "refinement is required when record request candidate differs from "
+            "the evaluated candidate"
+        )
+        raise ValueError(msg)
+
     return EvaluationRequest(
         proposal=Proposal(
             candidate=record_candidate,
@@ -63,7 +109,11 @@ def _successes_from_records(
 
     return tuple(
         EvaluationSuccess(
-            request=_record_candidate_request(record),
+            request=_record_success_request(
+                record,
+                refinement=refinement,
+                candidate_equal=candidate_equal,
+            ),
             payload=record,
             refinement=refinement,
             candidate_equal=candidate_equal,
@@ -89,7 +139,11 @@ def _successes_from_observations(
 
     return tuple(
         EvaluationSuccess(
-            request=_record_candidate_request(observation),
+            request=_record_success_request(
+                observation,
+                refinement=refinement,
+                candidate_equal=candidate_equal,
+            ),
             payload=ObservationPayload(
                 value=observation.value,
                 score=observation.score,
@@ -123,7 +177,11 @@ def _successes_from_vector_records(
 
     return tuple(
         EvaluationSuccess(
-            request=_record_candidate_request(record),
+            request=_record_success_request(
+                record,
+                refinement=refinement,
+                candidate_equal=candidate_equal,
+            ),
             payload=ObjectiveVectorPayload(
                 objective_values=record.objective_values,
                 objective_scores=record.objective_scores,
@@ -1251,7 +1309,11 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             payload = success.payload
             vector_successes.append(
                 EvaluationSuccess(
-                    request=_record_candidate_request(payload),
+                    request=_record_success_request(
+                        payload,
+                        refinement=success.refinement,
+                        candidate_equal=candidate_equal,
+                    ),
                     payload=ObjectiveVectorPayload(
                         objective_values=payload.objective_values,
                         objective_scores=payload.objective_scores,

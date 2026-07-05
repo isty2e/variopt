@@ -613,14 +613,15 @@ class ScipyMinimizeKernelTests:
 
         assert len(runner_queries) == 2
         assert attempts.success_indices == (0,)
-        assert attempts.failure_indices == (1,)
+        assert attempts.failure_indices == ()
         success = attempts.successes[0]
         assert success.scalar_observation().candidate == 4.0
-        assert success.evaluation_count == 1
+        assert success.evaluation_count == 2
         assert success.kernel_diagnostics is not None
         assert success.kernel_diagnostics.status == KernelStatus.FAILED
         assert success.kernel_diagnostics.message == "optimized candidate evaluation failed"
-        assert attempts.failures[0].candidate == 2.0
+        assert success.kernel_diagnostics.failed_attempt_count == 1
+        assert success.kernel_diagnostics.failed_evaluation_count == 1
         assert attempts.evaluation_count == 2
 
     def test_failed_scipy_trial_is_preserved_and_skipped(
@@ -690,12 +691,13 @@ class ScipyMinimizeKernelTests:
 
         assert failed_score_seen == float("inf")
         assert attempts.success_indices == (0,)
-        assert attempts.failure_indices == (1,)
+        assert attempts.failure_indices == ()
         assert attempts.successes[0].scalar_observation().candidate == 4.0
         assert attempts.successes[0].kernel_diagnostics is not None
         assert attempts.successes[0].kernel_diagnostics.status == KernelStatus.STOPPED
-        assert attempts.failures[0].candidate == 2.0
-        assert attempts.failures[0].exception.message == "bad trial"
+        assert attempts.successes[0].kernel_diagnostics.failed_attempt_count == 1
+        assert attempts.successes[0].kernel_diagnostics.failed_evaluation_count == 1
+        assert attempts.evaluation_count == 2
 
     def test_scipy_all_failed_attempts_return_failure_only_batch(
         self,

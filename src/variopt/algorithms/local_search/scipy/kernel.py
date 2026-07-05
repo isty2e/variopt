@@ -29,6 +29,10 @@ from ....kernel import (
 from ....spaces import SearchSpace
 from ....spaces.projections import ContinuousStructuredSpaceCodec
 from ....spaces.types import SpaceCandidateValue
+from ..diagnostics import (
+    diagnostics_with_failed_attempts,
+    top_level_failure_from_failed_attempts,
+)
 from .contracts import ScipyMinimizeMethod
 from .results import ScipyMinimizeResult
 from .runner import run_scipy_minimize
@@ -207,21 +211,17 @@ class ScipyMinimizeKernel(
             EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
         ],
     ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
-        """Return one kernel episode attempt batch from its visible artifacts."""
-        attempts: list[
-            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
-        ] = []
+        """Return one top-level attempt slot for a SciPy local-search episode."""
         if success is not None:
-            attempts.append(
-                EvaluationAttemptBatch(
-                    attempts=(success,),
-                )
+            diagnostics = diagnostics_with_failed_attempts(
+                success.kernel_diagnostics,
+                failed_attempts,
             )
-        attempts.extend(failed_attempts)
-        return EvaluationAttemptBatch[
-            ContinuousCandidateT,
-            ObservationPayload,
-        ].from_single_request_attempts(tuple(attempts))
+            return EvaluationAttemptBatch(
+                attempts=(success.with_kernel_diagnostics(diagnostics),),
+            )
+
+        return top_level_failure_from_failed_attempts(failed_attempts)
 
     def _evaluate_original_proposal(
         self,
@@ -400,6 +400,12 @@ class ScipyMinimizeKernel(
                 for success in evaluated_successes_by_coordinates.values()
             )
 
+        def failed_evaluation_count() -> int:
+            return sum(attempt.evaluation_count for attempt in failed_attempts)
+
+        def total_evaluation_count() -> int:
+            return successful_evaluation_count() + failed_evaluation_count()
+
         def can_evaluate_local_candidate() -> bool:
             budget = query.evaluation_budget
             return budget is None or budget.can_consume(1 + reserved_count)
@@ -437,7 +443,7 @@ class ScipyMinimizeKernel(
             ].from_scalar_observation(
                 observation=observation,
                 request=result_request(optimized_candidate),
-                evaluation_count=successful_evaluation_count(),
+                evaluation_count=total_evaluation_count(),
                 kernel_diagnostics=KernelDiagnostics(
                     backend="scipy.optimize.minimize",
                     method=self.method,
@@ -586,7 +592,7 @@ class ScipyMinimizeKernel(
             ].from_scalar_observation(
                 observation=fallback_observation,
                 request=result_request(fallback_candidate),
-                evaluation_count=successful_evaluation_count(),
+                evaluation_count=total_evaluation_count(),
                 kernel_diagnostics=scipy_result.diagnostics(method=self.method),
                 refinement=refinement,
                 candidate_equal=query.problem.space.candidates_equal,
@@ -679,7 +685,7 @@ class ScipyMinimizeKernel(
         ].from_scalar_observation(
             observation=cached_optimized_success.scalar_observation(),
             request=result_request(optimized_candidate),
-            evaluation_count=successful_evaluation_count(),
+            evaluation_count=total_evaluation_count(),
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),
             refinement=refinement,
             candidate_equal=query.problem.space.candidates_equal,
@@ -710,7 +716,7 @@ class ScipyMinimizeKernel(
         Returns
         -------
         EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
-            Locally improved attempts and recorded failed local-search trials.
+            Locally improved top-level attempts with inner failures summarized in diagnostics.
         """
         codec_provider = _ContinuousCodecProvider[
             BoundaryT,

@@ -480,7 +480,7 @@ class StudyExactAsyncTests:
                 batch_size=1,
             )
 
-    def test_open_exact_async_step_session_rejects_missing_attempt_resume(
+    def test_open_exact_async_step_session_cancels_non_resumable_attempt_session(
         self,
     ) -> None:
         problem = Problem(
@@ -495,12 +495,13 @@ class StudyExactAsyncTests:
 
         with pytest.raises(
             TypeError,
-            match="resumable exact_async evaluator must open and resume attempt-batch sessions",
+            match="resumable async evaluator returned a non-resumable batch session",
         ):
             _ = study.open_exact_async_step_session(
                 optimizer.create_initial_state(),
                 batch_size=1,
             )
+        assert evaluator.pending_attempt_batch_ids == ()
 
     def test_open_exact_async_step_session_rejects_non_direct_kernel(self) -> None:
         problem = Problem(

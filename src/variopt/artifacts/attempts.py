@@ -758,7 +758,8 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         payload = self.payload
         if isinstance(payload, Observation):
             return Observation(
-                request=self.request,
+                proposal=_projection_proposal_for_success(self),
+                proposal_evaluation_spec=self.request.proposal_evaluation_spec,
                 candidate=self.request.candidate,
                 value=payload.value,
                 score=payload.score,
@@ -766,7 +767,8 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             )
         if isinstance(payload, ObservationPayload):
             return Observation(
-                request=self.request,
+                proposal=_projection_proposal_for_success(self),
+                proposal_evaluation_spec=self.request.proposal_evaluation_spec,
                 candidate=self.request.candidate,
                 value=payload.value,
                 score=payload.score,
@@ -806,6 +808,47 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             evaluation_count=self.evaluation_count,
             refinement=self.refinement,
             kernel_diagnostics=self.kernel_diagnostics,
+            candidate_equal=candidate_equal,
+            _candidate_equal=self._candidate_equal,
+            _candidate_equal_required=self._candidate_equal_required,
+            _validated_request_candidate=self._validated_request_candidate,
+            _validated_refined_candidate=self._validated_refined_candidate,
+            _validated_payload_request_candidate=(
+                self._validated_payload_request_candidate
+            ),
+            _validated_refinement_source_candidate=(
+                self._validated_refinement_source_candidate
+            ),
+        )
+
+    def with_kernel_diagnostics(
+        self,
+        kernel_diagnostics: KernelDiagnostics | None,
+        *,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+    ) -> "EvaluationSuccess[CandidateT, PayloadT]":
+        """Return this success with replacement kernel diagnostics.
+
+        Parameters
+        ----------
+        kernel_diagnostics : KernelDiagnostics | None
+            Replacement diagnostics for the same successful request and payload.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Equality predicate used when refinement alignment must be
+            revalidated after a pickle round-trip stripped the stored predicate.
+
+        Returns
+        -------
+        EvaluationSuccess[CandidateT, PayloadT]
+            Success carrying ``kernel_diagnostics`` with request ownership,
+            payload, evaluation cost, and refinement provenance preserved.
+        """
+        return EvaluationSuccess(
+            request=self.request,
+            payload=self.payload,
+            evaluation_count=self.evaluation_count,
+            refinement=self.refinement,
+            kernel_diagnostics=kernel_diagnostics,
             candidate_equal=candidate_equal,
             _candidate_equal=self._candidate_equal,
             _candidate_equal_required=self._candidate_equal_required,
@@ -1006,6 +1049,20 @@ def _is_evaluation_request_in_candidate_domain(
     return type(request) is EvaluationRequest
 
 
+def _projection_proposal_for_success(
+    success: EvaluationSuccess[CandidateT, object],
+) -> Proposal[CandidateT]:
+    """Return the proposal used when projecting one success to a record."""
+    refinement = success.refinement
+    if refinement is None:
+        return success.request.proposal
+
+    return Proposal(
+        candidate=refinement.source_candidate,
+        proposal_id=success.proposal_id,
+    )
+
+
 def materialize_success_record(
     success: EvaluationSuccess[CandidateT, object],
 ) -> RequestAlignedEvaluationRecord[object]:
@@ -1027,13 +1084,7 @@ def materialize_success_record(
         If the payload cannot be projected into a request-aligned record.
     """
     payload = success.payload
-    refinement = success.refinement
-    projection_proposal = success.request.proposal
-    if refinement is not None:
-        projection_proposal = Proposal(
-            candidate=refinement.source_candidate,
-            proposal_id=success.proposal_id,
-        )
+    projection_proposal = _projection_proposal_for_success(success)
 
     if type(payload) is ObservationPayload:
         return Observation(

@@ -116,7 +116,8 @@ search. See [`Kernel`][variopt.Kernel].
 ## KernelDiagnostics
 
 Execution-facing diagnostics for one kernel episode, including backend, method,
-status, and optional message. See
+status, optional message, and optional inner failed-attempt accounting for
+episodes such as local search. See
 [`KernelDiagnostics`][variopt.KernelDiagnostics].
 
 ## KernelStatus

@@ -330,7 +330,7 @@ class StructuredVariableNeighborhoodKernel(
         Returns
         -------
         EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
-            Locally improved attempts and recorded failed local-search trials.
+            Locally improved top-level attempts with inner failures summarized in diagnostics.
         """
         runtime: PreparedStructuredLocalSearchRuntime[
             BoundaryT,

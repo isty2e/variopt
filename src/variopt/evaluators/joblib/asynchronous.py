@@ -5,6 +5,8 @@ from concurrent.futures.process import BrokenProcessPool as FuturesBrokenProcess
 from dataclasses import dataclass, field
 from importlib import import_module
 from itertools import count
+from math import isfinite
+from numbers import Real
 from queue import Empty, Queue
 from threading import Thread, current_thread
 from time import monotonic
@@ -88,7 +90,7 @@ def _joblib_process_failure_types() -> tuple[type[BaseException], ...]:
     return tuple(failure_types)
 
 
-_PROCESS_POOL_INFRASTRUCTURE_FAILURE_TYPES = (
+_PROCESS_POOL_INFRASTRUCTURE_FAILURE_TYPES: tuple[type[BaseException], ...] = (
     FuturesBrokenProcessPool,
     *_joblib_process_failure_types(),
 )
@@ -231,11 +233,24 @@ def _start_async_joblib_result_worker(
     return result_worker
 
 
-def _validate_wait_timeout(timeout: float | None) -> None:
-    """Reject invalid timeout values for async joblib waits."""
-    if timeout is not None and timeout < 0.0:
+def _validate_wait_timeout(timeout: object | None) -> float | None:
+    """Return one canonical wait timeout or reject invalid values."""
+    if timeout is None:
+        return None
+
+    if type(timeout) is bool or not isinstance(timeout, Real):
+        msg = "timeout must be a real number"
+        raise TypeError(msg)
+
+    normalized_timeout = float(timeout)
+    if not isfinite(normalized_timeout):
+        msg = "timeout must be finite"
+        raise ValueError(msg)
+
+    if normalized_timeout < 0.0:
         msg = "timeout must be non-negative"
         raise ValueError(msg)
+    return normalized_timeout
 
 
 @dataclass(slots=True)
@@ -1096,11 +1111,11 @@ class AsyncJoblibEvaluator(
             Newly completed groups in logical batch order, or an empty tuple
             when ``timeout`` expires before any completion is available.
         """
-        _validate_wait_timeout(timeout)
+        normalized_timeout = _validate_wait_timeout(timeout)
         return self._collect_next_completion_group(
             handle,
             block=True,
-            timeout=timeout,
+            timeout=normalized_timeout,
         )
 
     def poll_attempts(
@@ -1131,11 +1146,11 @@ class AsyncJoblibEvaluator(
         ...,
     ]:
         """Wait for at least one native attempt-batch completion group."""
-        _validate_wait_timeout(timeout)
+        normalized_timeout = _validate_wait_timeout(timeout)
         return self._collect_next_attempt_completion_group(
             handle,
             block=True,
-            timeout=timeout,
+            timeout=normalized_timeout,
         )
 
     def _collect_next_completion_group(

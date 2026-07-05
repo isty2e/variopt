@@ -8,7 +8,7 @@ from importlib import import_module
 from queue import Queue
 from threading import current_thread
 from types import ModuleType
-from typing import Literal, TypeGuard, TypeVar, final
+from typing import Literal, TypeGuard, TypeVar, cast, final
 
 import pytest
 from typing_extensions import override
@@ -750,6 +750,52 @@ class AsyncJoblibEvaluatorTests:
 
         with pytest.raises(ValueError, match="timeout must be non-negative"):
             _ = session.wait(timeout=-0.001)
+
+        session.cancel()
+
+    @pytest.mark.parametrize(
+        "timeout",
+        (
+            cast(float, True),
+            cast(float, cast(object, float("nan"))),
+            cast(float, cast(object, float("inf"))),
+        ),
+    )
+    def test_wait_rejects_non_canonical_timeout(self, timeout: float) -> None:
+        problem = _legacy_observation_problem(SlowSquareObjective())
+        evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](backend="threading", n_jobs=2)
+        session = evaluator.open_session(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        expected_error: type[Exception] = TypeError if type(timeout) is bool else ValueError
+        with pytest.raises(expected_error, match="timeout must"):
+            _ = session.wait(timeout=timeout)
+
+        session.cancel()
+
+    @pytest.mark.parametrize(
+        "timeout",
+        (
+            cast(float, False),
+            cast(float, cast(object, float("-inf"))),
+        ),
+    )
+    def test_attempt_session_wait_rejects_non_canonical_timeout(
+        self,
+        timeout: float,
+    ) -> None:
+        problem = _legacy_observation_problem(SlowSquareObjective())
+        evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](backend="threading", n_jobs=2)
+        session = evaluator.open_attempt_session(
+            problem,
+            _requests((Proposal(candidate=4, proposal_id="p-1"),)),
+        )
+
+        expected_error: type[Exception] = TypeError if type(timeout) is bool else ValueError
+        with pytest.raises(expected_error, match="timeout must"):
+            _ = session.wait(timeout=timeout)
 
         session.cancel()
 

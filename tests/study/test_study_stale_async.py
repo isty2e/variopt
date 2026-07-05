@@ -55,7 +55,14 @@ from variopt.evaluators import (
     EvaluationBatchHandle,
     EvaluationBatchSession,
 )
-from variopt.execution import STALE_ASYNC_EXECUTION_MODEL, ExecutionModel
+from variopt.execution import (
+    STALE_ASYNC_EXECUTION_MODEL,
+    EvaluationBudget,
+    ExecutionModel,
+    ExecutionResources,
+    NestedParallelismPolicy,
+)
+from variopt.study.stale_async import open_stale_async_batch_session
 
 StaleAsyncOutcome: TypeAlias = EvaluationOutcome[int, Observation[int]]
 StaleAsyncCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncOutcome]
@@ -176,6 +183,88 @@ class CancellationRecordingSessionAsyncEvaluator(SessionRecordingAsyncEvaluator)
     def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
         self.cancelled_batch_ids += (handle.batch_id,)
         super().cancel_attempts(handle)
+
+
+@final
+class AskRecordingStaleAsyncOptimizer(
+    RunMethod[RollingStaleAsyncOptimizerState, Proposal[int], Observation[int]],
+):
+    """Stale-async optimizer that records whether ask was called."""
+
+    _initial_proposals: tuple[Proposal[int], ...]
+    ask_count: int
+
+    def __init__(self, proposals: Sequence[Proposal[int]]) -> None:
+        self._initial_proposals = tuple(proposals)
+        self.ask_count = 0
+
+    @override
+    def create_initial_state(self) -> RollingStaleAsyncOptimizerState:
+        return RollingStaleAsyncOptimizerState(
+            queued_proposals=self._initial_proposals,
+        )
+
+    @override
+    def is_exhausted(self, state: RollingStaleAsyncOptimizerState) -> bool:
+        return len(state.queued_proposals) == 0
+
+    @override
+    def ask(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+        batch_size: int = 1,
+    ) -> tuple[tuple[Proposal[int], ...], RollingStaleAsyncOptimizerState]:
+        self.ask_count += 1
+        proposal_batch = state.queued_proposals[:batch_size]
+        return (
+            proposal_batch,
+            RollingStaleAsyncOptimizerState(
+                queued_proposals=state.queued_proposals[len(proposal_batch) :],
+                ask_history=state.ask_history + (batch_size,),
+                tell_history=state.tell_history,
+            ),
+        )
+
+    @override
+    def tell(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+        observations: Sequence[Observation[int]],
+    ) -> RollingStaleAsyncOptimizerState:
+        return RollingStaleAsyncOptimizerState(
+            queued_proposals=state.queued_proposals,
+            ask_history=state.ask_history,
+            tell_history=state.tell_history + (tuple(observations),),
+        )
+
+    @override
+    def supported_execution_models(self) -> frozenset[ExecutionModel]:
+        return frozenset({STALE_ASYNC_EXECUTION_MODEL})
+
+
+@final
+class AttemptOnlyEvaluator:
+    """Evaluator that can evaluate attempts but cannot open async sessions."""
+
+    evaluate_attempt_count: int
+
+    def __init__(self) -> None:
+        self.evaluate_attempt_count = 0
+
+    def execution_resources(self) -> ExecutionResources:
+        return ExecutionResources(
+            parallel_owner="evaluator",
+            nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+        )
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        _ = problem, requests
+        self.evaluate_attempt_count += 1
+        return EvaluationAttemptBatch(attempts=())
 
 
 @final
@@ -569,6 +658,38 @@ class StudyStaleAsyncTests:
                 state,
                 execution_model=STALE_ASYNC_EXECUTION_MODEL,
             )
+
+    def test_run_preflights_attempt_session_capability_before_ask_or_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = AskRecordingStaleAsyncOptimizer(
+            proposals=(Proposal(candidate=3, proposal_id="p-1"),),
+        )
+        evaluator = AttemptOnlyEvaluator()
+        state = optimizer.create_initial_state()
+        budget = EvaluationBudget(1)
+
+        with pytest.raises(
+            TypeError,
+            match="stale_async evaluator must expose attempt-batch sessions",
+        ):
+            _ = open_stale_async_batch_session(
+                async_evaluator=evaluator,
+                problem=problem,
+                run_method_ask=optimizer.ask,
+                proposal_evaluation_specs_for=optimizer.proposal_evaluation_specs,
+                state=state,
+                batch_size=1,
+                evaluation_budget=budget,
+            )
+
+        assert optimizer.ask_count == 0
+        assert evaluator.evaluate_attempt_count == 0
+        assert budget.remaining == 1
 
     def test_run_stale_async_assimilates_incrementally_and_refills_frontier(
         self,

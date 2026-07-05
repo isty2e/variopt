@@ -22,10 +22,12 @@ workflow can invoke explicitly.
 
 Kernels return `EvaluationAttemptBatch` values. Successful
 `EvaluationSuccess` attempts may carry `CandidateRefinement` provenance when
-the kernel changes a candidate before evaluation. Recorded local-search trial
-failures remain `EvaluationFailure` attempts; kernel diagnostics and refinement
-metadata attach only to successful attempts. Acceptance into an optimizer
-archive is still decided later by the run method.
+the kernel changes a candidate before evaluation. A successful kernel episode
+still occupies exactly one top-level attempt slot for the original proposal;
+failed inner local-search trials are charged through that slot's
+`evaluation_count` and summarized in `KernelDiagnostics`. If an episode produces
+no successful evaluation, the top-level slot remains an `EvaluationFailure`.
+Acceptance into an optimizer archive is still decided later by the run method.
 
 For the current detailed method note, see
 [local-optimization-methods.md](../guides/local-optimization-methods.md).

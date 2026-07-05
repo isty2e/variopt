@@ -247,6 +247,10 @@ def open_stale_async_batch_session(
         msg = "batch_size must be positive"
         raise ValueError(msg)
 
+    if not supports_attempt_batch_sessions(async_evaluator):
+        msg = "stale_async evaluator must expose attempt-batch sessions"
+        raise TypeError(msg)
+
     proposals, next_state = run_method_ask(state, batch_size=batch_size)
     if len(proposals) == 0:
         msg = "run_method returned no proposals"
@@ -266,9 +270,6 @@ def open_stale_async_batch_session(
     )
     if evaluation_budget is not None:
         evaluation_budget.consume(len(requests))
-    if not supports_attempt_batch_sessions(async_evaluator):
-        msg = "stale_async evaluator must expose attempt-batch sessions"
-        raise TypeError(msg)
 
     return (
         StaleAsyncActiveBatchSession(

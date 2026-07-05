@@ -80,6 +80,18 @@ class StudyStepResult(
 
 
 @dataclass(frozen=True, slots=True)
+class _StudyStepFeedback(
+    FrozenGenericSlotsCompat,
+    Generic[CandidateT, RunMethodStateT, StudyRecordT],
+):
+    """Materialized step feedback before run-method assimilation."""
+
+    attempts: EvaluationAttemptBatch[CandidateT, StudyRecordT]
+    post_ask_state: RunMethodStateT
+    evaluation_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class _CheckpointSafeRunSnapshot(
     Generic[CandidateT, RunMethodStateT, StudyRecordT]
 ):
@@ -221,6 +233,23 @@ def _supports_direct_scalar_sequential_path(
 
     objective = study.problem.direct_objective
     return objective is not None and _uses_default_scalar_request_evaluation(objective)
+
+
+def _study_step_trace_event(
+    *,
+    attempts: EvaluationAttemptBatch[CandidateT, StudyRecordT],
+    records: tuple[StudyRecordT, ...],
+) -> TraceEvent:
+    """Project one completed step into the generic study trace."""
+    return TraceEvent(
+        kind="study.step",
+        message=(
+            f"completed {attempts.attempt_count} attempt(s): "
+            f"{len(records)} succeeded, "
+            f"{len(attempts.failures)} failed"
+        ),
+        value=trace_value_for_records(records),
+    )
 
 
 def _uses_default_scalar_request_evaluation(
@@ -613,7 +642,7 @@ def evaluate_attempts_sync(
     )
 
 
-def evaluate_step(
+def _evaluate_step_feedback(
     study: StudyExecutionOwner[
         BoundaryT,
         CandidateT,
@@ -626,37 +655,8 @@ def evaluate_step(
     *,
     execution_model: ExecutionModel,
     evaluation_budget: EvaluationBudget | None = None,
-) -> StudyStepResult[CandidateT, RunMethodStateT, StudyRecordT]:
-    """Run one ask/kernel/evaluate/tell step and return attempts and state.
-
-    Parameters
-    ----------
-    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
-        Study-like owner exposing the problem, run method, evaluator, and
-        kernel.
-    state : RunMethodStateT
-        Run-method state to advance.
-    batch_size : int
-        Maximum number of proposals to request from the run method.
-    execution_model : ExecutionModel
-        Execution model controlling whether evaluation is synchronous or
-        exact-async.
-    evaluation_budget : EvaluationBudget | None, default=None
-        Optional hard evaluation-budget ledger shared across kernel subqueries.
-
-    Returns
-    -------
-    StudyStepResult[CandidateT, RunMethodStateT, StudyRecordT]
-        Evaluator attempts and the next run-method state.
-
-    Raises
-    ------
-    ValueError
-        If ``batch_size`` is invalid or the run method returns an invalid
-        proposal batch.
-    RuntimeError
-        If the run method is exhausted or returns no proposals.
-    """
+) -> _StudyStepFeedback[CandidateT, RunMethodStateT, StudyRecordT]:
+    """Evaluate and materialize one step before run-method assimilation."""
     if batch_size <= 0:
         msg = "batch_size must be positive"
         raise ValueError(msg)
@@ -781,11 +781,72 @@ def evaluate_step(
         feedback_attempts,
         candidate_equal=study.problem.space.candidates_equal,
     )
-    next_state = study.run_method.tell_attempts(next_state, feedback_attempts)
-    return StudyStepResult(
+    return _StudyStepFeedback(
         attempts=feedback_attempts,
-        state=next_state,
+        post_ask_state=next_state,
         evaluation_count=step_evaluation_count,
+    )
+
+
+def evaluate_step(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyPayloadT,
+        StudyRecordT,
+    ],
+    state: RunMethodStateT,
+    batch_size: int,
+    *,
+    execution_model: ExecutionModel,
+    evaluation_budget: EvaluationBudget | None = None,
+) -> StudyStepResult[CandidateT, RunMethodStateT, StudyRecordT]:
+    """Run one ask/kernel/evaluate/tell step and return attempts and state.
+
+    Parameters
+    ----------
+    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
+        Study-like owner exposing the problem, run method, evaluator, and
+        kernel.
+    state : RunMethodStateT
+        Run-method state to advance.
+    batch_size : int
+        Maximum number of proposals to request from the run method.
+    execution_model : ExecutionModel
+        Execution model controlling whether evaluation is synchronous or
+        exact-async.
+    evaluation_budget : EvaluationBudget | None, default=None
+        Optional hard evaluation-budget ledger shared across kernel subqueries.
+
+    Returns
+    -------
+    StudyStepResult[CandidateT, RunMethodStateT, StudyRecordT]
+        Evaluator attempts and the next run-method state.
+
+    Raises
+    ------
+    ValueError
+        If ``batch_size`` is invalid or the run method returns an invalid
+        proposal batch.
+    RuntimeError
+        If the run method is exhausted or returns no proposals.
+    """
+    step_feedback = _evaluate_step_feedback(
+        study,
+        state,
+        batch_size,
+        execution_model=execution_model,
+        evaluation_budget=evaluation_budget,
+    )
+    next_state = study.run_method.tell_attempts(
+        step_feedback.post_ask_state,
+        step_feedback.attempts,
+    )
+    return StudyStepResult(
+        attempts=step_feedback.attempts,
+        state=next_state,
+        evaluation_count=step_feedback.evaluation_count,
     )
 
 
@@ -953,7 +1014,7 @@ def run(
         )
         current_batch_size = min(batch_size, remaining)
         try:
-            step_result = evaluate_step(
+            step_feedback = _evaluate_step_feedback(
                 study,
                 state,
                 batch_size=current_batch_size,
@@ -985,25 +1046,47 @@ def run(
                 safe_snapshot=safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             )
-        batch_successes = step_result.attempts.successes
-        batch_records = materialize_success_records(step_result.attempts.successes)
-        state = step_result.state
-        reported_evaluation_count_total += step_result.evaluation_count
+        try:
+            next_state = study.run_method.tell_attempts(
+                step_feedback.post_ask_state,
+                step_feedback.attempts,
+            )
+        except Exception as exception:
+            batch_successes = step_feedback.attempts.successes
+            batch_records = materialize_success_records(batch_successes)
+            _raise_run_execution_failed(
+                cause=exception,
+                successes=tuple(successes) + batch_successes,
+                failures=tuple(failures) + step_feedback.attempts.failures,
+                trace_events=tuple(trace_events)
+                + (
+                    _study_step_trace_event(
+                        attempts=step_feedback.attempts,
+                        records=batch_records,
+                    ),
+                ),
+                evaluation_count=(
+                    reported_evaluation_count_total
+                    + step_feedback.evaluation_count
+                ),
+                state=step_feedback.post_ask_state,
+                safe_snapshot=safe_snapshot,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
+        batch_successes = step_feedback.attempts.successes
+        batch_records = materialize_success_records(batch_successes)
+        state = next_state
+        reported_evaluation_count_total += step_feedback.evaluation_count
         successes.extend(batch_successes)
-        failures.extend(step_result.attempts.failures)
+        failures.extend(step_feedback.attempts.failures)
         if evaluation_budget is None:
-            remaining -= step_result.attempts.attempt_count
+            remaining -= step_feedback.attempts.attempt_count
             record_budget_remaining = remaining
         trace_events.append(
-            TraceEvent(
-                kind="study.step",
-                message=(
-                    f"completed {step_result.attempts.attempt_count} attempt(s): "
-                    f"{len(batch_records)} succeeded, "
-                    f"{len(step_result.attempts.failures)} failed"
-                ),
-                value=trace_value_for_records(batch_records),
-            ),
+            _study_step_trace_event(
+                attempts=step_feedback.attempts,
+                records=batch_records,
+            )
         )
         if stop_at_checkpoint_boundary:
             if study.run_method.is_checkpoint_safe_state(state):
@@ -1073,7 +1156,7 @@ def materialize_scalar_run_result(
     ------
     TypeError
         If the report does not contain scalar
-        :class:`~variopt.artifacts.ObservationPayload` successes.
+        :class:`~variopt.artifacts.Observation` record successes.
     """
     successes: list[EvaluationSuccess[CandidateT, ObservationPayload]] = []
     for success in run_report.successes:
@@ -1086,8 +1169,8 @@ def materialize_scalar_run_result(
             )
         else:
             msg = (
-                "Study.optimize currently requires scalar ObservationPayload records; "
-                "use Study.run for non-scalar evaluation protocols"
+                "Study.optimize currently requires scalar Observation records; "
+                "use Study.run for non-scalar feedback records"
             )
             raise TypeError(msg)
         successes.append(
