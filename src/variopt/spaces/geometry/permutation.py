@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from ..permutation import PermutationSpace, normalize_permutation_values
 from ..types import SpaceCandidateValue
-from .leaf import require_candidate_tuple
+from .leaf import require_geometry_candidate_tuple
 from .parts import StructuredDistanceParts
 
 
@@ -54,11 +54,11 @@ class PermutationSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for two permutation candidates."""
-        left_tuple = require_candidate_tuple(
+        left_tuple = require_geometry_candidate_tuple(
             value=left,
             message="permutation-space diversity requires canonical tuple candidates",
         )
-        right_tuple = require_candidate_tuple(
+        right_tuple = require_geometry_candidate_tuple(
             value=right,
             message="permutation-space diversity requires canonical tuple candidates",
         )

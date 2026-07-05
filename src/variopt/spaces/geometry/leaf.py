@@ -1,41 +1,23 @@
-"""Leaf-level geometry helpers and built-in-family type guards."""
+"""Leaf-level geometry helpers."""
 
 from math import isfinite
-from typing import TypeAlias, TypeGuard, TypeVar
+from typing import TypeGuard
 
 from ..composites import RecordCandidate
-from ..composites.array_space import ArraySpace
-from ..composites.record_space import RecordSpace
-from ..composites.tuple_space import TupleSpace
-from ..permutation import PermutationSpace
 from ..scalar import (
     CategoricalSpace,
-    IntegerSpace,
-    RealSpace,
     require_categorical_scalar,
 )
-from ..structured import StructuredLeafSpace, StructuredSearchSpace
-from ..types import SpaceBoundaryValue, SpaceCandidateValue, SpaceScalarValue
-
-BoundaryT = TypeVar("BoundaryT")
-CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
-BuiltinChildSpace: TypeAlias = (
-    RealSpace
-    | IntegerSpace
-    | CategoricalSpace[SpaceScalarValue]
-    | PermutationSpace
-    | TupleSpace
-    | RecordSpace
-    | ArraySpace[SpaceBoundaryValue, SpaceCandidateValue]
-)
+from ..structured import StructuredLeafSpace
+from ..types import SpaceCandidateValue, SpaceScalarValue
 
 
-def require_real_candidate(
+def require_geometry_real_candidate(
     *,
     value: SpaceCandidateValue,
     message: str,
 ) -> float:
-    """Return one canonical real candidate value.
+    """Return one canonical real candidate value for geometry calculations.
 
     Parameters
     ----------
@@ -65,12 +47,12 @@ def require_real_candidate(
     return value
 
 
-def require_integer_candidate(
+def require_geometry_integer_candidate(
     *,
     value: SpaceCandidateValue,
     message: str,
 ) -> int:
-    """Return one canonical integer candidate value.
+    """Return one canonical integer candidate value for geometry calculations.
 
     Parameters
     ----------
@@ -94,12 +76,12 @@ def require_integer_candidate(
     return value
 
 
-def require_candidate_tuple(
+def require_geometry_candidate_tuple(
     *,
     value: SpaceCandidateValue,
     message: str,
 ) -> tuple[SpaceCandidateValue, ...]:
-    """Return one canonical tuple candidate value.
+    """Return one canonical tuple candidate value for geometry calculations.
 
     Parameters
     ----------
@@ -123,12 +105,12 @@ def require_candidate_tuple(
     return value
 
 
-def require_record_candidate(
+def require_geometry_record_candidate(
     *,
     value: SpaceCandidateValue,
     message: str,
 ) -> RecordCandidate:
-    """Return one canonical record candidate value.
+    """Return one canonical record candidate value for geometry calculations.
 
     Parameters
     ----------
@@ -174,64 +156,6 @@ def validate_categorical_choice(
     """
     scalar_value = require_categorical_scalar(value)
     space.validate(scalar_value)
-
-
-def is_builtin_structured_space(
-    space: StructuredSearchSpace[BoundaryT, CandidateT],
-) -> TypeGuard[BuiltinChildSpace]:
-    """Return whether one structured space uses the built-in geometry family.
-
-    Parameters
-    ----------
-    space : StructuredSearchSpace[BoundaryT, CandidateT]
-        Structured space to classify.
-
-    Returns
-    -------
-    TypeGuard[BuiltinChildSpace]
-        ``True`` when ``space`` belongs to the built-in geometry family.
-    """
-    return isinstance(
-        space,
-        (
-            RealSpace,
-            IntegerSpace,
-            CategoricalSpace,
-            PermutationSpace,
-            TupleSpace,
-            RecordSpace,
-            ArraySpace,
-        ),
-    )
-
-
-def is_builtin_child_space(
-    space: object,
-) -> TypeGuard[BuiltinChildSpace]:
-    """Return whether one search space is in the built-in structured geometry family.
-
-    Parameters
-    ----------
-    space : object
-        Search space object to classify.
-
-    Returns
-    -------
-    TypeGuard[BuiltinChildSpace]
-        ``True`` when ``space`` belongs to the built-in geometry family.
-    """
-    return isinstance(
-        space,
-        (
-            RealSpace,
-            IntegerSpace,
-            CategoricalSpace,
-            PermutationSpace,
-            TupleSpace,
-            RecordSpace,
-            ArraySpace,
-        ),
-    )
 
 
 def is_categorical_leaf_space(
