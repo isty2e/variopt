@@ -100,7 +100,7 @@ format. Stability guarantees for the public surface are documented in the
   visible top-level attempt's `evaluation_count` and summarized in
   `KernelDiagnostics`; if no local-search attempt succeeds, the top-level slot
   remains an `EvaluationFailure`.
-- Outcome-aware `EvaluationAttemptBatch` now stores ordered attempt slots as its
+- Attempt-aware `EvaluationAttemptBatch` now stores ordered attempt slots as its
   authoritative state and exposes request/outcome/failure index views as derived
   projections.
 - Added `EvaluationAttemptMaterializer` and
@@ -110,6 +110,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- Built-in local-search kernels now preserve inner failed-attempt diagnostics
+  even when the successful attempt itself did not emit base kernel diagnostics,
+  while still omitting diagnostics objects that carry no signal.
 - Checkpoint-safe `Study.run(...)` execution now stores safe snapshots as
   history cut points instead of eagerly rebuilding full success, failure, and
   trace tuples at every safe step.

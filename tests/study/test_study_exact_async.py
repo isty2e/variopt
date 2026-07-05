@@ -1,5 +1,6 @@
 """Tests for exact-async Study execution."""
 
+from collections.abc import Sequence
 from typing import TypeAlias
 
 import pytest
@@ -58,6 +59,7 @@ from variopt.execution import (
     ExecutionModel,
 )
 from variopt.study.common import build_evaluation_requests
+from variopt.study.exact_async.orchestration import evaluate_batch_exact_async
 from variopt.study.exact_async.session import StudyExactAsyncStepSession
 
 ExactAsyncScalarStudy: TypeAlias = Study[
@@ -128,6 +130,19 @@ class InvalidCompletionAttemptSession(
         if self._cancel_raises:
             msg = "forced cancel cleanup failure"
             raise RuntimeError(msg)
+
+
+class DenseAttemptPathFailsSessionEvaluator(SessionRecordingAsyncEvaluator):
+    """Evaluator that must be driven through exact-async attempt sessions."""
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[int, int, ObservationPayload],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        _ = (problem, requests)
+        msg = "dense attempt path must not be used for exact async"
+        raise AssertionError(msg)
 
 
 def _payload_attempt(
@@ -235,6 +250,57 @@ class StudyExactAsyncTests:
         )
 
         assert evaluator.opened_batch_sizes == (2,)
+
+    def test_step_exact_async_prefers_attempt_session_over_dense_attempts(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = DenseAttemptPathFailsSessionEvaluator()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        records, _next_state = study.step(
+            optimizer.create_initial_state(),
+            batch_size=2,
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+        )
+
+        assert evaluator.opened_batch_sizes == (2,)
+        assert tuple(record.value for record in records) == (16.0, 4.0)
+
+    def test_step_exact_async_preserves_dense_attempt_fallback(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        requests = build_evaluation_requests(
+            proposals=(
+                Proposal(candidate=5, proposal_id="p-1"),
+                Proposal(candidate=3, proposal_id="p-2"),
+            ),
+            proposal_evaluation_specs=None,
+        )
+
+        attempts = evaluate_batch_exact_async(
+            SequentialEvaluator(),
+            problem=problem,
+            requests=requests,
+        )
+
+        assert tuple(success.payload.value for success in attempts.successes) == (
+            25.0,
+            9.0,
+        )
 
     def test_run_exact_async_returns_checkpoint_snapshot_when_kernel_cost_exhausts_budget(
         self,

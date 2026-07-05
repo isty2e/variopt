@@ -184,6 +184,23 @@ class EvaluationExceptionSnapshot(FrozenGenericSlotsCompat):
             msg = "message must be str"
             raise TypeError(msg)
 
+    def _pickle_state(self) -> tuple[str, str, str]:
+        """Return validation-preserving pickle state."""
+        return (
+            self.exception_module,
+            self.exception_qualname,
+            self.message,
+        )
+
+    def _restore_pickle_state(self, state: tuple[str, str, str]) -> None:
+        """Restore pickle state and revalidate snapshot fields."""
+        exception_module, exception_qualname, message = state
+        object.__setattr__(self, "__orig_class__", None)
+        object.__setattr__(self, "exception_module", exception_module)
+        object.__setattr__(self, "exception_qualname", exception_qualname)
+        object.__setattr__(self, "message", message)
+        self.__post_init__()
+
     @property
     def exception_type(self) -> str:
         """Return the fully qualified exception type name.
@@ -254,6 +271,7 @@ class EvaluationFailure(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if type(self.exception) is not EvaluationExceptionSnapshot:
             msg = "exception must be an EvaluationExceptionSnapshot"
             raise TypeError(msg)
+        self.exception.__post_init__()
 
         if type(self.evaluation_count) is not int:
             msg = "evaluation_count must be int"
@@ -262,6 +280,28 @@ class EvaluationFailure(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
+
+    def _pickle_state(
+        self,
+    ) -> tuple[EvaluationRequest[CandidateT], EvaluationExceptionSnapshot, int]:
+        """Return validation-preserving pickle state."""
+        return (
+            self.request,
+            self.exception,
+            self.evaluation_count,
+        )
+
+    def _restore_pickle_state(
+        self,
+        state: tuple[EvaluationRequest[CandidateT], EvaluationExceptionSnapshot, int],
+    ) -> None:
+        """Restore pickle state and revalidate failure fields."""
+        request, exception, evaluation_count = state
+        object.__setattr__(self, "__orig_class__", None)
+        object.__setattr__(self, "request", request)
+        object.__setattr__(self, "exception", exception)
+        object.__setattr__(self, "evaluation_count", evaluation_count)
+        self.__post_init__()
 
     @property
     def candidate(self) -> CandidateT:
@@ -295,6 +335,24 @@ class EvaluationFailure(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Proposal identifier carried by the failed request, if present.
         """
         return self.request.proposal_id
+
+
+setattr(
+    EvaluationExceptionSnapshot,
+    "__getstate__",
+    EvaluationExceptionSnapshot.__dict__["_pickle_state"],
+)
+setattr(
+    EvaluationExceptionSnapshot,
+    "__setstate__",
+    EvaluationExceptionSnapshot.__dict__["_restore_pickle_state"],
+)
+setattr(EvaluationFailure, "__getstate__", EvaluationFailure.__dict__["_pickle_state"])
+setattr(
+    EvaluationFailure,
+    "__setstate__",
+    EvaluationFailure.__dict__["_restore_pickle_state"],
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -604,13 +662,23 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         candidate_equal: CandidateEquality[CandidateT] | None,
     ) -> None:
         """Require a request-aligned payload to belong to this success request."""
-        if not _is_request_aligned_payload(payload):
+        if not _is_request_aligned_payload_in_candidate_domain(
+            payload,
+            self.request.candidate,
+        ):
             msg = "success payload must be request-aligned"
             raise TypeError(msg)
 
         if payload.candidate is not self.request.candidate:
-            msg = "success payload candidate must match the success request candidate"
-            raise ValueError(msg)
+            require_candidate_match(
+                left_candidate=payload.candidate,
+                right_candidate=self.request.candidate,
+                mismatch_message=(
+                    "success payload candidate must match the success request "
+                    "candidate"
+                ),
+                candidate_equal=candidate_equal,
+            )
 
         if payload.request is self.request:
             self._clear_payload_source_alignment()
@@ -677,6 +745,29 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             candidate_equal=candidate_equal,
         )
         self._store_payload_source_alignment(payload_request)
+
+    def _candidates_match(
+        self,
+        left_candidate: CandidateT,
+        right_candidate: CandidateT,
+    ) -> bool:
+        """Return whether two candidates match under this success contract."""
+        if left_candidate is right_candidate:
+            return True
+
+        mismatch_message = "candidate mismatch"
+        try:
+            require_candidate_match(
+                left_candidate=left_candidate,
+                right_candidate=right_candidate,
+                mismatch_message=mismatch_message,
+                candidate_equal=self._candidate_equal,
+            )
+        except ValueError as exception:
+            if str(exception) != mismatch_message:
+                raise
+            return False
+        return True
 
     @staticmethod
     def from_scalar_observation(
@@ -792,6 +883,58 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
 
         msg = "success payload is not scalar"
         raise TypeError(msg)
+
+    def can_materialize_record_payload(
+        self,
+        payload: object,
+    ) -> TypeGuard[RequestAlignedEvaluationRecord[CandidateT]]:
+        """Return whether ``payload`` can be reused as this success's record.
+
+        Parameters
+        ----------
+        payload : object
+            Candidate payload to inspect.
+
+        Returns
+        -------
+        bool
+            ``True`` when ``payload`` is already request-aligned to this success
+            under the success's stored or prevalidated candidate-equality
+            contract.
+        """
+        if not _is_request_aligned_payload_in_candidate_domain(
+            payload,
+            self.request.candidate,
+        ):
+            return False
+
+        if not self._candidates_match(payload.candidate, self.request.candidate):
+            return False
+
+        if payload.request is not self.request:
+            if payload.request.proposal_id != self.request.proposal_id:
+                return False
+
+            if (
+                payload.request.proposal_evaluation_spec
+                != self.request.proposal_evaluation_spec
+            ):
+                return False
+
+        refinement = self.refinement
+        if refinement is None:
+            return payload.request.candidate is self.request.candidate
+
+        if payload.request.candidate is refinement.source_candidate:
+            return True
+
+        if self._payload_source_alignment_is_prevalidated(payload.request):
+            return True
+
+        return self._candidates_match(
+            payload.request.candidate,
+            refinement.source_candidate,
+        )
 
     def with_payload(
         self,
@@ -1031,28 +1174,20 @@ def _is_request_aligned_payload(
     return type(payload.request) is EvaluationRequest
 
 
+def _is_request_aligned_payload_in_candidate_domain(
+    payload: object,
+    candidate: CandidateT,
+) -> TypeGuard[RequestAlignedEvaluationRecord[CandidateT]]:
+    """Narrow an erased payload generic after caller-side candidate alignment."""
+    _ = candidate
+    return _is_request_aligned_payload(payload)
+
+
 def _is_materializable_record_payload(
     payload: object,
     success: EvaluationSuccess[CandidateT, object],
 ) -> TypeGuard[RequestAlignedEvaluationRecord[CandidateT]]:
-    if not _is_request_aligned_payload(payload):
-        return False
-
-    if payload.candidate is not success.request.candidate:
-        return False
-
-    if payload.request is not success.request:
-        if payload.request.proposal_id != success.request.proposal_id:
-            return False
-
-        if payload.request.proposal_evaluation_spec != success.request.proposal_evaluation_spec:
-            return False
-
-    refinement = success.refinement
-    if refinement is None:
-        return payload.request.candidate is success.request.candidate
-
-    return payload.request.candidate is refinement.source_candidate
+    return success.can_materialize_record_payload(payload)
 
 
 def _is_evaluation_request_in_candidate_domain(

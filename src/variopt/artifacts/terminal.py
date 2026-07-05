@@ -52,6 +52,131 @@ def _candidate_matches(
     return True
 
 
+def _record_request_metadata_matches(
+    left_record: RequestAlignedEvaluationRecord[CandidateT],
+    right_record: RequestAlignedEvaluationRecord[CandidateT],
+) -> bool:
+    if left_record.request.proposal_id != right_record.request.proposal_id:
+        return False
+
+    return (
+        left_record.request.proposal_evaluation_spec
+        == right_record.request.proposal_evaluation_spec
+    )
+
+
+def _record_candidate_projection_matches(
+    left_record: RequestAlignedEvaluationRecord[CandidateT],
+    right_record: RequestAlignedEvaluationRecord[CandidateT],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> bool:
+    if not _candidate_matches(
+        left_candidate=left_record.candidate,
+        right_candidate=right_record.candidate,
+        candidate_equal=candidate_equal,
+    ):
+        return False
+
+    return _candidate_matches(
+        left_candidate=left_record.request.candidate,
+        right_candidate=right_record.request.candidate,
+        candidate_equal=candidate_equal,
+    )
+
+
+def _observation_matches_success(
+    observation: Observation[CandidateT],
+    success: EvaluationSuccess[CandidateT, ObservationPayload],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> bool:
+    projected_observation = _observation_from_success(success)
+    if not _record_request_metadata_matches(observation, projected_observation):
+        return False
+
+    if not _record_candidate_projection_matches(
+        observation,
+        projected_observation,
+        candidate_equal=candidate_equal,
+    ):
+        return False
+
+    return (
+        observation.value == projected_observation.value
+        and observation.score == projected_observation.score
+        and observation.elapsed_seconds == projected_observation.elapsed_seconds
+    )
+
+
+def _objective_vector_record_matches_success(
+    record: ObjectiveVectorRecord[CandidateT],
+    success: EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> bool:
+    projected_record = _vector_record_from_success(success)
+    if not _record_request_metadata_matches(record, projected_record):
+        return False
+
+    if not _record_candidate_projection_matches(
+        record,
+        projected_record,
+        candidate_equal=candidate_equal,
+    ):
+        return False
+
+    return (
+        record.objective_values == projected_record.objective_values
+        and record.objective_scores == projected_record.objective_scores
+        and record.elapsed_seconds == projected_record.elapsed_seconds
+    )
+
+
+def _success_matching_observation(
+    observation: Observation[CandidateT],
+    successes: Sequence[EvaluationSuccess[CandidateT, ObservationPayload]],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> EvaluationSuccess[CandidateT, ObservationPayload]:
+    for success in successes:
+        if _observation_matches_success(
+            observation,
+            success,
+            candidate_equal=candidate_equal,
+        ):
+            return success
+
+    msg = "best_observation must come from observations"
+    raise ValueError(msg)
+
+
+def _successes_matching_vector_records(
+    records: Sequence[ObjectiveVectorRecord[CandidateT]],
+    successes: Sequence[EvaluationSuccess[CandidateT, ObjectiveVectorPayload]],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...]:
+    matched_successes: list[EvaluationSuccess[CandidateT, ObjectiveVectorPayload]] = []
+    for record in records:
+        for success in successes:
+            if _objective_vector_record_matches_success(
+                record,
+                success,
+                candidate_equal=candidate_equal,
+            ):
+                matched_successes.append(success)
+                break
+        else:
+            msg = (
+                "nondominated_records must equal the stable nondominated frontier "
+                "of records"
+            )
+            raise ValueError(msg)
+
+    return tuple(matched_successes)
+
+
 def _record_success_request(
     record: RequestAlignedEvaluationRecord[TerminalRecordCandidateT],
     *,
@@ -338,6 +463,7 @@ def _terminal_failure_evaluation_count(
         if type(failure) is not EvaluationFailure:
             msg = "failures must contain EvaluationFailure values"
             raise TypeError(msg)
+        failure.__post_init__()
 
     return sum(failure.evaluation_count for failure in failures)
 
@@ -661,18 +787,20 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             ...,
         ]
         normalized_best_success = best_success
+        post_init_candidate_equal = candidate_equal
         if observations is not None:
             normalized_successes = _successes_from_observations(
                 observations=observations,
                 refinements=_optional_refinement_tuple(refinements),
                 candidate_equal=candidate_equal,
             )
+            post_init_candidate_equal = None
             if best_observation is not None:
-                normalized_best_success = _successes_from_observations(
-                    observations=(best_observation,),
-                    refinements=(),
+                normalized_best_success = _success_matching_observation(
+                    best_observation,
+                    normalized_successes,
                     candidate_equal=candidate_equal,
-                )[0]
+                )
             elif normalized_successes:
                 normalized_best_success = min(
                     normalized_successes,
@@ -704,7 +832,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         object.__setattr__(self, "evaluation_count", evaluation_count)
         object.__setattr__(self, "trace", Trace() if trace is None else trace)
         object.__setattr__(self, "failures", _optional_failure_tuple(failures))
-        self.__post_init__(candidate_equal)
+        self.__post_init__(post_init_candidate_equal)
 
     def __post_init__(
         self,
@@ -749,9 +877,12 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "best_success must be set when successes are present"
             raise ValueError(msg)
 
-        if self.best_success is not None and self.best_success not in normalized_successes:
-            msg = "best_success must come from successes"
-            raise ValueError(msg)
+        if self.best_success is not None and not any(
+            success is self.best_success for success in normalized_successes
+        ):
+            if self.best_success not in normalized_successes:
+                msg = "best_success must come from successes"
+                raise ValueError(msg)
 
         if self.best_success is not None and any(
             success.payload.score < self.best_success.payload.score
@@ -1033,12 +1164,14 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
             ...,
         ]
+        post_init_candidate_equal = candidate_equal
         if records is not None:
             normalized_successes = _successes_from_vector_records(
                 records=records,
                 refinements=_optional_refinement_tuple(refinements),
                 candidate_equal=candidate_equal,
             )
+            post_init_candidate_equal = None
         elif successes is not None:
             normalized_successes = tuple(successes)
             if refinements is not None:
@@ -1047,13 +1180,14 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
                     refinements=refinements,
                     candidate_equal=candidate_equal,
                 )
+                post_init_candidate_equal = None
         else:
             normalized_successes = ()
 
         if nondominated_records is not None:
-            normalized_nondominated_successes = _successes_from_vector_records(
-                records=nondominated_records,
-                refinements=(),
+            normalized_nondominated_successes = _successes_matching_vector_records(
+                nondominated_records,
+                normalized_successes,
                 candidate_equal=candidate_equal,
             )
         elif records is not None:
@@ -1081,7 +1215,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         object.__setattr__(self, "failures", _optional_failure_tuple(failures))
         object.__setattr__(self, "_validated_frontier_source_successes", ())
         object.__setattr__(self, "_validated_frontier_successes", ())
-        self.__post_init__(candidate_equal)
+        self.__post_init__(post_init_candidate_equal)
 
     @classmethod
     def _from_prevalidated_frontier(

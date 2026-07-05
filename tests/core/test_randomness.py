@@ -187,6 +187,29 @@ class RandomnessContractTests:
         with pytest.raises(ValueError, match="key_hex"):
             _ = RandomStateSnapshot.from_dict(snapshot)
 
+    def test_random_state_snapshot_from_dict_rejects_unknown_algorithm(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["algorithm"] = "PCG64"
+
+        with pytest.raises(ValueError, match="algorithm"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    def test_random_state_snapshot_from_dict_rejects_short_mt19937_key(self) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["key_hex"] = "00000000"
+
+        with pytest.raises(ValueError, match="MT19937"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    def test_random_state_snapshot_from_dict_rejects_out_of_range_position(
+        self,
+    ) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["position"] = 625
+
+        with pytest.raises(ValueError, match="position"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
     def test_random_state_snapshot_rejects_runtime_bool_position(self) -> None:
         snapshot = RandomStateSnapshot.from_seed(7)
 

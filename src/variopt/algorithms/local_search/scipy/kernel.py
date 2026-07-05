@@ -210,18 +210,29 @@ class ScipyMinimizeKernel(
         failed_attempts: Sequence[
             EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
         ],
+        failure_request: EvaluationRequest[ContinuousCandidateT] | None = None,
     ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
         """Return one top-level attempt slot for a SciPy local-search episode."""
         if success is not None:
+            fallback_diagnostics = None
+            if success.kernel_diagnostics is None and len(failed_attempts) > 0:
+                fallback_diagnostics = KernelDiagnostics(
+                    backend="scipy.optimize.minimize",
+                    method=self.method,
+                )
             diagnostics = diagnostics_with_failed_attempts(
                 success.kernel_diagnostics,
                 failed_attempts,
+                fallback_diagnostics=fallback_diagnostics,
             )
             return EvaluationAttemptBatch(
                 attempts=(success.with_kernel_diagnostics(diagnostics),),
             )
 
-        return top_level_failure_from_failed_attempts(failed_attempts)
+        return top_level_failure_from_failed_attempts(
+            failed_attempts,
+            failure_request=failure_request,
+        )
 
     def _evaluate_original_proposal(
         self,
@@ -421,6 +432,11 @@ class ScipyMinimizeKernel(
                 proposal_evaluation_spec=proposal_evaluation_spec,
             )
 
+        original_request = EvaluationRequest(
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+        )
+
         def success_from_success(
             optimized_success: EvaluationSuccess[
                 ContinuousCandidateT,
@@ -573,6 +589,7 @@ class ScipyMinimizeKernel(
                 return self._attempt_batch_from_success_and_failures(
                     success=None,
                     failed_attempts=failed_attempts,
+                    failure_request=original_request,
                 )
             fallback_observation = original_success.scalar_observation()
             fallback_candidate = original_success.candidate
@@ -617,6 +634,7 @@ class ScipyMinimizeKernel(
                     return self._attempt_batch_from_success_and_failures(
                         success=None,
                         failed_attempts=failed_attempts,
+                        failure_request=original_request,
                     )
                 best_seen_success = min(
                     evaluated_successes_by_coordinates.values(),
@@ -660,6 +678,7 @@ class ScipyMinimizeKernel(
                     return self._attempt_batch_from_success_and_failures(
                         success=None,
                         failed_attempts=failed_attempts,
+                        failure_request=original_request,
                     )
                 best_seen_success = min(
                     evaluated_successes_by_coordinates.values(),

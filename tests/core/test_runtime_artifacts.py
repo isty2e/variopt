@@ -1,6 +1,7 @@
 """Tests for runtime artifact values and terminal surfaces."""
 
 import pickle
+from collections.abc import Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from inspect import signature
 from typing import Protocol, cast
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 from typing_extensions import override
 
+import variopt.artifacts.records as record_artifacts
 import variopt.artifacts.terminal as terminal_artifacts
 from tests import conformance as contract_cases
 from tests.problem_artifact_support import (
@@ -82,9 +84,40 @@ class TerminalSurfacePickleHooks(Protocol):
         ...
 
 
+class ExceptionSnapshotPickleHooks(Protocol):
+    """Dynamically installed pickle hooks for exception snapshot tests."""
+
+    def __setstate__(self, state: tuple[str, str, str]) -> None:
+        """Restore one exception-snapshot pickle state."""
+        ...
+
+
+class EvaluationFailurePickleHooks(Protocol):
+    """Dynamically installed pickle hooks for evaluation-failure tests."""
+
+    def __setstate__(
+        self,
+        state: tuple[EvaluationRequest[int], EvaluationExceptionSnapshot, int],
+    ) -> None:
+        """Restore one evaluation-failure pickle state."""
+        ...
+
+
 def terminal_surface_pickle_hooks(surface: object) -> TerminalSurfacePickleHooks:
     """Return dynamically installed terminal-surface pickle hooks for tests."""
     return cast(TerminalSurfacePickleHooks, surface)
+
+
+def exception_snapshot_pickle_hooks(
+    snapshot: object,
+) -> ExceptionSnapshotPickleHooks:
+    """Return dynamically installed exception-snapshot pickle hooks for tests."""
+    return cast(ExceptionSnapshotPickleHooks, snapshot)
+
+
+def evaluation_failure_pickle_hooks(failure: object) -> EvaluationFailurePickleHooks:
+    """Return dynamically installed evaluation-failure pickle hooks for tests."""
+    return cast(EvaluationFailurePickleHooks, failure)
 
 
 def terminal_surface_pickle_state_with_field(
@@ -446,6 +479,41 @@ class RuntimeArtifactsTests:
 
         with pytest.raises(ValueError, match="objective_values must not be empty"):
             _ = ObjectiveVectorPayload(objective_values=(), objective_scores=())
+
+    def test_objective_vector_payload_constructor_normalizes_vectors_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: list[str] = []
+        original_normalize_objective_vector = (
+            record_artifacts.normalize_objective_vector
+        )
+
+        def counting_normalize_objective_vector(
+            *,
+            values: Sequence[float],
+            field_name: str,
+        ) -> tuple[float, ...]:
+            calls.append(field_name)
+            return original_normalize_objective_vector(
+                values=values,
+                field_name=field_name,
+            )
+
+        monkeypatch.setattr(
+            record_artifacts,
+            "normalize_objective_vector",
+            counting_normalize_objective_vector,
+        )
+
+        payload = ObjectiveVectorPayload(
+            objective_values=(1.0, 2.0),
+            objective_scores=(3.0, 4.0),
+        )
+
+        assert payload.objective_values == (1.0, 2.0)
+        assert payload.objective_scores == (3.0, 4.0)
+        assert calls == ["objective_values", "objective_scores"]
 
     def test_objective_vector_payload_normalizes_numeric_fields(self) -> None:
         payload = ObjectiveVectorPayload(
@@ -837,6 +905,47 @@ class RuntimeArtifactsTests:
 
         assert restored.payload.request.candidate.stable_id == 1
         assert restored.payload.candidate.stable_id == 2
+
+    def test_refined_record_payload_materializes_with_candidate_equality(
+        self,
+    ) -> None:
+        source_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(
+                proposal=Proposal(
+                    candidate=SpaceOwnedEqualityCandidate(1),
+                    proposal_id="p-1",
+                )
+            )
+        )
+        refined_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(
+                proposal=Proposal(
+                    candidate=SpaceOwnedEqualityCandidate(2),
+                    proposal_id="p-1",
+                )
+            )
+        )
+        payload = SpaceOwnedRecord(
+            request=source_request,
+            candidate=refined_request.candidate,
+            label="refined",
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            SpaceOwnedRecord,
+        ] = EvaluationSuccess(
+            request=refined_request,
+            payload=payload,
+            refinement=CandidateRefinement(
+                source_candidate=SpaceOwnedEqualityCandidate(1),
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        materialized = materialize_success_record(success)
+
+        assert materialized is payload
 
     def test_evaluation_success_with_payload_after_pickle_requires_candidate_equal(
         self,
@@ -1343,6 +1452,36 @@ class RuntimeArtifactsTests:
 
         assert restored_failure == failure
         assert restored_failure.exception.exception_type == "builtins.RuntimeError"
+
+    def test_exception_snapshot_setstate_rejects_invalid_state(self) -> None:
+        snapshot = object.__new__(EvaluationExceptionSnapshot)
+        pickle_hooks = exception_snapshot_pickle_hooks(snapshot)
+
+        with pytest.raises(ValueError, match="exception_module"):
+            pickle_hooks.__setstate__(("", "ValueError", "bad"))
+
+    def test_evaluation_failure_setstate_rejects_invalid_state(self) -> None:
+        failure = cast(EvaluationFailure[int], object.__new__(EvaluationFailure))
+        snapshot = EvaluationExceptionSnapshot.from_exception(ValueError("bad"))
+        pickle_hooks = evaluation_failure_pickle_hooks(failure)
+
+        with pytest.raises(ValueError, match="evaluation_count must be non-negative"):
+            pickle_hooks.__setstate__((make_int_request(4, "p-1"), snapshot, -1))
+
+    def test_evaluation_failure_setstate_rejects_invalid_nested_exception(
+        self,
+    ) -> None:
+        failure = cast(EvaluationFailure[int], object.__new__(EvaluationFailure))
+        invalid_snapshot = object.__new__(EvaluationExceptionSnapshot)
+        object.__setattr__(invalid_snapshot, "exception_module", "")
+        object.__setattr__(invalid_snapshot, "exception_qualname", "ValueError")
+        object.__setattr__(invalid_snapshot, "message", "bad")
+        pickle_hooks = evaluation_failure_pickle_hooks(failure)
+
+        with pytest.raises(ValueError, match="exception_module"):
+            pickle_hooks.__setstate__(
+                (make_int_request(4, "p-1"), invalid_snapshot, 1),
+            )
 
     def test_evaluation_failure_rejects_negative_evaluation_count(self) -> None:
         request = make_int_request(4, "p-1")
@@ -2889,6 +3028,60 @@ class RuntimeArtifactsTests:
         with pytest.raises(TypeError, match="field count mismatch"):
             pickle_hooks.__setstate__(current_state + ["future-field"])
 
+    def test_terminal_surface_setstate_rejects_invalid_nested_failure(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        result = RunResult[int].from_observations((observation,))
+        invalid_failure = cast(EvaluationFailure[int], object.__new__(EvaluationFailure))
+        object.__setattr__(invalid_failure, "request", make_int_request(2, "p-2"))
+        object.__setattr__(
+            invalid_failure,
+            "exception",
+            EvaluationExceptionSnapshot.from_exception(ValueError("bad candidate")),
+        )
+        object.__setattr__(invalid_failure, "evaluation_count", -1)
+        pickle_state = terminal_surface_pickle_state_with_field(
+            result,
+            field_name="failures",
+            value=(invalid_failure,),
+        )
+        pickle_hooks = terminal_surface_pickle_hooks(result)
+
+        with pytest.raises(ValueError, match="evaluation_count must be non-negative"):
+            pickle_hooks.__setstate__(pickle_state)
+
+    def test_terminal_surface_setstate_rejects_invalid_nested_failure_exception(
+        self,
+    ) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        result = RunResult[int].from_observations((observation,))
+        invalid_snapshot = object.__new__(EvaluationExceptionSnapshot)
+        object.__setattr__(invalid_snapshot, "exception_module", "")
+        object.__setattr__(invalid_snapshot, "exception_qualname", "ValueError")
+        object.__setattr__(invalid_snapshot, "message", "bad candidate")
+        invalid_failure = cast(EvaluationFailure[int], object.__new__(EvaluationFailure))
+        object.__setattr__(invalid_failure, "request", make_int_request(2, "p-2"))
+        object.__setattr__(invalid_failure, "exception", invalid_snapshot)
+        object.__setattr__(invalid_failure, "evaluation_count", 1)
+        pickle_state = terminal_surface_pickle_state_with_field(
+            result,
+            field_name="failures",
+            value=(invalid_failure,),
+        )
+        pickle_hooks = terminal_surface_pickle_hooks(result)
+
+        with pytest.raises(ValueError, match="exception_module"):
+            pickle_hooks.__setstate__(pickle_state)
+
     def test_terminal_surface_pickle_state_matches_current_field_shape(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
         observation = Observation(
@@ -3480,6 +3673,91 @@ class RuntimeArtifactsTests:
         assert result.refinements == (refinement,)
         assert report.refinements == (refinement,)
         assert surface.refinements == (refinement,)
+
+    def test_run_result_explicit_best_observation_uses_candidate_equality(
+        self,
+    ) -> None:
+        worse_observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(3),
+                proposal_id="p-worse",
+            ),
+            candidate=SpaceOwnedEqualityCandidate(3),
+            value=9.0,
+            score=9.0,
+        )
+        best_observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2),
+                proposal_id="p-best",
+            ),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            value=1.0,
+            score=1.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+
+        result = RunResult[SpaceOwnedEqualityCandidate](
+            best_observation=best_observation,
+            observations=(worse_observation, best_observation),
+            refinements=(None, refinement),
+            evaluation_count=2,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert result.best_success is result.successes[1]
+        best_success = result.best_success
+        assert best_success is not None
+        assert best_success.refinement is refinement
+        assert result.best_observation is not None
+        assert result.best_observation.value == 1.0
+
+    def test_nondominated_explicit_records_use_candidate_equality(
+        self,
+    ) -> None:
+        dominated_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(3),
+                proposal_id="p-dominated",
+            ),
+            candidate=SpaceOwnedEqualityCandidate(3),
+            objective_values=(5.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        frontier_record = ObjectiveVectorRecord.from_objective_values(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2),
+                proposal_id="p-frontier",
+            ),
+            candidate=SpaceOwnedEqualityCandidate(1),
+            objective_values=(1.0,),
+            directions=(OptimizationDirection.MINIMIZE,),
+        )
+        refinement = CandidateRefinement(
+            source_candidate=SpaceOwnedEqualityCandidate(2),
+            refined_candidate=SpaceOwnedEqualityCandidate(1),
+            changed_leaf_paths=((),),
+        )
+
+        surface = NondominatedRunSurface[SpaceOwnedEqualityCandidate](
+            records=(dominated_record, frontier_record),
+            nondominated_records=(frontier_record,),
+            refinements=(None, refinement),
+            evaluation_count=2,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert surface.nondominated_successes == (surface.successes[1],)
+        assert surface.nondominated_successes[0].refinement is refinement
+        projected_frontier = surface.nondominated_records[0]
+        assert projected_frontier.request.proposal_id == "p-frontier"
+        assert projected_frontier.request.candidate.stable_id == 2
+        assert projected_frontier.candidate.stable_id == 1
+        assert projected_frontier.objective_scores == (1.0,)
 
     def test_terminal_surface_replace_preserves_candidate_equality(self) -> None:
         def reject_candidate_equal(

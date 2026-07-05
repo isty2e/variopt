@@ -49,14 +49,14 @@ def evaluate_batch_exact_async(
     EvaluationAttemptBatch[CandidateT, StudyPayloadT]
         Dense attempt batch aligned with ``requests``.
     """
-    if supports_attempt_batches(async_evaluator):
+    if supports_attempt_batch_sessions(async_evaluator):
+        attempt_session = async_evaluator.open_attempt_session(problem, requests)
+    elif supports_attempt_batches(async_evaluator):
         return async_evaluator.evaluate_attempts(problem, requests)
-
-    if not supports_attempt_batch_sessions(async_evaluator):
+    else:
         msg = "exact_async evaluator must expose attempt-batch sessions"
         raise TypeError(msg)
 
-    attempt_session = async_evaluator.open_attempt_session(problem, requests)
     ordered_attempts: list[
         EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None
     ] = [None] * attempt_session.handle.request_count

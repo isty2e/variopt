@@ -229,8 +229,10 @@ currently keep the default rejection contract. See
 
 Raised when study orchestration hits a hard evaluator, backend, or assimilation
 failure that cannot be represented as a recorded `EvaluationFailure`. Carries a
-`partial_report` and `partial_state` for fully assimilated work, plus the latest
-checkpoint-safe report and state when one was reached. See
+`partial_report` for attempts observed before the hard failure and a
+`partial_state` at the failure boundary; these projections are not guaranteed to
+be mutually aligned when the failure occurs during batch assimilation. Use the
+checkpoint-safe report and state for aligned recovery when one was reached. See
 [`RunExecutionFailed`][variopt.RunExecutionFailed].
 
 ## RunReport

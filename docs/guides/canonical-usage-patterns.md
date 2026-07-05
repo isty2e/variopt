@@ -7,7 +7,7 @@ payloads; execution artifacts own request identity, success/failure attempt
 slots, and terminal report projections.
 
 Use [`Study.optimize`][variopt.Study.optimize]
-when the problem yields scalar
+when the run should materialize scalar
 [`Observation`][variopt.Observation]
 records and you want one scalar
 [`RunResult`][variopt.RunResult].

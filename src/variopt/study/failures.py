@@ -30,15 +30,18 @@ class RunExecutionFailed(
     RuntimeError,
     Generic[CandidateT, RunMethodStateT, RunFailureRecordT],
 ):
-    """Hard study-run failure with the recoverable partial run projection.
+    """Hard study-run failure with partial and checkpoint-safe projections.
 
     Parameters
     ----------
     partial_report : RunReport[CandidateT, RunFailureRecordT]
-        Report materialized from attempts fully assimilated before the hard
-        failure. This report is not necessarily checkpoint-safe.
+        Report materialized from successful and failed attempts available before
+        the hard failure. When failure occurs while assimilating a batch, this
+        report may include attempts that are not reflected in ``partial_state``.
     partial_state : RunMethodStateT
-        Run-method state aligned with ``partial_report``.
+        Run-method state at the failure boundary. Use
+        ``checkpoint_safe_report`` and ``checkpoint_safe_state`` when report and
+        state alignment is required for recovery.
     checkpoint_safe_report : RunReport[CandidateT, RunFailureRecordT] | None
         Latest checkpoint-safe report reached before the failure, if any.
     checkpoint_safe_state : RunMethodStateT | None

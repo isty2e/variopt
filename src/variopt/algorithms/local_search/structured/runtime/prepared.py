@@ -75,9 +75,15 @@ def structured_episode_attempt_batch(
         the total failed evaluation cost.
     """
     if success is not None:
+        fallback_diagnostics = None
+        if success.kernel_diagnostics is None and len(failed_attempts) > 0:
+            fallback_diagnostics = KernelDiagnostics(
+                backend="structured.local_search",
+            )
         diagnostics = diagnostics_with_failed_attempts(
             success.kernel_diagnostics,
             failed_attempts,
+            fallback_diagnostics=fallback_diagnostics,
         )
         return EvaluationAttemptBatch(
             attempts=(success.with_kernel_diagnostics(diagnostics),),

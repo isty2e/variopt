@@ -48,6 +48,7 @@ from variopt.spaces import (
     SpaceBoundaryValue,
 )
 from variopt.spaces.projections import ContinuousStructuredSpaceCodec
+from variopt.study.common import build_evaluation_requests, validate_aligned_attempts
 
 BoundaryRunnerT = TypeVar("BoundaryRunnerT")
 CandidateRunnerT = TypeVar("CandidateRunnerT")
@@ -770,6 +771,175 @@ class ScipyMinimizeKernelTests:
             for failure in attempts.failures
         )
         assert attempts.evaluation_count == 1
+
+    def test_uncached_failed_final_coordinate_rebases_failure_to_original_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        query = self.make_query(problem=problem, candidate=4.0)
+        runner_queries: list[
+            ProposalBatchQuery[float | int, float, ObservationPayload]
+        ] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                objective_in_coordinate_space,
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            return FakeScipyOptimizeResult(
+                x=(2.0,),
+                fun=0.0,
+                nfev=1,
+                success=True,
+                message="final coordinate failed",
+            )
+
+        def failing_final_runner(
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            runner_queries.append(local_query)
+            proposal = local_query.proposals[0]
+            return EvaluationAttemptBatch(
+                attempts=(
+                    EvaluationFailure[float](
+                        request=EvaluationRequest(proposal=proposal),
+                        exception=EvaluationExceptionSnapshot.from_exception(
+                            ValueError("bad final coordinate")
+                        ),
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        attempts = kernel.run(query, failing_final_runner)
+
+        assert len(runner_queries) == 1
+        assert runner_queries[0].proposals[0].candidate == 2.0
+        assert runner_queries[0].proposals[0].proposal_id is None
+        assert attempts.successes == ()
+        assert attempts.failure_indices == (0,)
+        failure = attempts.failures[0]
+        assert failure.candidate == 4.0
+        assert failure.proposal_id == "p-1"
+        assert failure.exception.message == "bad final coordinate"
+        assert attempts.evaluation_count == 1
+
+        top_level_requests = build_evaluation_requests(
+            query.proposals,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        validate_aligned_attempts(
+            top_level_requests,
+            attempts,
+            candidate_equal=problem.space.candidates_equal,
+        )
+
+    def test_cached_failed_final_coordinate_rebases_failure_to_original_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        query = self.make_query(problem=problem, candidate=4.0)
+        runner_queries: list[
+            ProposalBatchQuery[float | int, float, ObservationPayload]
+        ] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            failed_score = objective_in_coordinate_space((2.0,))
+            assert failed_score == float("inf")
+            return FakeScipyOptimizeResult(
+                x=(2.0,),
+                fun=0.0,
+                nfev=1,
+                success=True,
+                message="cached final coordinate failed",
+            )
+
+        def failing_final_runner(
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            runner_queries.append(local_query)
+            proposal = local_query.proposals[0]
+            return EvaluationAttemptBatch(
+                attempts=(
+                    EvaluationFailure[float](
+                        request=EvaluationRequest(proposal=proposal),
+                        exception=EvaluationExceptionSnapshot.from_exception(
+                            ValueError("bad cached final coordinate")
+                        ),
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        attempts = kernel.run(query, failing_final_runner)
+
+        assert len(runner_queries) == 1
+        assert runner_queries[0].proposals[0].candidate == 2.0
+        assert runner_queries[0].proposals[0].proposal_id is None
+        assert attempts.successes == ()
+        assert attempts.failure_indices == (0,)
+        failure = attempts.failures[0]
+        assert failure.candidate == 4.0
+        assert failure.proposal_id == "p-1"
+        assert failure.exception.message == "bad cached final coordinate"
+        assert attempts.evaluation_count == 1
+
+        top_level_requests = build_evaluation_requests(
+            query.proposals,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        validate_aligned_attempts(
+            top_level_requests,
+            attempts,
+            candidate_equal=problem.space.candidates_equal,
+        )
 
     def test_scipy_rejects_multi_slot_runner_attempt_for_single_proposal(
         self,

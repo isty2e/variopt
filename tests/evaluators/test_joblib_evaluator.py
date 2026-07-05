@@ -1,14 +1,16 @@
 """Tests for execution-only joblib evaluators."""
 
+import pickle
 import time
+import warnings
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures.process import BrokenProcessPool as FuturesBrokenProcessPool
 from dataclasses import dataclass
 from importlib import import_module
 from queue import Queue
-from threading import current_thread
+from threading import Event, Thread, current_thread
 from types import ModuleType
-from typing import Literal, TypeGuard, TypeVar, cast, final
+from typing import Generic, Literal, TypeGuard, TypeVar, cast, final
 
 import numpy as np
 import pytest
@@ -50,6 +52,7 @@ from variopt.evaluators.joblib.batches import (
     AsyncJoblibExhaustedResult,
     AsyncJoblibFailedResult,
     AsyncJoblibRequestInput,
+    SuspendedAsyncJoblibBatch,
 )
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -62,6 +65,19 @@ from variopt.execution import (
 
 AttemptCandidateT = TypeVar("AttemptCandidateT")
 SessionEvaluationT = TypeVar("SessionEvaluationT")
+QueuedEventT = TypeVar("QueuedEventT")
+OutcomeJoblibQueueEvent = (
+    AsyncJoblibCompletedResult[
+        EvaluationOutcome[int, RequestAlignedEvaluationRecord]
+    ]
+    | AsyncJoblibFailedResult
+    | AsyncJoblibExhaustedResult
+)
+AttemptJoblibQueueEvent = (
+    AsyncJoblibCompletedResult[EvaluationAttemptBatch[int, Observation[int]]]
+    | AsyncJoblibFailedResult
+    | AsyncJoblibExhaustedResult
+)
 InjectedAsyncJoblibFailureMode = Literal[
     "infrastructure_once",
     "infrastructure_always",
@@ -429,6 +445,165 @@ class FlakyAsyncJoblibEvaluator(AsyncJoblibEvaluator[int, int, Observation[int]]
 
 
 @final
+class ResumeStartFailureAsyncJoblibEvaluator(
+    AsyncJoblibEvaluator[int, int, Observation[int]]
+):
+    """Async evaluator that can fail exactly one resume stream startup."""
+
+    def __init__(self) -> None:
+        super().__init__(backend="threading", n_jobs=2)
+        self._fail_next_batch_start = False
+        self._fail_next_attempt_start = False
+        self._batch_start_barrier: tuple[Event, Event] | None = None
+        self._attempt_start_barrier: tuple[Event, Event] | None = None
+        self.batch_start_count = 0
+        self.attempt_start_count = 0
+
+    def fail_next_batch_start(self) -> None:
+        """Make the next standard active-batch startup fail."""
+        self._fail_next_batch_start = True
+
+    def fail_next_attempt_start(self) -> None:
+        """Make the next attempt-batch startup fail."""
+        self._fail_next_attempt_start = True
+
+    def block_next_batch_start(self, *, entered: Event, release: Event) -> None:
+        """Block the next standard batch startup at the resume claim boundary."""
+        self._batch_start_barrier = (entered, release)
+
+    def block_next_attempt_start(self, *, entered: Event, release: Event) -> None:
+        """Block the next attempt batch startup at the resume claim boundary."""
+        self._attempt_start_barrier = (entered, release)
+
+    def install_suspended_batch(
+        self,
+        *,
+        problem: Problem[int, int, Observation[int]],
+        requests: tuple[EvaluationRequest[int], ...],
+        completed_indices: set[int],
+    ) -> EvaluationBatchResumeHandle:
+        """Install a suspended standard batch without starting joblib work."""
+        handle = EvaluationBatchResumeHandle(
+            batch_id=f"joblib-{next(self._batch_counter)}",
+            request_count=len(requests),
+            completed_count=len(completed_indices),
+        )
+        self._suspended_batches[handle.batch_id] = SuspendedAsyncJoblibBatch(
+            problem=problem,
+            request_inputs=_request_inputs(requests),
+            execution_resources=self.execution_resources(),
+            completed_indices=set(completed_indices),
+        )
+        return handle
+
+    def install_suspended_attempt_batch(
+        self,
+        *,
+        problem: Problem[int, int, Observation[int]],
+        requests: tuple[EvaluationRequest[int], ...],
+        completed_indices: set[int],
+    ) -> EvaluationBatchResumeHandle:
+        """Install a suspended attempt batch without starting joblib work."""
+        handle = EvaluationBatchResumeHandle(
+            batch_id=f"joblib-attempt-{next(self._batch_counter)}",
+            request_count=len(requests),
+            completed_count=len(completed_indices),
+        )
+        self._suspended_attempt_batches[handle.batch_id] = SuspendedAsyncJoblibBatch(
+            problem=problem,
+            request_inputs=_request_inputs(requests),
+            execution_resources=self.execution_resources(),
+            completed_indices=set(completed_indices),
+        )
+        return handle
+
+    @override
+    def _start_active_batch(
+        self,
+        *,
+        problem: Problem[int, int, Observation[int]],
+        request_inputs: tuple[AsyncJoblibRequestInput[int], ...],
+        execution_resources: ExecutionResources,
+        completed_indices: set[int] | None = None,
+        infrastructure_retry_count: int = 0,
+        attempt_inputs: Sequence[AsyncJoblibRequestInput[int]] | None = None,
+    ) -> ActiveAsyncJoblibBatch[
+        int,
+        int,
+        EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+        Observation[int],
+    ]:
+        self.batch_start_count += 1
+        if self.batch_start_count > 1 and self._batch_start_barrier is not None:
+            msg = "duplicate batch resume startup"
+            raise AssertionError(msg)
+
+        if self._batch_start_barrier is not None:
+            entered, release = self._batch_start_barrier
+            entered.set()
+            if not release.wait(timeout=5.0):
+                msg = "timed out waiting to release batch startup"
+                raise RuntimeError(msg)
+            self._batch_start_barrier = None
+
+        if self._fail_next_batch_start:
+            self._fail_next_batch_start = False
+            msg = "forced resume startup failure"
+            raise RuntimeError(msg)
+
+        return super()._start_active_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            execution_resources=execution_resources,
+            completed_indices=completed_indices,
+            infrastructure_retry_count=infrastructure_retry_count,
+            attempt_inputs=attempt_inputs,
+        )
+
+    @override
+    def _start_active_attempt_batch(
+        self,
+        *,
+        problem: Problem[int, int, Observation[int]],
+        request_inputs: tuple[AsyncJoblibRequestInput[int], ...],
+        execution_resources: ExecutionResources,
+        completed_indices: set[int] | None = None,
+        infrastructure_retry_count: int = 0,
+        attempt_inputs: Sequence[AsyncJoblibRequestInput[int]] | None = None,
+    ) -> ActiveAsyncJoblibBatch[
+        int,
+        int,
+        EvaluationAttemptBatch[int, Observation[int]],
+        Observation[int],
+    ]:
+        self.attempt_start_count += 1
+        if self.attempt_start_count > 1 and self._attempt_start_barrier is not None:
+            msg = "duplicate attempt resume startup"
+            raise AssertionError(msg)
+
+        if self._attempt_start_barrier is not None:
+            entered, release = self._attempt_start_barrier
+            entered.set()
+            if not release.wait(timeout=5.0):
+                msg = "timed out waiting to release attempt startup"
+                raise RuntimeError(msg)
+            self._attempt_start_barrier = None
+
+        if self._fail_next_attempt_start:
+            self._fail_next_attempt_start = False
+            msg = "forced attempt resume startup failure"
+            raise RuntimeError(msg)
+
+        return super()._start_active_attempt_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            execution_resources=execution_resources,
+            completed_indices=completed_indices,
+            infrastructure_retry_count=infrastructure_retry_count,
+            attempt_inputs=attempt_inputs,
+        )
+
+
 class AbortInspectionAsyncJoblibEvaluator(
     AsyncJoblibEvaluator[int, int, Observation[int]]
 ):
@@ -449,6 +624,17 @@ class AbortInspectionAsyncJoblibEvaluator(
     def has_active_batch(self, handle: EvaluationBatchHandle) -> bool:
         return handle.batch_id in self._active_batches
 
+    def active_batch_for(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> ActiveAsyncJoblibBatch[
+        int,
+        int,
+        EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+        Observation[int],
+    ]:
+        return self._active_batches[handle.batch_id]
+
     def install_active_attempt_batch(
         self,
         handle: EvaluationBatchHandle,
@@ -463,6 +649,17 @@ class AbortInspectionAsyncJoblibEvaluator(
 
     def has_active_attempt_batch(self, handle: EvaluationBatchHandle) -> bool:
         return handle.batch_id in self._active_attempt_batches
+
+    def active_attempt_batch_for(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> ActiveAsyncJoblibBatch[
+        int,
+        int,
+        EvaluationAttemptBatch[int, Observation[int]],
+        Observation[int],
+    ]:
+        return self._active_attempt_batches[handle.batch_id]
 
     def replace_active_batch_attempt(
         self,
@@ -497,11 +694,89 @@ class AbortInspectionAsyncJoblibEvaluator(
         )
 
 
+@final
+class CancelAfterRetryDeclinedAsyncJoblibEvaluator(
+    AbortInspectionAsyncJoblibEvaluator
+):
+    """Evaluator that cancels a batch after retry policy declines retry."""
+
+    @override
+    def _retry_infrastructure_failure(
+        self,
+        *,
+        handle: EvaluationBatchHandle,
+        active_batch: ActiveAsyncJoblibBatch[
+            int,
+            int,
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+            Observation[int],
+        ],
+        cause: BaseException,
+    ) -> bool:
+        should_retry = super()._retry_infrastructure_failure(
+            handle=handle,
+            active_batch=active_batch,
+            cause=cause,
+        )
+        if not should_retry:
+            self.cancel(handle)
+        return should_retry
+
+    @override
+    def _retry_attempt_infrastructure_failure(
+        self,
+        *,
+        handle: EvaluationBatchHandle,
+        active_batch: ActiveAsyncJoblibBatch[
+            int,
+            int,
+            EvaluationAttemptBatch[int, Observation[int]],
+            Observation[int],
+        ],
+        cause: BaseException,
+    ) -> bool:
+        should_retry = super()._retry_attempt_infrastructure_failure(
+            handle=handle,
+            active_batch=active_batch,
+            cause=cause,
+        )
+        if not should_retry:
+            self.cancel_attempt_batch(handle)
+        return should_retry
+
+
 @dataclass(slots=True)
 class AbortEventLog:
     """Mutable event log for abort-order assertions."""
 
     events: list[str]
+
+
+@dataclass(slots=True)
+class WaitThreadCapture(Generic[SessionEvaluationT]):
+    """Captured result or exception from one waiter thread."""
+
+    completion_groups: tuple[CompletionGroup[SessionEvaluationT], ...] | None = None
+    exception: BaseException | None = None
+
+
+@final
+class SignalingQueue(Queue[QueuedEventT], Generic[QueuedEventT]):
+    """Queue fixture that signals when a waiter starts a blocking read."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered_get = Event()
+
+    @override
+    def get(
+        self,
+        block: bool = True,
+        timeout: float | None = None,
+    ) -> QueuedEventT:
+        """Signal the blocking read before delegating to ``Queue``."""
+        self.entered_get.set()
+        return super().get(block=block, timeout=timeout)
 
 
 def _requests(
@@ -792,6 +1067,35 @@ class AsyncJoblibEvaluatorTests:
     def test_rejects_negative_infrastructure_retry_limit(self) -> None:
         with pytest.raises(ValueError):
             _ = AsyncJoblibEvaluator[int, int, Observation[int]](infrastructure_retry_limit=-1)
+
+    def test_pickle_round_trip_preserves_config_and_rebuilds_runtime_state(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](
+            backend="threading",
+            n_jobs=1,
+            infrastructure_retry_limit=2,
+        )
+
+        restored = cast(
+            AsyncJoblibEvaluator[int, int, Observation[int]],
+            pickle.loads(pickle.dumps(evaluator)),
+        )
+
+        assert restored.backend == "threading"
+        assert restored.n_jobs == 1
+        assert restored.infrastructure_retry_limit == 2
+        session = restored.open_session(
+            problem,
+            _requests((Proposal(candidate=3, proposal_id="p-1"),)),
+        )
+        pending_session = _require_pending_aware_session(session)
+
+        completion_groups = tuple(pending_session.wait(timeout=5.0))
+
+        assert len(completion_groups) == 1
+        assert completion_groups[0].outcomes[0].observation.value == 9.0
 
     def test_evaluate_attempts_records_user_failure_without_retrying(
         self,
@@ -1494,6 +1798,416 @@ class AsyncJoblibEvaluatorTests:
         assert event_log.events == ["abort"]
         assert not evaluator.has_active_attempt_batch(handle)
 
+    def test_wait_after_concurrent_cancel_does_not_retry_stale_batch(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        handle = EvaluationBatchHandle(batch_id="joblib-stale-cancel", request_count=1)
+        result_queue = SignalingQueue[OutcomeJoblibQueueEvent]()
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+        )
+        active_batch.result_queue = result_queue
+        evaluator = AbortInspectionAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=1,
+            infrastructure_retry_limit=1,
+        )
+        evaluator.install_active_batch(handle, active_batch)
+        capture: WaitThreadCapture[
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord]
+        ] = WaitThreadCapture()
+
+        def wait_for_batch() -> None:
+            try:
+                capture.completion_groups = evaluator.wait(handle, timeout=5.0)
+            except BaseException as exception:
+                capture.exception = exception
+
+        waiter = Thread(target=wait_for_batch, name="stale-cancel-waiter")
+        waiter.start()
+        assert result_queue.entered_get.wait(timeout=5.0)
+
+        evaluator.cancel(handle)
+        result_queue.put(AsyncJoblibExhaustedResult())
+        waiter.join(timeout=5.0)
+
+        assert not waiter.is_alive()
+        assert isinstance(capture.exception, BatchExecutionFailed)
+        assert capture.exception.kind == "cancelled"
+        assert capture.completion_groups is None
+        assert active_batch.infrastructure_retry_count == 0
+        assert not evaluator.has_active_batch(handle)
+
+    def test_wait_after_concurrent_cancel_rejects_stale_completion(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-stale-cancel-completion",
+            request_count=1,
+        )
+        result_queue = SignalingQueue[OutcomeJoblibQueueEvent]()
+        stale_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+        )
+        active_batch.result_queue = result_queue
+        evaluator = AbortInspectionAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=1,
+        )
+        evaluator.install_active_batch(handle, active_batch)
+        capture: WaitThreadCapture[
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord]
+        ] = WaitThreadCapture()
+
+        def wait_for_batch() -> None:
+            try:
+                capture.completion_groups = evaluator.wait(handle, timeout=5.0)
+            except BaseException as exception:
+                capture.exception = exception
+
+        waiter = Thread(target=wait_for_batch, name="stale-completion-waiter")
+        waiter.start()
+        assert result_queue.entered_get.wait(timeout=5.0)
+
+        evaluator.cancel(handle)
+        result_queue.put(AsyncJoblibCompletedResult(index=0, outcome=stale_outcome))
+        waiter.join(timeout=5.0)
+
+        assert not waiter.is_alive()
+        assert isinstance(capture.exception, BatchExecutionFailed)
+        assert capture.exception.kind == "cancelled"
+        assert capture.completion_groups is None
+        assert active_batch.completed_indices == set()
+        assert not evaluator.has_active_batch(handle)
+
+    def test_attempt_wait_after_concurrent_suspend_does_not_retry_stale_batch(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-attempt-stale-suspend",
+            request_count=1,
+        )
+        result_queue = SignalingQueue[AttemptJoblibQueueEvent]()
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationAttemptBatch[int, Observation[int]]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        active_batch = _active_attempt_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+        )
+        active_batch.result_queue = result_queue
+        evaluator = AbortInspectionAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=1,
+            infrastructure_retry_limit=1,
+        )
+        evaluator.install_active_attempt_batch(handle, active_batch)
+        capture: WaitThreadCapture[
+            EvaluationAttemptBatch[int, Observation[int]]
+        ] = WaitThreadCapture()
+
+        def wait_for_attempt_batch() -> None:
+            try:
+                capture.completion_groups = evaluator.wait_attempts(
+                    handle,
+                    timeout=5.0,
+                )
+            except BaseException as exception:
+                capture.exception = exception
+
+        waiter = Thread(target=wait_for_attempt_batch, name="stale-suspend-waiter")
+        waiter.start()
+        assert result_queue.entered_get.wait(timeout=5.0)
+
+        resume_handle = evaluator.suspend_attempt_batch(handle)
+        result_queue.put(AsyncJoblibExhaustedResult())
+        waiter.join(timeout=5.0)
+
+        assert resume_handle.batch_id == handle.batch_id
+        assert resume_handle.completed_count == 0
+        assert not waiter.is_alive()
+        assert isinstance(capture.exception, BatchExecutionFailed)
+        assert capture.exception.kind == "cancelled"
+        assert capture.completion_groups is None
+        assert active_batch.infrastructure_retry_count == 0
+        assert not evaluator.has_active_attempt_batch(handle)
+
+    def test_attempt_wait_after_concurrent_cancel_does_not_retry_stale_failure(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-attempt-stale-cancel-failure",
+            request_count=1,
+        )
+        result_queue = SignalingQueue[AttemptJoblibQueueEvent]()
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationAttemptBatch[int, Observation[int]]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        active_batch = _active_attempt_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+        )
+        active_batch.result_queue = result_queue
+        evaluator = AbortInspectionAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=1,
+            infrastructure_retry_limit=1,
+        )
+        evaluator.install_active_attempt_batch(handle, active_batch)
+        capture: WaitThreadCapture[
+            EvaluationAttemptBatch[int, Observation[int]]
+        ] = WaitThreadCapture()
+
+        def wait_for_attempt_batch() -> None:
+            try:
+                capture.completion_groups = evaluator.wait_attempts(
+                    handle,
+                    timeout=5.0,
+                )
+            except BaseException as exception:
+                capture.exception = exception
+
+        waiter = Thread(target=wait_for_attempt_batch, name="stale-failure-waiter")
+        waiter.start()
+        assert result_queue.entered_get.wait(timeout=5.0)
+
+        evaluator.cancel_attempt_batch(handle)
+        result_queue.put(
+            AsyncJoblibFailedResult(
+                exception=FuturesBrokenProcessPool("stale backend failure"),
+            ),
+        )
+        waiter.join(timeout=5.0)
+
+        assert not waiter.is_alive()
+        assert isinstance(capture.exception, BatchExecutionFailed)
+        assert capture.exception.kind == "cancelled"
+        assert capture.completion_groups is None
+        assert active_batch.infrastructure_retry_count == 0
+        assert not evaluator.has_active_attempt_batch(handle)
+
+    def test_cancel_after_retry_declines_prevents_infrastructure_failure(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-cancel-after-retry-declined",
+            request_count=1,
+        )
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+        )
+        active_batch.result_queue.put(AsyncJoblibExhaustedResult())
+        evaluator = CancelAfterRetryDeclinedAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=1,
+        )
+        evaluator.install_active_batch(handle, active_batch)
+
+        with pytest.raises(BatchExecutionFailed) as caught:
+            _ = evaluator.wait(handle, timeout=5.0)
+
+        assert caught.value.kind == "cancelled"
+        assert active_batch.infrastructure_retry_count == 0
+        assert not evaluator.has_active_batch(handle)
+
+    def test_attempt_cancel_after_retry_declines_prevents_infrastructure_failure(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-attempt-cancel-after-retry-declined",
+            request_count=1,
+        )
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationAttemptBatch[int, Observation[int]]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        active_batch = _active_attempt_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+        )
+        active_batch.result_queue.put(AsyncJoblibExhaustedResult())
+        evaluator = CancelAfterRetryDeclinedAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=1,
+        )
+        evaluator.install_active_attempt_batch(handle, active_batch)
+
+        with pytest.raises(BatchExecutionFailed) as caught:
+            _ = evaluator.wait_attempts(handle, timeout=5.0)
+
+        assert caught.value.kind == "cancelled"
+        assert active_batch.infrastructure_retry_count == 0
+        assert not evaluator.has_active_attempt_batch(handle)
+
+    def test_async_result_queue_is_bounded_by_worker_count(self) -> None:
+        problem = _legacy_observation_problem(SlowSquareObjective())
+        requests = _requests(
+            tuple(
+                Proposal(candidate=candidate, proposal_id=f"p-{candidate}")
+                for candidate in range(20)
+            ),
+        )
+        evaluator = AbortInspectionAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=2,
+        )
+        handle = evaluator.submit_batch(problem, requests)
+
+        try:
+            active_batch = evaluator.active_batch_for(handle)
+            assert active_batch.result_queue.maxsize == 5
+        finally:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                evaluator.cancel(handle)
+
+    def test_attempt_result_queue_is_bounded_by_worker_count(self) -> None:
+        problem = _legacy_observation_problem(SlowSquareObjective())
+        requests = _requests(
+            tuple(
+                Proposal(candidate=candidate, proposal_id=f"p-{candidate}")
+                for candidate in range(20)
+            ),
+        )
+        evaluator = AbortInspectionAsyncJoblibEvaluator(
+            backend="threading",
+            n_jobs=2,
+        )
+        handle = evaluator.submit_attempt_batch(problem, requests)
+
+        try:
+            active_batch = evaluator.active_attempt_batch_for(handle)
+            assert active_batch.result_queue.maxsize == 5
+        finally:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                evaluator.cancel_attempt_batch(handle)
+
+    def test_cancel_returns_when_result_queue_is_full(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        request_inputs = _request_inputs(requests)
+        stale_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        full_queue: Queue[OutcomeJoblibQueueEvent] = Queue(maxsize=1)
+        full_queue.put(AsyncJoblibCompletedResult(index=0, outcome=stale_outcome))
+        worker_started = Event()
+
+        def blocked_drain_worker() -> None:
+            worker_started.set()
+            full_queue.put(AsyncJoblibExhaustedResult())
+
+        result_worker = Thread(
+            target=blocked_drain_worker,
+            name="full-result-queue-worker",
+            daemon=True,
+        )
+        result_worker.start()
+        assert worker_started.wait(timeout=5.0)
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            yield from ()
+
+        event_log = AbortEventLog(events=[])
+        active_batch = _active_observation_joblib_batch(
+            problem=problem,
+            request_inputs=request_inputs,
+            result_generator=result_generator(),
+            abort_attempt=lambda: event_log.events.append("abort"),
+        )
+        active_batch.result_queue = full_queue
+        active_batch.result_worker = result_worker
+        handle = EvaluationBatchHandle(
+            batch_id="joblib-full-result-queue-cancel",
+            request_count=1,
+        )
+        evaluator = AbortInspectionAsyncJoblibEvaluator(backend="threading", n_jobs=1)
+        evaluator.install_active_batch(handle, active_batch)
+
+        evaluator.cancel(handle)
+
+        assert event_log.events == ["abort"]
+        assert not evaluator.has_active_batch(handle)
+        assert result_worker.is_alive()
+        _ = full_queue.get_nowait()
+        result_worker.join(timeout=5.0)
+        assert not result_worker.is_alive()
+
     def test_open_session_exposes_resumable_capability(self) -> None:
         problem = _legacy_observation_problem(DelayedSquareObjective())
         evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](backend="threading", n_jobs=2)
@@ -1690,6 +2404,133 @@ class AsyncJoblibEvaluatorTests:
         assert pending_resumed_session.state().lifecycle == "active"
         assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
 
+    def test_failed_attempt_resume_start_does_not_consume_suspended_state(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(DelayedExplodingObjective())
+        evaluator = ResumeStartFailureAsyncJoblibEvaluator()
+        requests = _requests(
+            (
+                Proposal(candidate=1, proposal_id="p-1"),
+                Proposal(candidate=4, proposal_id="p-2"),
+            )
+        )
+        resume_handle = evaluator.install_suspended_attempt_batch(
+            problem=problem,
+            requests=requests,
+            completed_indices={0},
+        )
+
+        evaluator.fail_next_attempt_start()
+        with pytest.raises(RuntimeError, match="forced attempt resume startup failure"):
+            _ = evaluator.resume_attempt_session(resume_handle)
+
+        resumed_session = evaluator.resume_attempt_session(resume_handle)
+        pending_resumed_session = _require_pending_aware_session(resumed_session)
+
+        assert pending_resumed_session.state().lifecycle == "active"
+        assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
+
+    def test_cancelled_attempt_resume_start_does_not_restore_suspended_state(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(DelayedExplodingObjective())
+        evaluator = ResumeStartFailureAsyncJoblibEvaluator()
+        requests = _requests(
+            (
+                Proposal(candidate=1, proposal_id="p-1"),
+                Proposal(candidate=4, proposal_id="p-2"),
+            )
+        )
+        resume_handle = evaluator.install_suspended_attempt_batch(
+            problem=problem,
+            requests=requests,
+            completed_indices={0},
+        )
+        entered_start = Event()
+        release_start = Event()
+        evaluator.block_next_attempt_start(
+            entered=entered_start,
+            release=release_start,
+        )
+        evaluator.fail_next_attempt_start()
+        resume_results: Queue[object] = Queue()
+
+        def resume_once() -> None:
+            try:
+                resume_results.put(evaluator.resume_attempt_session(resume_handle))
+            except BaseException as exception:
+                resume_results.put(exception)
+
+        worker = Thread(target=resume_once, name="attempt-resume-cancel-test")
+        worker.start()
+        assert entered_start.wait(timeout=5.0)
+        evaluator.discard_suspended_attempt_batch(
+            EvaluationBatchHandle(
+                batch_id=resume_handle.batch_id,
+                request_count=resume_handle.request_count,
+            )
+        )
+
+        release_start.set()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+        result = resume_results.get(timeout=5.0)
+        assert isinstance(result, RuntimeError)
+        assert str(result) == "forced attempt resume startup failure"
+        with pytest.raises(ValueError, match="unknown suspended attempt batch handle"):
+            _ = evaluator.resume_attempt_session(resume_handle)
+
+    def test_concurrent_attempt_resume_claim_rejects_duplicate_start(self) -> None:
+        problem = _legacy_observation_problem(DelayedExplodingObjective())
+        evaluator = ResumeStartFailureAsyncJoblibEvaluator()
+        requests = _requests(
+            (
+                Proposal(candidate=1, proposal_id="p-1"),
+                Proposal(candidate=4, proposal_id="p-2"),
+            )
+        )
+        resume_handle = evaluator.install_suspended_attempt_batch(
+            problem=problem,
+            requests=requests,
+            completed_indices={0},
+        )
+        entered_start = Event()
+        release_start = Event()
+        evaluator.block_next_attempt_start(
+            entered=entered_start,
+            release=release_start,
+        )
+        resume_results: Queue[object] = Queue()
+
+        def resume_once() -> None:
+            try:
+                resume_results.put(evaluator.resume_attempt_session(resume_handle))
+            except BaseException as exception:
+                resume_results.put(exception)
+
+        worker = Thread(target=resume_once, name="attempt-resume-claim-test")
+        worker.start()
+        assert entered_start.wait(timeout=5.0)
+
+        with pytest.raises(ValueError, match="unknown suspended attempt batch handle"):
+            _ = evaluator.resume_attempt_session(resume_handle)
+
+        release_start.set()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+        result = resume_results.get(timeout=5.0)
+        if isinstance(result, BaseException):
+            raise AssertionError("first resume should complete") from result
+
+        resumed_session = cast(
+            EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]],
+            result,
+        )
+        pending_resumed_session = _require_pending_aware_session(resumed_session)
+        assert evaluator.attempt_start_count == 1
+        assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
+
     def test_suspend_and_resume_session_preserves_remaining_work(self) -> None:
         problem = _legacy_observation_problem(DelayedSquareObjective())
         evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](backend="threading", n_jobs=2)
@@ -1773,6 +2614,127 @@ class AsyncJoblibEvaluatorTests:
         pending_resumed_session = _require_pending_aware_session(resumed_session)
 
         assert pending_resumed_session.state().lifecycle == "active"
+        assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
+
+    def test_failed_resume_start_does_not_consume_suspended_state(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(DelayedSquareObjective())
+        evaluator = ResumeStartFailureAsyncJoblibEvaluator()
+        requests = _requests(
+            (
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=1, proposal_id="p-2"),
+            )
+        )
+        resume_handle = evaluator.install_suspended_batch(
+            problem=problem,
+            requests=requests,
+            completed_indices={0},
+        )
+
+        evaluator.fail_next_batch_start()
+        with pytest.raises(RuntimeError, match="forced resume startup failure"):
+            _ = evaluator.resume_session(resume_handle)
+
+        resumed_session = evaluator.resume_session(resume_handle)
+        pending_resumed_session = _require_pending_aware_session(resumed_session)
+
+        assert pending_resumed_session.state().lifecycle == "active"
+        assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
+
+    def test_cancelled_resume_start_does_not_restore_suspended_state(self) -> None:
+        problem = _legacy_observation_problem(DelayedSquareObjective())
+        evaluator = ResumeStartFailureAsyncJoblibEvaluator()
+        requests = _requests(
+            (
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=1, proposal_id="p-2"),
+            )
+        )
+        resume_handle = evaluator.install_suspended_batch(
+            problem=problem,
+            requests=requests,
+            completed_indices={0},
+        )
+        entered_start = Event()
+        release_start = Event()
+        evaluator.block_next_batch_start(entered=entered_start, release=release_start)
+        evaluator.fail_next_batch_start()
+        resume_results: Queue[object] = Queue()
+
+        def resume_once() -> None:
+            try:
+                resume_results.put(evaluator.resume_session(resume_handle))
+            except BaseException as exception:
+                resume_results.put(exception)
+
+        worker = Thread(target=resume_once, name="resume-cancel-test")
+        worker.start()
+        assert entered_start.wait(timeout=5.0)
+        evaluator.discard_suspended_batch(
+            EvaluationBatchHandle(
+                batch_id=resume_handle.batch_id,
+                request_count=resume_handle.request_count,
+            )
+        )
+
+        release_start.set()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+        result = resume_results.get(timeout=5.0)
+        assert isinstance(result, RuntimeError)
+        assert str(result) == "forced resume startup failure"
+        with pytest.raises(ValueError, match="unknown suspended batch handle"):
+            _ = evaluator.resume_session(resume_handle)
+
+    def test_concurrent_resume_claim_rejects_duplicate_start(self) -> None:
+        problem = _legacy_observation_problem(DelayedSquareObjective())
+        evaluator = ResumeStartFailureAsyncJoblibEvaluator()
+        requests = _requests(
+            (
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=1, proposal_id="p-2"),
+            )
+        )
+        resume_handle = evaluator.install_suspended_batch(
+            problem=problem,
+            requests=requests,
+            completed_indices={0},
+        )
+        entered_start = Event()
+        release_start = Event()
+        evaluator.block_next_batch_start(entered=entered_start, release=release_start)
+        resume_results: Queue[object] = Queue()
+
+        def resume_once() -> None:
+            try:
+                resume_results.put(evaluator.resume_session(resume_handle))
+            except BaseException as exception:
+                resume_results.put(exception)
+
+        worker = Thread(target=resume_once, name="resume-claim-test")
+        worker.start()
+        assert entered_start.wait(timeout=5.0)
+
+        with pytest.raises(ValueError, match="unknown suspended batch handle"):
+            _ = evaluator.resume_session(resume_handle)
+
+        release_start.set()
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+        result = resume_results.get(timeout=5.0)
+        if isinstance(result, BaseException):
+            raise AssertionError("first resume should complete") from result
+
+        resumed_session = cast(
+            EvaluationBatchSession[
+                EvaluationOutcome[int, RequestAlignedEvaluationRecord]
+            ],
+            result,
+        )
+        pending_resumed_session = _require_pending_aware_session(resumed_session)
+        assert evaluator.batch_start_count == 1
         assert tuple(pending_resumed_session.wait(timeout=5.0)) != ()
 
     def test_retries_infrastructure_failure_for_remaining_proposals(self) -> None:

@@ -683,7 +683,9 @@ class CSAOptimizerCheckpointTests:
             ("position", True, TypeError, "position"),
             ("has_gaussian", True, TypeError, "has_gaussian"),
             ("cached_gaussian", float("inf"), ValueError, "cached_gaussian"),
+            ("algorithm", "PCG64", ValueError, "algorithm"),
             ("key_hex", "not-hex", ValueError, "key_hex"),
+            ("key_hex", "00000000", ValueError, "MT19937"),
         ],
     )
     def test_optimizer_checkpoint_rejects_malformed_random_state(

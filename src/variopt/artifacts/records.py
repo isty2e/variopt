@@ -178,26 +178,10 @@ class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
         elapsed_seconds : float | None, optional
             Optional wall-clock runtime for the evaluation.
         """
-        normalized_objective_values = normalize_objective_vector(
-            values=objective_values,
-            field_name="objective_values",
-        )
-        normalized_objective_scores = normalize_objective_vector(
-            values=objective_scores,
-            field_name="objective_scores",
-        )
-        normalized_elapsed_seconds = (
-            None
-            if elapsed_seconds is None
-            else _normalize_scalar_record_float(
-                elapsed_seconds,
-                field_name="elapsed_seconds",
-            )
-        )
         object.__setattr__(self, "__orig_class__", None)
-        object.__setattr__(self, "objective_values", normalized_objective_values)
-        object.__setattr__(self, "objective_scores", normalized_objective_scores)
-        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
+        object.__setattr__(self, "objective_values", objective_values)
+        object.__setattr__(self, "objective_scores", objective_scores)
+        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
         self.__post_init__()
 
     def __post_init__(self) -> None:

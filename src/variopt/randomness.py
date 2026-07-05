@@ -20,6 +20,9 @@ from .json_types import (
 
 RandomSeed: TypeAlias = int | None
 ResultT = TypeVar("ResultT")
+_RANDOM_STATE_ALGORITHM = "MT19937"
+_MT19937_KEY_COUNT = 624
+_UINT32_BYTE_COUNT = np.dtype(np.uint32).itemsize
 
 
 class TypedRandomState(Protocol):
@@ -186,6 +189,10 @@ class RandomStateSnapshot:
             msg = "algorithm must not be empty"
             raise ValueError(msg)
 
+        if self.algorithm != _RANDOM_STATE_ALGORITHM:
+            msg = "algorithm must be MT19937"
+            raise ValueError(msg)
+
         if type(self.position) is not int:
             msg = "position must be an integer"
             raise TypeError(msg)
@@ -207,12 +214,20 @@ class RandomStateSnapshot:
             msg = "key_bytes must not be empty"
             raise ValueError(msg)
 
-        if len(self.key_bytes) % np.dtype(np.uint32).itemsize != 0:
+        if len(self.key_bytes) % _UINT32_BYTE_COUNT != 0:
             msg = "key_bytes must encode a whole number of uint32 keys"
+            raise ValueError(msg)
+
+        if len(self.key_bytes) != _MT19937_KEY_COUNT * _UINT32_BYTE_COUNT:
+            msg = "key_bytes must encode exactly 624 MT19937 uint32 keys"
             raise ValueError(msg)
 
         if self.position < 0:
             msg = "position must be non-negative"
+            raise ValueError(msg)
+
+        if self.position > _MT19937_KEY_COUNT:
+            msg = "position must be at most 624 for MT19937"
             raise ValueError(msg)
 
         if self.has_gaussian not in {0, 1}:

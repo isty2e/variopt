@@ -3,7 +3,12 @@
 from collections.abc import Sequence
 from typing import TypeVar
 
-from ...artifacts import EvaluationAttemptBatch, EvaluationFailure, KernelDiagnostics
+from ...artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationFailure,
+    EvaluationRequest,
+    KernelDiagnostics,
+)
 from ...typevars import CandidateT
 
 PayloadT = TypeVar("PayloadT")
@@ -30,6 +35,8 @@ def _merge_failed_attempts(
 def diagnostics_with_failed_attempts(
     diagnostics: KernelDiagnostics | None,
     failed_attempts: Sequence[EvaluationAttemptBatch[CandidateT, PayloadT]],
+    *,
+    fallback_diagnostics: KernelDiagnostics | None = None,
 ) -> KernelDiagnostics | None:
     """Annotate kernel diagnostics with inner failed-attempt accounting.
 
@@ -40,20 +47,26 @@ def diagnostics_with_failed_attempts(
     failed_attempts : Sequence[EvaluationAttemptBatch[CandidateT, PayloadT]]
         Episode-local failed one-request attempts. These are summarized in
         diagnostics rather than surfaced as additional top-level Study slots.
+    fallback_diagnostics : KernelDiagnostics | None, default=None
+        Diagnostics owner to use when ``diagnostics`` is absent but failed
+        attempts contain useful accounting signal.
 
     Returns
     -------
     KernelDiagnostics | None
-        Diagnostics with failed-attempt counts when ``diagnostics`` is present.
+        Diagnostics with failed-attempt counts when a base or fallback
+        diagnostics owner is present.
     """
-    if diagnostics is None:
-        return None
-
     episode_failures = _merge_failed_attempts(failed_attempts)
     failed_attempt_count = episode_failures.attempt_count
     failed_evaluation_count = episode_failures.evaluation_count
     if failed_attempt_count == 0 and failed_evaluation_count == 0:
         return diagnostics
+
+    if diagnostics is None:
+        diagnostics = fallback_diagnostics
+        if diagnostics is None:
+            return None
 
     return diagnostics.with_failed_attempts(
         failed_attempt_count=failed_attempt_count,
@@ -63,6 +76,8 @@ def diagnostics_with_failed_attempts(
 
 def top_level_failure_from_failed_attempts(
     failed_attempts: Sequence[EvaluationAttemptBatch[CandidateT, PayloadT]],
+    *,
+    failure_request: EvaluationRequest[CandidateT] | None = None,
 ) -> EvaluationAttemptBatch[CandidateT, PayloadT]:
     """Project failed local-search episode attempts into one top-level slot.
 
@@ -71,6 +86,9 @@ def top_level_failure_from_failed_attempts(
     failed_attempts : Sequence[EvaluationAttemptBatch[CandidateT, PayloadT]]
         Episode-local failed one-request attempts accumulated before the kernel
         gives up without a successful evaluation.
+    failure_request : EvaluationRequest[CandidateT] | None, optional
+        Optional request to own the study-visible failure slot. When omitted,
+        the representative inner failure request is preserved.
 
     Returns
     -------
@@ -83,13 +101,17 @@ def top_level_failure_from_failed_attempts(
         return episode_failures
 
     representative_failure = episode_failures.failures[0]
+    request = failure_request
+    if request is None:
+        request = representative_failure.request
+
     return EvaluationAttemptBatch[
         CandidateT,
         PayloadT,
     ](
         attempts=(
             EvaluationFailure(
-                request=representative_failure.request,
+                request=request,
                 exception=representative_failure.exception,
                 evaluation_count=episode_failures.evaluation_count,
             ),

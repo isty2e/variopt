@@ -180,7 +180,7 @@ The kernel path reports that cost through successful attempt
 - default: budget decreases by the sum of objective evaluations reported by the
   kernel/evaluator path
 - `count_evaluation_cost=False`: budget decreases by the number of returned
-  observations
+  attempt slots, including recorded evaluation failures
 
 Practical guidance:
 
