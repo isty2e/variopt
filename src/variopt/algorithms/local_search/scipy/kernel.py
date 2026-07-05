@@ -356,7 +356,10 @@ class ScipyMinimizeKernel(
         ] = []
         codec = codec_provider()
         initial_coordinates = codec.coordinates_from_candidate(proposal.candidate)
-        evaluation_count = 0
+        evaluated_attempts_by_coordinates: dict[
+            tuple[float, ...],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
+        ] = {}
         evaluated_successes_by_coordinates: dict[
             tuple[float, ...],
             EvaluationSuccess[ContinuousCandidateT, ObservationPayload],
@@ -369,6 +372,12 @@ class ScipyMinimizeKernel(
             if success is None:
                 failed_attempts.append(attempt)
             return success
+
+        def successful_evaluation_count() -> int:
+            return sum(
+                success.evaluation_count
+                for success in evaluated_successes_by_coordinates.values()
+            )
 
         def can_evaluate_local_candidate() -> bool:
             budget = query.evaluation_budget
@@ -407,7 +416,7 @@ class ScipyMinimizeKernel(
             ].from_scalar_observation(
                 observation=observation,
                 request=result_request(optimized_candidate),
-                evaluation_count=evaluation_count,
+                evaluation_count=successful_evaluation_count(),
                 kernel_diagnostics=KernelDiagnostics(
                     backend="scipy.optimize.minimize",
                     method=self.method,
@@ -439,29 +448,41 @@ class ScipyMinimizeKernel(
         def objective_in_coordinate_space(
             coordinates: Sequence[float],
         ) -> float:
-            nonlocal evaluation_count
+            coordinate_key = tuple(float(coordinate) for coordinate in coordinates)
+            cached_attempt = evaluated_attempts_by_coordinates.get(coordinate_key)
+            if cached_attempt is not None:
+                cached_success = cached_attempt.single_success_or_none()
+                if cached_success is None:
+                    return float("inf")
+                return cached_success.payload.score
+
             if not can_evaluate_local_candidate():
                 msg = "evaluation budget exhausted"
                 raise EvaluationBudgetExhausted(msg)
-            coordinate_key = tuple(float(coordinate) for coordinate in coordinates)
-            local_candidate = codec.candidate_from_coordinates(
-                proposal.candidate,
-                coordinate_key,
-            )
-            local_attempt = self._evaluate_candidate_attempt(
-                query=query,
-                candidate=local_candidate,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                runner=runner,
-            )
+
+            if coordinate_key == initial_coordinates:
+                local_attempt = self._evaluate_proposal_attempt(
+                    query=query,
+                    proposal=proposal,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    runner=runner,
+                )
+            else:
+                local_candidate = codec.candidate_from_coordinates(
+                    proposal.candidate,
+                    coordinate_key,
+                )
+                local_attempt = self._evaluate_candidate_attempt(
+                    query=query,
+                    candidate=local_candidate,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    runner=runner,
+                )
+            evaluated_attempts_by_coordinates[coordinate_key] = local_attempt
             local_success = record_attempt_success(local_attempt)
             if local_success is None:
                 return float("inf")
 
-            evaluation_count += local_success.evaluation_count
-            # Local search assumes deterministic evaluations; if SciPy probes
-            # the same coordinates more than once, keep the latest success seen
-            # by the minimized function.
             evaluated_successes_by_coordinates[coordinate_key] = local_success
             return local_success.payload.score
 
@@ -489,10 +510,13 @@ class ScipyMinimizeKernel(
                 message="evaluation budget exhausted before local convergence",
             )
         if not scipy_result.has_finite_solution:
-            original_success = evaluated_successes_by_coordinates.get(
+            original_attempt = evaluated_attempts_by_coordinates.get(
                 initial_coordinates,
             )
-            if original_success is None:
+            original_success = (
+                None if original_attempt is None else original_attempt.single_success_or_none()
+            )
+            if original_success is None and original_attempt is None:
                 if (
                     query.evaluation_budget is not None
                     and not can_evaluate_local_candidate()
@@ -509,9 +533,14 @@ class ScipyMinimizeKernel(
                         proposal_evaluation_spec=proposal_evaluation_spec,
                         runner=runner,
                     )
+                    evaluated_attempts_by_coordinates[
+                        initial_coordinates
+                    ] = original_attempt
                     original_success = record_attempt_success(original_attempt)
                     if original_success is not None:
-                        evaluation_count += original_success.evaluation_count
+                        evaluated_successes_by_coordinates[
+                            initial_coordinates
+                        ] = original_success
 
             if original_success is None:
                 return self._attempt_batch_from_success_and_failures(
@@ -536,7 +565,7 @@ class ScipyMinimizeKernel(
             ].from_scalar_observation(
                 observation=fallback_observation,
                 request=result_request(fallback_candidate),
-                evaluation_count=evaluation_count,
+                evaluation_count=successful_evaluation_count(),
                 kernel_diagnostics=scipy_result.diagnostics(method=self.method),
                 refinement=refinement,
                 candidate_equal=query.problem.space.candidates_equal,
@@ -547,14 +576,31 @@ class ScipyMinimizeKernel(
             )
 
         optimized_coordinates = scipy_result.coordinates
-        optimized_candidate = codec.candidate_from_coordinates(
-            proposal.candidate,
+        cached_optimized_attempt = evaluated_attempts_by_coordinates.get(
             optimized_coordinates,
         )
-        cached_optimized_success = evaluated_successes_by_coordinates.get(
-            optimized_coordinates,
+        cached_optimized_success = (
+            None
+            if cached_optimized_attempt is None
+            else cached_optimized_attempt.single_success_or_none()
         )
         if cached_optimized_success is None:
+            if cached_optimized_attempt is not None:
+                if len(evaluated_successes_by_coordinates) == 0:
+                    return self._attempt_batch_from_success_and_failures(
+                        success=None,
+                        failed_attempts=failed_attempts,
+                    )
+                best_seen_success = min(
+                    evaluated_successes_by_coordinates.values(),
+                    key=lambda success: success.payload.score,
+                )
+                return batch_from_success_and_failures(
+                    best_seen_success,
+                    status=KernelStatus.FAILED,
+                    message="optimized candidate evaluation failed",
+                )
+
             if (
                 query.evaluation_budget is not None
                 and not can_evaluate_local_candidate()
@@ -570,12 +616,17 @@ class ScipyMinimizeKernel(
                     message="evaluation budget exhausted before local convergence",
                 )
 
+            optimized_candidate = codec.candidate_from_coordinates(
+                proposal.candidate,
+                optimized_coordinates,
+            )
             optimized_attempt = self._evaluate_candidate_attempt(
                 query=query,
                 candidate=optimized_candidate,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 runner=runner,
             )
+            evaluated_attempts_by_coordinates[optimized_coordinates] = optimized_attempt
             cached_optimized_success = record_attempt_success(optimized_attempt)
             if cached_optimized_success is None:
                 if len(evaluated_successes_by_coordinates) == 0:
@@ -592,7 +643,10 @@ class ScipyMinimizeKernel(
                     status=KernelStatus.FAILED,
                     message="optimized candidate evaluation failed",
                 )
-            evaluation_count += cached_optimized_success.evaluation_count
+            evaluated_successes_by_coordinates[
+                optimized_coordinates
+            ] = cached_optimized_success
+        optimized_candidate = cached_optimized_success.candidate
         refinement = _candidate_refinement_from_codec(
             codec=codec,
             source_candidate=proposal.candidate,
@@ -604,7 +658,7 @@ class ScipyMinimizeKernel(
         ].from_scalar_observation(
             observation=cached_optimized_success.scalar_observation(),
             request=result_request(optimized_candidate),
-            evaluation_count=evaluation_count,
+            evaluation_count=successful_evaluation_count(),
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),
             refinement=refinement,
             candidate_equal=query.problem.space.candidates_equal,

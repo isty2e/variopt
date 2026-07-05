@@ -1,7 +1,9 @@
 """Thin public facade for optimization runs."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Generic
+from typing import Generic, overload
 
 from typing_extensions import TypeVar
 
@@ -14,10 +16,15 @@ from ..artifacts import (
     DefaultEvaluationAttemptMaterializer,
     EvaluationAttemptBatch,
     EvaluationAttemptMaterializer,
+    ObjectiveVectorPayload,
+    ObjectiveVectorRecord,
+    Observation,
+    ObservationPayload,
     Proposal,
     RunReport,
     RunResult,
 )
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,
@@ -27,7 +34,12 @@ from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..problem import Problem
 from ..typevars import CandidateT, RunMethodStateT
-from .common import StudyEvaluator, StudyPayloadT, StudyRecordT
+from .common import (
+    StudyEvaluationPayload,
+    StudyEvaluator,
+    StudyPayloadT,
+    StudyRecordT,
+)
 from .exact_async.artifacts import (
     StudyExactAsyncStepResumeHandle,
 )
@@ -45,6 +57,17 @@ from .execution import step as step_study
 from .stale_async import run_stale_async
 
 BoundaryT = TypeVar("BoundaryT")
+ConstructorBoundaryT = TypeVar("ConstructorBoundaryT")
+ConstructorCandidateT = TypeVar("ConstructorCandidateT")
+ConstructorRunMethodStateT = TypeVar("ConstructorRunMethodStateT")
+ConstructorPayloadT = TypeVar(
+    "ConstructorPayloadT",
+    bound=StudyEvaluationPayload,
+)
+ConstructorRecordT = TypeVar(
+    "ConstructorRecordT",
+    bound=RequestAlignedEvaluationRecord[object],
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -92,30 +115,258 @@ class Study(
         StudyRecordT,
     ]
 
+    @overload
     def __init__(
-        self,
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ObservationPayload,
+            Observation[ConstructorCandidateT],
+        ],
         *,
-        problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
+        problem: Problem[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObservationPayload,
+        ],
         run_method: RunMethod[
-            RunMethodStateT,
-            Proposal[CandidateT],
-            StudyRecordT,
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            Observation[ConstructorCandidateT],
         ],
         evaluator: StudyEvaluator[
-            BoundaryT,
-            CandidateT,
-            StudyPayloadT,
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObservationPayload,
         ],
         kernel: Kernel[
-            ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
-            EvaluationAttemptBatch[CandidateT, StudyPayloadT],
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObservationPayload],
+        ]
+        | None = None,
+        attempt_materializer: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ObjectiveVectorPayload,
+            ObjectiveVectorRecord[ConstructorCandidateT],
+        ],
+        *,
+        problem: Problem[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObjectiveVectorPayload,
+        ],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            ObjectiveVectorRecord[ConstructorCandidateT],
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObjectiveVectorPayload,
+        ],
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObjectiveVectorPayload],
+        ]
+        | None = None,
+        attempt_materializer: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ConstructorRecordT,
+            ConstructorRecordT,
+        ],
+        *,
+        problem: Problem[ConstructorBoundaryT, ConstructorCandidateT, ConstructorRecordT],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            ConstructorRecordT,
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRecordT,
+        ],
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorRecordT],
+        ]
+        | None = None,
+        attempt_materializer: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ConstructorPayloadT,
+            ConstructorRecordT,
+        ],
+        *,
+        problem: Problem[ConstructorBoundaryT, ConstructorCandidateT, ConstructorPayloadT],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            ConstructorRecordT,
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorPayloadT,
+        ],
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorPayloadT],
+        ]
+        | None = None,
+        attempt_materializer: EvaluationAttemptMaterializer[
+            ConstructorCandidateT,
+            ConstructorPayloadT,
+            ConstructorRecordT,
+        ],
+    ) -> None: ...
+
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ConstructorPayloadT,
+            ConstructorRecordT,
+        ],
+        *,
+        problem: (
+            Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ]
+            | Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ]
+            | Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ]
+            | Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ]
+        ),
+        run_method: (
+            RunMethod[
+                ConstructorRunMethodStateT,
+                Proposal[ConstructorCandidateT],
+                Observation[ConstructorCandidateT],
+            ]
+            | RunMethod[
+                ConstructorRunMethodStateT,
+                Proposal[ConstructorCandidateT],
+                ObjectiveVectorRecord[ConstructorCandidateT],
+            ]
+            | RunMethod[
+                ConstructorRunMethodStateT,
+                Proposal[ConstructorCandidateT],
+                ConstructorRecordT,
+            ]
+        ),
+        evaluator: (
+            StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ]
+            | StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ]
+            | StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ]
+            | StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ]
+        ),
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObservationPayload],
+        ]
+        | Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObjectiveVectorPayload],
+        ]
+        | Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorRecordT],
+        ]
+        | Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorPayloadT],
         ]
         | None = None,
         attempt_materializer: (
             EvaluationAttemptMaterializer[
-                CandidateT,
-                StudyPayloadT,
-                StudyRecordT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+                ConstructorRecordT,
             ]
             | None
         ) = None,

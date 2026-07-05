@@ -345,6 +345,284 @@ class ScipyMinimizeKernelTests:
         assert outcome.scalar_observation().value == 10.0
         assert outcome.evaluation_count == 2
 
+    def test_repeated_scipy_success_coordinate_reuses_cached_attempt(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        runner_queries: list[
+            ProposalBatchQuery[float | int, float, ObservationPayload]
+        ] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                initial_coordinates,
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            first_score = objective_in_coordinate_space((1.5,))
+            second_score = objective_in_coordinate_space([1.5])
+            assert second_score == first_score
+            return FakeScipyOptimizeResult(
+                x=(1.5,),
+                fun=second_score,
+                nfev=2,
+                success=True,
+                message="ok",
+            )
+
+        def counting_runner(
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            runner_queries.append(local_query)
+            return evaluate_query_directly(local_query)
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        outcomes = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            counting_runner,
+        ).successes
+
+        outcome = outcomes[0]
+        assert len(runner_queries) == 1
+        assert outcome.scalar_observation().candidate == 1.5
+        assert outcome.evaluation_count == 1
+
+    def test_repeated_scipy_coordinate_does_not_consume_extra_budget(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        evaluation_budget = EvaluationBudget(1)
+        completed_duplicate_probes: list[None] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            first_score = objective_in_coordinate_space(initial_coordinates)
+            second_score = objective_in_coordinate_space(initial_coordinates)
+            assert second_score == first_score
+            completed_duplicate_probes.append(None)
+            return FakeScipyOptimizeResult(
+                x=initial_coordinates,
+                fun=second_score,
+                nfev=2,
+                success=True,
+                message="ok",
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=4.0, proposal_id="p-1"),),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+            evaluation_budget=evaluation_budget,
+        )
+
+        outcomes = kernel.run(query, evaluate_query_directly).successes
+
+        assert len(completed_duplicate_probes) == 1
+        assert evaluation_budget.remaining == 0
+        assert outcomes[0].evaluation_count == 1
+
+    def test_repeated_scipy_failure_coordinate_reuses_cached_attempt(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        runner_queries: list[
+            ProposalBatchQuery[float | int, float, ObservationPayload]
+        ] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            first_score = objective_in_coordinate_space(initial_coordinates)
+            second_score = objective_in_coordinate_space(initial_coordinates)
+            assert first_score == float("inf")
+            assert second_score == float("inf")
+            return FakeScipyOptimizeResult(
+                x=initial_coordinates,
+                fun=second_score,
+                nfev=2,
+                success=False,
+                message="all attempts failed",
+            )
+
+        def failing_runner(
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            runner_queries.append(local_query)
+            proposal = local_query.proposals[0]
+            return EvaluationAttemptBatch(
+                attempts=(
+                    EvaluationFailure[float](
+                        request=EvaluationRequest(proposal=proposal),
+                        exception=EvaluationExceptionSnapshot.from_exception(
+                            ValueError("bad scipy attempt")
+                        ),
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        attempts = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            failing_runner,
+        )
+
+        assert len(runner_queries) == 1
+        assert attempts.success_indices == ()
+        assert attempts.failure_indices == (0,)
+        assert attempts.failures[0].candidate == 4.0
+        assert attempts.failures[0].proposal_id == "p-1"
+        assert attempts.evaluation_count == 1
+
+    def test_cached_failed_final_coordinate_falls_back_without_reevaluation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        runner_queries: list[
+            ProposalBatchQuery[float | int, float, ObservationPayload]
+        ] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            initial_score = objective_in_coordinate_space(initial_coordinates)
+            failed_score = objective_in_coordinate_space((2.0,))
+            assert failed_score == float("inf")
+            return FakeScipyOptimizeResult(
+                x=(2.0,),
+                fun=initial_score,
+                nfev=2,
+                success=True,
+                message="inconsistent final coordinate",
+            )
+
+        def failing_trial_runner(
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            runner_queries.append(local_query)
+            proposal = local_query.proposals[0]
+            if proposal.candidate == 2.0:
+                return EvaluationAttemptBatch(
+                    attempts=(
+                        EvaluationFailure[float](
+                            request=EvaluationRequest(proposal=proposal),
+                            exception=EvaluationExceptionSnapshot.from_exception(
+                                ValueError("bad final coordinate")
+                            ),
+                        ),
+                    ),
+                )
+            return evaluate_query_directly(local_query)
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+
+        attempts = kernel.run(
+            self.make_query(problem=problem, candidate=4.0),
+            failing_trial_runner,
+        )
+
+        assert len(runner_queries) == 2
+        assert attempts.success_indices == (0,)
+        assert attempts.failure_indices == (1,)
+        success = attempts.successes[0]
+        assert success.scalar_observation().candidate == 4.0
+        assert success.evaluation_count == 1
+        assert success.kernel_diagnostics is not None
+        assert success.kernel_diagnostics.status == KernelStatus.FAILED
+        assert success.kernel_diagnostics.message == "optimized candidate evaluation failed"
+        assert attempts.failures[0].candidate == 2.0
+        assert attempts.evaluation_count == 2
+
     def test_failed_scipy_trial_is_preserved_and_skipped(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -482,17 +760,14 @@ class ScipyMinimizeKernelTests:
 
         assert attempts.successes == ()
         assert attempts.success_indices == ()
-        assert attempts.failure_indices == (0, 1)
-        assert tuple(failure.candidate for failure in attempts.failures) == (4.0, 4.0)
-        assert tuple(failure.proposal_id for failure in attempts.failures) == (
-            None,
-            "p-1",
-        )
+        assert attempts.failure_indices == (0,)
+        assert tuple(failure.candidate for failure in attempts.failures) == (4.0,)
+        assert tuple(failure.proposal_id for failure in attempts.failures) == ("p-1",)
         assert all(
             failure.exception.message == "bad scipy attempt"
             for failure in attempts.failures
         )
-        assert attempts.evaluation_count == 2
+        assert attempts.evaluation_count == 1
 
     def test_scipy_rejects_multi_slot_runner_attempt_for_single_proposal(
         self,

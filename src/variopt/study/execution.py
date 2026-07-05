@@ -213,7 +213,10 @@ def _supports_direct_scalar_sequential_path(
     if evaluator.__class__ is not SequentialEvaluator:
         return False
 
-    if type(study.attempt_materializer) is not DefaultEvaluationAttemptMaterializer:
+    attempt_materializer = study.attempt_materializer
+    if not isinstance(attempt_materializer, DefaultEvaluationAttemptMaterializer):
+        return False
+    if attempt_materializer.__class__ is not DefaultEvaluationAttemptMaterializer:
         return False
 
     objective = study.problem.direct_objective

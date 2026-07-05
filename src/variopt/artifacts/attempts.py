@@ -923,6 +923,9 @@ def materialize_success_record(
             elapsed_seconds=payload.elapsed_seconds,
         )
 
+    if _is_materializable_record_payload(payload, success):
+        return payload
+
     if type(payload) is Observation:
         return Observation(
             proposal=projection_proposal,
@@ -952,9 +955,6 @@ def materialize_success_record(
             objective_scores=payload.objective_scores,
             elapsed_seconds=payload.elapsed_seconds,
         )
-
-    if _is_materializable_record_payload(payload, success):
-        return payload
 
     msg = "success payload cannot be materialized as a request-aligned record"
     raise TypeError(msg)
@@ -1006,6 +1006,56 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
     """
 
     attempts: tuple[EvaluationAttempt[CandidateT, PayloadT], ...]
+    _requests_cache: tuple[EvaluationRequest[CandidateT], ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _successes_cache: tuple[EvaluationSuccess[CandidateT, PayloadT], ...] | None = (
+        field(
+            init=False,
+            repr=False,
+            compare=False,
+            default=None,
+        )
+    )
+    _failures_cache: tuple[EvaluationFailure[CandidateT], ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _success_indices_cache: tuple[int, ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _failure_indices_cache: tuple[int, ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _payloads_cache: tuple[PayloadT, ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _evaluation_count_cache: int | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
+    _has_failures_cache: bool | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default=None,
+    )
 
     def __init__(
         self,
@@ -1022,6 +1072,14 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         """
         object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "attempts", tuple(attempts))
+        object.__setattr__(self, "_requests_cache", None)
+        object.__setattr__(self, "_successes_cache", None)
+        object.__setattr__(self, "_failures_cache", None)
+        object.__setattr__(self, "_success_indices_cache", None)
+        object.__setattr__(self, "_failure_indices_cache", None)
+        object.__setattr__(self, "_payloads_cache", None)
+        object.__setattr__(self, "_evaluation_count_cache", None)
+        object.__setattr__(self, "_has_failures_cache", None)
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -1120,7 +1178,11 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         tuple[EvaluationRequest[CandidateT], ...]
             Requests owned by each attempt slot.
         """
-        return tuple(attempt.request for attempt in self.attempts)
+        cached_requests = self._requests_cache
+        if cached_requests is None:
+            cached_requests = tuple(attempt.request for attempt in self.attempts)
+            object.__setattr__(self, "_requests_cache", cached_requests)
+        return cached_requests
 
     @property
     def successes(self) -> tuple[EvaluationSuccess[CandidateT, PayloadT], ...]:
@@ -1131,11 +1193,15 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         tuple[EvaluationSuccess[CandidateT, PayloadT], ...]
             Successful attempts only.
         """
-        return tuple(
-            attempt
-            for attempt in self.attempts
-            if _is_evaluation_success(attempt)
-        )
+        cached_successes = self._successes_cache
+        if cached_successes is None:
+            cached_successes = tuple(
+                attempt
+                for attempt in self.attempts
+                if _is_evaluation_success(attempt)
+            )
+            object.__setattr__(self, "_successes_cache", cached_successes)
+        return cached_successes
 
     @property
     def failures(self) -> tuple[EvaluationFailure[CandidateT], ...]:
@@ -1146,11 +1212,15 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         tuple[EvaluationFailure[CandidateT], ...]
             Failed attempts only.
         """
-        return tuple(
-            attempt
-            for attempt in self.attempts
-            if _is_evaluation_failure(attempt)
-        )
+        cached_failures = self._failures_cache
+        if cached_failures is None:
+            cached_failures = tuple(
+                attempt
+                for attempt in self.attempts
+                if _is_evaluation_failure(attempt)
+            )
+            object.__setattr__(self, "_failures_cache", cached_failures)
+        return cached_failures
 
     @property
     def success_indices(self) -> tuple[int, ...]:
@@ -1161,11 +1231,15 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         tuple[int, ...]
             Indices whose attempt slot is an :class:`EvaluationSuccess`.
         """
-        return tuple(
-            index
-            for index, attempt in enumerate(self.attempts)
-            if _is_evaluation_success(attempt)
-        )
+        cached_indices = self._success_indices_cache
+        if cached_indices is None:
+            cached_indices = tuple(
+                index
+                for index, attempt in enumerate(self.attempts)
+                if _is_evaluation_success(attempt)
+            )
+            object.__setattr__(self, "_success_indices_cache", cached_indices)
+        return cached_indices
 
     @property
     def failure_indices(self) -> tuple[int, ...]:
@@ -1176,11 +1250,15 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         tuple[int, ...]
             Indices whose attempt slot is an :class:`EvaluationFailure`.
         """
-        return tuple(
-            index
-            for index, attempt in enumerate(self.attempts)
-            if _is_evaluation_failure(attempt)
-        )
+        cached_indices = self._failure_indices_cache
+        if cached_indices is None:
+            cached_indices = tuple(
+                index
+                for index, attempt in enumerate(self.attempts)
+                if _is_evaluation_failure(attempt)
+            )
+            object.__setattr__(self, "_failure_indices_cache", cached_indices)
+        return cached_indices
 
     @property
     def payloads(self) -> tuple[PayloadT, ...]:
@@ -1191,7 +1269,11 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         tuple[PayloadT, ...]
             Request-free payloads carried by successful attempts.
         """
-        return tuple(success.payload for success in self.successes)
+        cached_payloads = self._payloads_cache
+        if cached_payloads is None:
+            cached_payloads = tuple(success.payload for success in self.successes)
+            object.__setattr__(self, "_payloads_cache", cached_payloads)
+        return cached_payloads
 
     @property
     def evaluation_count(self) -> int:
@@ -1202,7 +1284,17 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         int
             Sum of success and failure evaluation counts.
         """
-        return sum(attempt.evaluation_count for attempt in self.attempts)
+        cached_evaluation_count = self._evaluation_count_cache
+        if cached_evaluation_count is None:
+            cached_evaluation_count = sum(
+                attempt.evaluation_count for attempt in self.attempts
+            )
+            object.__setattr__(
+                self,
+                "_evaluation_count_cache",
+                cached_evaluation_count,
+            )
+        return cached_evaluation_count
 
     @property
     def has_failures(self) -> bool:
@@ -1213,7 +1305,13 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         bool
             ``True`` when at least one attempt failed.
         """
-        return len(self.failures) > 0
+        cached_has_failures = self._has_failures_cache
+        if cached_has_failures is None:
+            cached_has_failures = any(
+                _is_evaluation_failure(attempt) for attempt in self.attempts
+            )
+            object.__setattr__(self, "_has_failures_cache", cached_has_failures)
+        return cached_has_failures
 
     def single_success_or_none(
         self,

@@ -123,7 +123,9 @@ class RunMethodAttemptAssimilationTests:
         observed_one, observed_two = next_state.tell_history[0]
         assert observed_one.proposal.candidate == 4
         assert observed_one.candidate == 3
+        assert observed_one is not success_one.payload
         assert observed_two == success_two.payload
+        assert observed_two is success_two.payload
         assert optimizer.seen_changed_leaf_paths == (((),), None)
 
     def test_empty_success_only_attempts_keep_default_compatibility(self) -> None:

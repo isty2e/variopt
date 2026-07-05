@@ -1002,14 +1002,99 @@ class RuntimeArtifactsTests:
             attempts=(success, failure),
         )
 
-        field_names = tuple(field.name for field in fields(batch))
-        assert field_names == ("__orig_class__", "attempts")
+        compared_field_names = tuple(
+            field.name for field in fields(batch) if field.compare
+        )
+        assert compared_field_names == ("attempts",)
         assert batch.attempts == (success, failure)
         assert batch.requests == (request_one, request_two)
         assert batch.successes == (success,)
         assert batch.failures == (failure,)
         assert batch.success_indices == (0,)
         assert batch.failure_indices == (1,)
+
+    def test_evaluation_attempt_batch_reuses_derived_tuple_views(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        success = make_int_success(request_one)
+        failure = make_int_failure(request_two)
+        batch: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
+            attempts=(success, failure),
+        )
+
+        assert batch.requests is batch.requests
+        assert batch.successes is batch.successes
+        assert batch.failures is batch.failures
+        assert batch.success_indices is batch.success_indices
+        assert batch.failure_indices is batch.failure_indices
+        assert batch.payloads is batch.payloads
+        assert batch.evaluation_count == 2
+        assert batch.evaluation_count == 2
+        assert batch.has_failures is True
+        assert batch.has_failures is True
+
+    def test_evaluation_attempt_batch_cached_views_do_not_affect_equality(
+        self,
+    ) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        success = make_int_success(request_one)
+        failure = make_int_failure(request_two)
+        cached: EvaluationAttemptBatch[int, ObservationPayload] = (
+            EvaluationAttemptBatch(attempts=(success, failure))
+        )
+        uncached: EvaluationAttemptBatch[int, ObservationPayload] = (
+            EvaluationAttemptBatch(attempts=(success, failure))
+        )
+
+        _ = cached.requests
+        _ = cached.successes
+        _ = cached.failures
+        _ = cached.success_indices
+        _ = cached.failure_indices
+        _ = cached.payloads
+        _ = cached.evaluation_count
+        _ = cached.has_failures
+
+        assert cached == uncached
+
+    def test_evaluation_attempt_batch_pickle_preserves_cached_views(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        success = make_int_success(request_one)
+        failure = make_int_failure(request_two)
+        batch: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
+            attempts=(success, failure),
+        )
+        _ = batch.requests
+        _ = batch.successes
+        _ = batch.failures
+        _ = batch.success_indices
+        _ = batch.failure_indices
+        _ = batch.payloads
+        _ = batch.evaluation_count
+        _ = batch.has_failures
+
+        restored = cast(
+            EvaluationAttemptBatch[int, ObservationPayload],
+            pickle.loads(pickle.dumps(batch)),
+        )
+
+        assert restored.attempts == (success, failure)
+        assert restored.requests == (request_one, request_two)
+        assert restored.requests is restored.requests
+        assert restored.successes == (success,)
+        assert restored.successes is restored.successes
+        assert restored.failures == (failure,)
+        assert restored.failures is restored.failures
+        assert restored.success_indices == (0,)
+        assert restored.success_indices is restored.success_indices
+        assert restored.failure_indices == (1,)
+        assert restored.failure_indices is restored.failure_indices
+        assert restored.payloads == (success.payload,)
+        assert restored.payloads is restored.payloads
+        assert restored.evaluation_count == 2
+        assert restored.has_failures is True
 
     def test_evaluation_attempt_batch_accepts_canonical_attempt_slots(self) -> None:
         request_one = make_int_request(1, "p-1")
@@ -1020,6 +1105,15 @@ class RuntimeArtifactsTests:
         batch: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
             attempts=(success, failure),
         )
+        _ = batch.requests
+        _ = batch.successes
+        _ = batch.failures
+        _ = batch.success_indices
+        _ = batch.failure_indices
+        _ = batch.payloads
+        _ = batch.evaluation_count
+        _ = batch.has_failures
+
         replaced = replace(batch, attempts=(failure, success))
 
         assert batch.requests == (request_one, request_two)
@@ -1148,6 +1242,23 @@ class RuntimeArtifactsTests:
 
         assert materialize_success_records((success,)) == (record,)
 
+    def test_materialize_success_record_reuses_aligned_observation_payload(
+        self,
+    ) -> None:
+        request = make_int_request(candidate=7, proposal_id="p-7")
+        record = Observation.from_objective_value(
+            request=request,
+            candidate=request.candidate,
+            value=7.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=request,
+            payload=record,
+        )
+
+        assert materialize_success_record(success) is record
+
     def test_materialize_success_record_rejects_attribute_bag_payload(self) -> None:
         request = make_int_request(candidate=7, proposal_id="p-7")
 
@@ -1271,6 +1382,54 @@ class RuntimeArtifactsTests:
         assert materialized.successes[0].payload is record
         assert materialized.failures == (failure,)
         assert materialized.evaluation_count == 4
+
+    def test_materialize_attempt_batch_records_preserves_builtin_record_payload(
+        self,
+    ) -> None:
+        request = make_int_request(candidate=5, proposal_id="p-5")
+        record = Observation.from_objective_value(
+            request=request,
+            candidate=request.candidate,
+            value=5.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=request,
+            payload=record,
+        )
+        batch: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(success,),
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.successes[0].payload is record
+
+    def test_materialize_attempt_batch_records_preserves_vector_record_payload(
+        self,
+    ) -> None:
+        request = make_int_request(candidate=5, proposal_id="p-5")
+        record = ObjectiveVectorRecord(
+            request=request,
+            candidate=request.candidate,
+            objective_values=(1.0, 2.0),
+            objective_scores=(1.0, -2.0),
+        )
+        success: EvaluationSuccess[int, ObjectiveVectorRecord[int]] = (
+            EvaluationSuccess(
+                request=request,
+                payload=record,
+            )
+        )
+        batch: EvaluationAttemptBatch[int, ObjectiveVectorRecord[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(success,),
+            )
+        )
+
+        materialized = materialize_attempt_batch_records(batch)
+
+        assert materialized.successes[0].payload is record
 
     def test_materialize_attempt_batch_records_preserves_refined_record_payload(
         self,
