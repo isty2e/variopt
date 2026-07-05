@@ -59,6 +59,8 @@ class SpaceGeometryExportTests:
         assert not (hasattr(geometry, "collect_child_geometries"))
         assert not (hasattr(geometry, "compile_builtin_structured_geometry"))
         assert not (hasattr(geometry, "is_builtin_child_space"))
+        assert not (hasattr(geometry, "BuiltinGeometrySpace"))
         assert not (hasattr(geometry, "normalized_squared_leaf_distance"))
         assert not (hasattr(geometry, "require_candidate_tuple"))
+        assert not (hasattr(geometry, "require_geometry_candidate_tuple"))
         assert not (hasattr(geometry, "validate_categorical_choice"))

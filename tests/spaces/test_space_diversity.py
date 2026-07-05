@@ -461,6 +461,16 @@ class StructuredSpaceDiversityMetricTests:
                 topology_mismatch_leaf_count=1,
             )
 
+    def test_conditional_space_reports_inactive_leaf_path(self) -> None:
+        space = ConditionalBranchSpace(
+            mode_space=CategoricalSpace(("tree", "mlp")),
+            depth_space=IntegerSpace(1, 5),
+        )
+        candidate = space.normalize(("mlp", 2))
+
+        assert space.is_active_leaf_path(candidate, ("mode",))
+        assert not space.is_active_leaf_path(candidate, ("depth",))
+
     def test_metric_collapses_topology_mismatch_as_full_leaf_penalty(self) -> None:
         space = ConditionalBranchSpace(
             mode_space=CategoricalSpace(("tree", "mlp")),

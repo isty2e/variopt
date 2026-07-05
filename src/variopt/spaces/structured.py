@@ -266,7 +266,7 @@ class StructuredSearchSpace(
         bool
             ``True`` when ``path`` is active for ``candidate``.
         """
-        return path in set(self.active_leaf_paths(candidate))
+        return path in self.active_leaf_paths(candidate)
 
     @abstractmethod
     def leaf_space_at_path(self, path: LeafPath) -> StructuredLeafSpace:

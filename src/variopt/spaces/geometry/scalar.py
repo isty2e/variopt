@@ -10,8 +10,8 @@ from ..scalar import (
 )
 from ..types import SpaceCandidateValue, SpaceScalarValue
 from .leaf import (
-    require_integer_candidate,
-    require_real_candidate,
+    require_geometry_integer_candidate,
+    require_geometry_real_candidate,
 )
 from .parts import StructuredDistanceParts
 
@@ -92,11 +92,11 @@ class RealSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> float:
         """Return one normalized squared distance for one real leaf."""
-        left_value = require_real_candidate(
+        left_value = require_geometry_real_candidate(
             value=left,
             message="real-space diversity requires numeric left leaf values",
         )
-        right_value = require_real_candidate(
+        right_value = require_geometry_real_candidate(
             value=right,
             message="real-space diversity requires numeric right leaf values",
         )
@@ -181,11 +181,11 @@ class IntegerSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> float:
         """Return one normalized squared distance for one integer leaf."""
-        left_value = require_integer_candidate(
+        left_value = require_geometry_integer_candidate(
             value=left,
             message="integer-space diversity requires canonical integer left leaf values",
         )
-        right_value = require_integer_candidate(
+        right_value = require_geometry_integer_candidate(
             value=right,
             message="integer-space diversity requires canonical integer right leaf values",
         )

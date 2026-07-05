@@ -850,8 +850,7 @@ class CategoricalSpace(
         CategoricalT
             Canonical sampled categorical value.
         """
-        index_space = IntegerSpace(0, len(self.choices) - 1)
-        index = index_space.sample(random_state)
+        index = random_state_randint(random_state, 0, len(self.choices))
         return self.choices[index]
 
     def alternatives(

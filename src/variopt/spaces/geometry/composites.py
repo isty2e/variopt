@@ -8,9 +8,9 @@ from ..scalar import IntegerSpace, RealSpace
 from ..types import SpaceCandidateValue
 from .contracts import StructuredSpaceGeometry
 from .leaf import (
-    require_candidate_tuple,
-    require_real_candidate,
-    require_record_candidate,
+    require_geometry_candidate_tuple,
+    require_geometry_real_candidate,
+    require_geometry_record_candidate,
 )
 from .parts import StructuredDistanceParts
 from .permutation import PermutationSpaceGeometry
@@ -91,11 +91,11 @@ class TupleSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one tuple candidate."""
-        left_tuple = require_candidate_tuple(
+        left_tuple = require_geometry_candidate_tuple(
             value=left,
             message="tuple-space fast diversity path requires canonical tuple candidates",
         )
-        right_tuple = require_candidate_tuple(
+        right_tuple = require_geometry_candidate_tuple(
             value=right,
             message="tuple-space fast diversity path requires canonical tuple candidates",
         )
@@ -189,11 +189,11 @@ class RecordSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one record candidate."""
-        left_record = require_record_candidate(
+        left_record = require_geometry_record_candidate(
             value=left,
             message="record-space fast diversity path requires canonical record candidates",
         )
-        right_record = require_record_candidate(
+        right_record = require_geometry_record_candidate(
             value=right,
             message="record-space fast diversity path requires canonical record candidates",
         )
@@ -298,11 +298,11 @@ class ArraySpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one homogeneous array."""
-        left_tuple = require_candidate_tuple(
+        left_tuple = require_geometry_candidate_tuple(
             value=left,
             message="array-space fast diversity path requires canonical tuple candidates",
         )
-        right_tuple = require_candidate_tuple(
+        right_tuple = require_geometry_candidate_tuple(
             value=right,
             message="array-space fast diversity path requires canonical tuple candidates",
         )
@@ -416,11 +416,11 @@ class BinaryArraySpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one binary integer array."""
-        left_tuple = require_candidate_tuple(
+        left_tuple = require_geometry_candidate_tuple(
             value=left,
             message="binary-array diversity requires canonical tuple candidates",
         )
-        right_tuple = require_candidate_tuple(
+        right_tuple = require_geometry_candidate_tuple(
             value=right,
             message="binary-array diversity requires canonical tuple candidates",
         )
@@ -500,11 +500,11 @@ class IntegerArraySpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one integer array."""
-        left_tuple = require_candidate_tuple(
+        left_tuple = require_geometry_candidate_tuple(
             value=left,
             message="integer-array diversity requires canonical tuple candidates",
         )
-        right_tuple = require_candidate_tuple(
+        right_tuple = require_geometry_candidate_tuple(
             value=right,
             message="integer-array diversity requires canonical tuple candidates",
         )
@@ -628,11 +628,11 @@ class RealArraySpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one real array."""
-        left_tuple = require_candidate_tuple(
+        left_tuple = require_geometry_candidate_tuple(
             value=left,
             message="real-array diversity requires canonical tuple candidates",
         )
-        right_tuple = require_candidate_tuple(
+        right_tuple = require_geometry_candidate_tuple(
             value=right,
             message="real-array diversity requires canonical tuple candidates",
         )
@@ -643,11 +643,11 @@ class RealArraySpaceGeometry:
         element_space = self.element_space
         if element_space.low == element_space.high:
             for index in range(self.length):
-                left_value = require_real_candidate(
+                left_value = require_geometry_real_candidate(
                     value=left_tuple[index],
                     message="real-array diversity requires numeric left leaf values",
                 )
-                right_value = require_real_candidate(
+                right_value = require_geometry_real_candidate(
                     value=right_tuple[index],
                     message="real-array diversity requires numeric right leaf values",
                 )
@@ -665,11 +665,11 @@ class RealArraySpaceGeometry:
         if element_space.scale == "log":
             coordinate_span = log(element_space.high) - log(element_space.low)
             for index in range(self.length):
-                left_value = require_real_candidate(
+                left_value = require_geometry_real_candidate(
                     value=left_tuple[index],
                     message="real-array diversity requires numeric left leaf values",
                 )
-                right_value = require_real_candidate(
+                right_value = require_geometry_real_candidate(
                     value=right_tuple[index],
                     message="real-array diversity requires numeric right leaf values",
                 )
@@ -687,11 +687,11 @@ class RealArraySpaceGeometry:
 
         coordinate_span = element_space.high - element_space.low
         for index in range(self.length):
-            left_value = require_real_candidate(
+            left_value = require_geometry_real_candidate(
                 value=left_tuple[index],
                 message="real-array diversity requires numeric left leaf values",
             )
-            right_value = require_real_candidate(
+            right_value = require_geometry_real_candidate(
                 value=right_tuple[index],
                 message="real-array diversity requires numeric right leaf values",
             )

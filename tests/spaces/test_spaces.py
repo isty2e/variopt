@@ -332,6 +332,13 @@ class SearchSpaceTests:
         with pytest.raises(ValueError):
             _ = space.normalize("z")
 
+    def test_categorical_space_sample_uses_canonical_randint_index(self) -> None:
+        space: CategoricalSpace[str] = CategoricalSpace(("a", "b", "c"))
+
+        candidate = space.sample(normalize_random_state(3))
+
+        assert candidate == "c"
+
     def test_categorical_space_normalizes_to_declared_choice_type(self) -> None:
         numeric_space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((1.0, 2.0))
         binary_space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((0, 1))
