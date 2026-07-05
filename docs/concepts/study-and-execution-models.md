@@ -59,7 +59,9 @@ study-side lifecycle objects for one exact-async step. Most users do not need
 them directly; they exist for explicit polling, suspension, and resumption
 around evaluators that support the corresponding async lifecycle. They are live
 evaluator/session handles, not durable checkpoint artifacts; do not serialize
-them for crash recovery.
+them for crash recovery. With `AsyncJoblibEvaluator`, suspended batches are
+stored in the same evaluator instance's in-memory runtime state, so a resume
+handle is only valid while that evaluator instance remains alive.
 
 ## Exact-Async Example
 

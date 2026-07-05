@@ -155,14 +155,15 @@ class RunMethod(
         state: RunMethodStateT,
         observations: Sequence[RunMethodRecordT],
     ) -> RunMethodStateT:
-        """Advance the run-method state with one observation batch.
+        """Advance the run-method state with materialized feedback records.
 
         Parameters
         ----------
         state : RunMethodStateT
             Current immutable run-method state.
-        observations : Sequence[EvaluationRecordT]
-            Evaluation records aligned to the proposals issued by ``ask``.
+        observations : Sequence[RunMethodRecordT]
+            Materialized feedback records aligned to proposals issued by
+            ``ask``.
 
         Returns
         -------
@@ -182,8 +183,8 @@ class RunMethod(
         state : RunMethodStateT
             Current immutable run-method state.
         attempts : EvaluationAttemptBatch[OutcomeCandidateT, RunMethodRecordT]
-            Dense request-aligned batch containing successful outcomes and
-            recorded user-code evaluation failures.
+            Dense request-aligned batch containing successful materialized
+            feedback records and recorded user-code evaluation failures.
 
         Returns
         -------

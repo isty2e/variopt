@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from itertools import count
 from os import cpu_count
-from queue import Empty, Queue
-from threading import RLock, Thread, current_thread
+from queue import Empty, Full, Queue
+from threading import Event, RLock, Thread, current_thread
 from time import monotonic
 from types import ModuleType
 from typing import Generic, Literal, TypeVar, cast
@@ -50,6 +50,8 @@ from .contracts import (
 from .execution import build_execution_resources, validate_joblib_configuration
 
 _ABORT_JOIN_TIMEOUT_SECONDS = 0.01
+_RESULT_QUEUE_PUT_TIMEOUT_SECONDS = 0.01
+_RESULT_QUEUE_WAIT_POLL_SECONDS = 0.05
 _RESULT_QUEUE_COMPLETIONS_PER_WORKER = 2
 _RESULT_QUEUE_TERMINAL_EVENT_CAPACITY = 1
 _JOBLIB_PROCESS_EXECUTOR_MODULE = "joblib.externals.loky.process_executor"
@@ -76,9 +78,8 @@ def _joblib_process_failure_types() -> tuple[type[BaseException], ...]:
     try:
         process_executor_module = import_module(_JOBLIB_PROCESS_EXECUTOR_MODULE)
     except ModuleNotFoundError as exception:
-        if (
-            exception.name is None
-            or not _JOBLIB_PROCESS_EXECUTOR_MODULE.startswith(exception.name)
+        if exception.name is None or not _JOBLIB_PROCESS_EXECUTOR_MODULE.startswith(
+            exception.name
         ):
             raise
         return ()
@@ -183,7 +184,9 @@ def _effective_joblib_worker_count(n_jobs: int) -> int:
         return n_jobs
 
     detected_cpu_count = cpu_count()
-    available_cpu_count = 1 if detected_cpu_count is None else max(1, detected_cpu_count)
+    available_cpu_count = (
+        1 if detected_cpu_count is None else max(1, detected_cpu_count)
+    )
     if n_jobs == -1:
         return available_cpu_count
 
@@ -201,8 +204,7 @@ def _async_joblib_result_queue_max_size(
         request_count + _RESULT_QUEUE_TERMINAL_EVENT_CAPACITY,
     )
     worker_limited_capacity = (
-        _effective_joblib_worker_count(n_jobs)
-        * _RESULT_QUEUE_COMPLETIONS_PER_WORKER
+        _effective_joblib_worker_count(n_jobs) * _RESULT_QUEUE_COMPLETIONS_PER_WORKER
         + _RESULT_QUEUE_TERMINAL_EVENT_CAPACITY
     )
     return min(request_limited_capacity, worker_limited_capacity)
@@ -224,6 +226,14 @@ def _new_async_joblib_result_queue(
             request_count=request_count,
         ),
     )
+
+
+def _result_queue_get_timeout(deadline: float | None) -> float:
+    """Return one bounded queue wait interval for cancellable blocking waits."""
+    if deadline is None:
+        return _RESULT_QUEUE_WAIT_POLL_SECONDS
+
+    return min(_RESULT_QUEUE_WAIT_POLL_SECONDS, max(0.0, deadline - monotonic()))
 
 
 def _inactive_batch_failure(handle: EvaluationBatchHandle) -> BatchExecutionFailed:
@@ -253,22 +263,54 @@ def _drain_async_joblib_results(
         | AsyncJoblibFailedResult
         | AsyncJoblibExhaustedResult
     ],
+    abort_event: Event,
+    attempt_generation: int,
 ) -> None:
     """Drain a blocking joblib result stream into a non-blocking queue."""
+
+    def put_result_event(
+        result_event: (
+            AsyncJoblibCompletedResult[JoblibEvaluationResultT]
+            | AsyncJoblibFailedResult
+            | AsyncJoblibExhaustedResult
+        ),
+    ) -> bool:
+        while not abort_event.is_set():
+            try:
+                result_queue.put(
+                    result_event,
+                    timeout=_RESULT_QUEUE_PUT_TIMEOUT_SECONDS,
+                )
+                return True
+            except Full:
+                continue
+        return False
+
     try:
         for proposal_index, outcome in result_generator:
-            result_queue.put(
+            if not put_result_event(
                 AsyncJoblibCompletedResult(
                     index=proposal_index,
                     outcome=outcome,
+                    attempt_generation=attempt_generation,
                 ),
-            )
+            ):
+                return
     except GeneratorExit:
-        result_queue.put(AsyncJoblibExhaustedResult())
+        _ = put_result_event(
+            AsyncJoblibExhaustedResult(attempt_generation=attempt_generation),
+        )
     except BaseException as exception:
-        result_queue.put(AsyncJoblibFailedResult(exception=exception))
+        _ = put_result_event(
+            AsyncJoblibFailedResult(
+                exception=exception,
+                attempt_generation=attempt_generation,
+            ),
+        )
     else:
-        result_queue.put(AsyncJoblibExhaustedResult())
+        _ = put_result_event(
+            AsyncJoblibExhaustedResult(attempt_generation=attempt_generation),
+        )
 
 
 def _start_async_joblib_result_worker(
@@ -279,6 +321,8 @@ def _start_async_joblib_result_worker(
         | AsyncJoblibFailedResult
         | AsyncJoblibExhaustedResult
     ],
+    abort_event: Event,
+    attempt_generation: int,
 ) -> Thread:
     """Start a daemon worker that drains one blocking joblib result stream."""
     result_worker = Thread(
@@ -286,6 +330,8 @@ def _start_async_joblib_result_worker(
         kwargs={
             "result_generator": result_generator,
             "result_queue": result_queue,
+            "abort_event": abort_event,
+            "attempt_generation": attempt_generation,
         },
         name="variopt-async-joblib-drain",
         daemon=True,
@@ -316,6 +362,12 @@ class AsyncJoblibEvaluator(
         Number of times to retry unfinished work after infrastructure failures.
         Retries apply only to backend boundary failures such as process-pool
         termination, not to ordinary objective exceptions.
+
+    Notes
+    -----
+    Suspended joblib batches are kept in this evaluator instance's in-memory
+    runtime state. Resume handles must be used with the same live evaluator
+    instance; they are not durable process-restart checkpoints.
     """
 
     n_jobs: int = -1
@@ -435,7 +487,9 @@ class AsyncJoblibEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationBatchSession[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]:
+    ) -> EvaluationBatchSession[
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]
+    ]:
         """Open a resumable pending-aware joblib session.
 
         Parameters
@@ -529,13 +583,15 @@ class AsyncJoblibEvaluator(
         return EvaluationAttemptBatch[
             CandidateT,
             JoblibEvaluationPayloadT,
-        ].from_single_request_attempts(tuple(attempts))
+        ].from_single_request_attempts(attempts)
 
     @override
     def resume_session(
         self,
         handle: EvaluationBatchResumeHandle,
-    ) -> EvaluationBatchSession[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]:
+    ) -> EvaluationBatchSession[
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]
+    ]:
         """Resume a suspended async joblib session.
 
         Parameters
@@ -637,7 +693,9 @@ class AsyncJoblibEvaluator(
                 raise ValueError(msg)
 
             if handle.request_count != len(suspended_batch.request_inputs):
-                msg = "resume handle request_count does not match suspended attempt batch"
+                msg = (
+                    "resume handle request_count does not match suspended attempt batch"
+                )
                 raise ValueError(msg)
 
             if handle.completed_count != len(suspended_batch.completed_indices):
@@ -674,9 +732,7 @@ class AsyncJoblibEvaluator(
         )
         with self._lifecycle_lock:
             self._resuming_attempt_batches.discard(handle.batch_id)
-            was_discarded = (
-                handle.batch_id in self._discarded_resuming_attempt_batches
-            )
+            was_discarded = handle.batch_id in self._discarded_resuming_attempt_batches
             if was_discarded:
                 self._discarded_resuming_attempt_batches.remove(handle.batch_id)
             else:
@@ -726,9 +782,7 @@ class AsyncJoblibEvaluator(
         """Start one default joblib attempt with an explicit abort hook."""
         _ = execution_resources
         parallel_factory = cast(
-            JoblibGeneratorParallelFactory[
-                tuple[int, JoblibEvaluationResultT]
-            ],
+            JoblibGeneratorParallelFactory[tuple[int, JoblibEvaluationResultT]],
             getattr(joblib, "Parallel"),
         )
         delayed_factory = cast(
@@ -823,9 +877,12 @@ class AsyncJoblibEvaluator(
             n_jobs=self.n_jobs,
             request_count=len(active_attempt_inputs),
         )
+        abort_event = Event()
         result_worker = _start_async_joblib_result_worker(
             result_generator=attempt.result_generator,
             result_queue=result_queue,
+            abort_event=abort_event,
+            attempt_generation=0,
         )
         return ActiveAsyncJoblibBatch(
             problem=problem,
@@ -835,6 +892,7 @@ class AsyncJoblibEvaluator(
             result_queue=result_queue,
             result_worker=result_worker,
             abort_attempt=attempt.abort,
+            abort_event=abort_event,
             completed_indices=set() if completed_indices is None else completed_indices,
             infrastructure_retry_count=infrastructure_retry_count,
         )
@@ -867,11 +925,17 @@ class AsyncJoblibEvaluator(
             n_jobs=self.n_jobs,
             request_count=len(request_inputs),
         )
+        abort_event = Event()
+        attempt_generation = active_batch.attempt_generation + 1
         active_batch.result_generator = attempt.result_generator
         active_batch.result_queue = result_queue
+        active_batch.abort_event = abort_event
+        active_batch.attempt_generation = attempt_generation
         active_batch.result_worker = _start_async_joblib_result_worker(
             result_generator=attempt.result_generator,
             result_queue=result_queue,
+            abort_event=abort_event,
+            attempt_generation=attempt_generation,
         )
         active_batch.abort_attempt = attempt.abort
 
@@ -910,9 +974,12 @@ class AsyncJoblibEvaluator(
             n_jobs=self.n_jobs,
             request_count=len(active_attempt_inputs),
         )
+        abort_event = Event()
         result_worker = _start_async_joblib_result_worker(
             result_generator=attempt.result_generator,
             result_queue=result_queue,
+            abort_event=abort_event,
+            attempt_generation=0,
         )
         return ActiveAsyncJoblibBatch(
             problem=problem,
@@ -922,6 +989,7 @@ class AsyncJoblibEvaluator(
             result_queue=result_queue,
             result_worker=result_worker,
             abort_attempt=attempt.abort,
+            abort_event=abort_event,
             completed_indices=set() if completed_indices is None else completed_indices,
             infrastructure_retry_count=infrastructure_retry_count,
         )
@@ -955,11 +1023,17 @@ class AsyncJoblibEvaluator(
             n_jobs=self.n_jobs,
             request_count=len(request_inputs),
         )
+        abort_event = Event()
+        attempt_generation = active_batch.attempt_generation + 1
         active_batch.result_generator = attempt.result_generator
         active_batch.result_queue = result_queue
+        active_batch.abort_event = abort_event
+        active_batch.attempt_generation = attempt_generation
         active_batch.result_worker = _start_async_joblib_result_worker(
             result_generator=attempt.result_generator,
             result_queue=result_queue,
+            abort_event=abort_event,
+            attempt_generation=attempt_generation,
         )
         active_batch.abort_attempt = attempt.abort
 
@@ -973,6 +1047,7 @@ class AsyncJoblibEvaluator(
         ],
     ) -> None:
         """Best-effort abort for one active joblib attempt."""
+        active_batch.abort_event.set()
         abort_failure: Exception | None = None
         if active_batch.abort_attempt is not None:
             try:
@@ -992,7 +1067,11 @@ class AsyncJoblibEvaluator(
             else:
                 close_method_missing = True
 
-        if abort_failure is not None and close_failure is None and not close_method_missing:
+        if (
+            abort_failure is not None
+            and close_failure is None
+            and not close_method_missing
+        ):
             warn(
                 (
                     "async joblib abort hook failed; fallback generator close "
@@ -1044,7 +1123,10 @@ class AsyncJoblibEvaluator(
             if self._active_batches.get(handle.batch_id) is not active_batch:
                 raise _inactive_batch_failure(handle)
 
-            if active_batch.infrastructure_retry_count >= self.infrastructure_retry_limit:
+            if (
+                active_batch.infrastructure_retry_count
+                >= self.infrastructure_retry_limit
+            ):
                 return False
 
             remaining_inputs = _remaining_async_joblib_request_inputs(
@@ -1088,7 +1170,10 @@ class AsyncJoblibEvaluator(
             if self._active_attempt_batches.get(handle.batch_id) is not active_batch:
                 raise _inactive_batch_failure(handle)
 
-            if active_batch.infrastructure_retry_count >= self.infrastructure_retry_limit:
+            if (
+                active_batch.infrastructure_retry_count
+                >= self.infrastructure_retry_limit
+            ):
                 return False
 
             remaining_inputs = _remaining_async_joblib_request_inputs(
@@ -1276,9 +1361,7 @@ class AsyncJoblibEvaluator(
         self,
         handle: EvaluationBatchHandle,
     ) -> tuple[
-        CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
-        ],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]],
         ...,
     ]:
         """Poll a native attempt batch without blocking."""
@@ -1294,9 +1377,7 @@ class AsyncJoblibEvaluator(
         *,
         timeout: float | None = None,
     ) -> tuple[
-        CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
-        ],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]],
         ...,
     ]:
         """Wait for at least one native attempt-batch completion group."""
@@ -1328,18 +1409,34 @@ class AsyncJoblibEvaluator(
         while True:
             try:
                 if block:
-                    queue_timeout = (
-                        None
-                        if deadline is None
-                        else max(0.0, deadline - monotonic())
-                    )
+                    queue_timeout = _result_queue_get_timeout(deadline)
                     result_event = active_batch.result_queue.get(
                         timeout=queue_timeout,
                     )
                 else:
                     result_event = active_batch.result_queue.get_nowait()
             except Empty:
+                if block:
+                    with self._lifecycle_lock:
+                        if (
+                            self._active_batches.get(handle.batch_id)
+                            is not active_batch
+                        ):
+                            raise _inactive_batch_failure(handle)
+                    if deadline is None or monotonic() < deadline:
+                        continue
                 return ()
+
+            with self._lifecycle_lock:
+                if self._active_batches.get(handle.batch_id) is not active_batch:
+                    raise _inactive_batch_failure(handle)
+                is_stale_event = (
+                    result_event.attempt_generation != active_batch.attempt_generation
+                )
+            if is_stale_event:
+                if not block:
+                    return ()
+                continue
 
             if isinstance(result_event, AsyncJoblibCompletedResult):
                 return self._completion_group_for_result_event(
@@ -1373,13 +1470,10 @@ class AsyncJoblibEvaluator(
                 )
 
             failure_kind = _classify_joblib_failure(result_event.exception)
-            if (
-                failure_kind == "infrastructure"
-                and self._retry_infrastructure_failure(
-                    handle=handle,
-                    active_batch=active_batch,
-                    cause=result_event.exception,
-                )
+            if failure_kind == "infrastructure" and self._retry_infrastructure_failure(
+                handle=handle,
+                active_batch=active_batch,
+                cause=result_event.exception,
             ):
                 if not block:
                     return ()
@@ -1402,9 +1496,7 @@ class AsyncJoblibEvaluator(
         block: bool,
         timeout: float | None,
     ) -> tuple[
-        CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
-        ],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]],
         ...,
     ]:
         """Collect one queued attempt completion group."""
@@ -1418,18 +1510,37 @@ class AsyncJoblibEvaluator(
         while True:
             try:
                 if block:
-                    queue_timeout = (
-                        None
-                        if deadline is None
-                        else max(0.0, deadline - monotonic())
-                    )
+                    queue_timeout = _result_queue_get_timeout(deadline)
                     result_event = active_batch.result_queue.get(
                         timeout=queue_timeout,
                     )
                 else:
                     result_event = active_batch.result_queue.get_nowait()
             except Empty:
+                if block:
+                    with self._lifecycle_lock:
+                        if (
+                            self._active_attempt_batches.get(handle.batch_id)
+                            is not active_batch
+                        ):
+                            raise _inactive_batch_failure(handle)
+                    if deadline is None or monotonic() < deadline:
+                        continue
                 return ()
+
+            with self._lifecycle_lock:
+                if (
+                    self._active_attempt_batches.get(handle.batch_id)
+                    is not active_batch
+                ):
+                    raise _inactive_batch_failure(handle)
+                is_stale_event = (
+                    result_event.attempt_generation != active_batch.attempt_generation
+                )
+            if is_stale_event:
+                if not block:
+                    return ()
+                continue
 
             if isinstance(result_event, AsyncJoblibCompletedResult):
                 return self._attempt_completion_group_for_result_event(
@@ -1466,20 +1577,22 @@ class AsyncJoblibEvaluator(
                 )
 
             failure_kind = _classify_joblib_attempt_failure(result_event.exception)
-            if (
-                _is_retryable_joblib_infrastructure_failure(result_event.exception)
-                and self._retry_attempt_infrastructure_failure(
-                    handle=handle,
-                    active_batch=active_batch,
-                    cause=result_event.exception,
-                )
+            if _is_retryable_joblib_infrastructure_failure(
+                result_event.exception
+            ) and self._retry_attempt_infrastructure_failure(
+                handle=handle,
+                active_batch=active_batch,
+                cause=result_event.exception,
             ):
                 if not block:
                     return ()
                 continue
 
             with self._lifecycle_lock:
-                if self._active_attempt_batches.get(handle.batch_id) is not active_batch:
+                if (
+                    self._active_attempt_batches.get(handle.batch_id)
+                    is not active_batch
+                ):
                     raise _inactive_batch_failure(handle)
                 _ = self._active_attempt_batches.pop(handle.batch_id, None)
             raise BatchExecutionFailed(
@@ -1507,12 +1620,15 @@ class AsyncJoblibEvaluator(
     ]:
         """Convert one queued result event into a completion group."""
         proposal_index = result_event.index
-        duplicate_batch: ActiveAsyncJoblibBatch[
-            BoundaryT,
-            CandidateT,
-            EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
-            JoblibEvaluationPayloadT,
-        ] | None = None
+        duplicate_batch: (
+            ActiveAsyncJoblibBatch[
+                BoundaryT,
+                CandidateT,
+                EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
+                JoblibEvaluationPayloadT,
+            ]
+            | None
+        ) = None
         with self._lifecycle_lock:
             if self._active_batches.get(handle.batch_id) is not active_batch:
                 raise _inactive_batch_failure(handle)
@@ -1554,25 +1670,28 @@ class AsyncJoblibEvaluator(
             EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
     ) -> tuple[
-        CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
-        ],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]],
         ...,
     ]:
         """Convert one queued native attempt event into a completion group."""
         proposal_index = result_event.index
-        duplicate_batch: ActiveAsyncJoblibBatch[
-            BoundaryT,
-            CandidateT,
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
-            JoblibEvaluationPayloadT,
-        ] | None = None
+        duplicate_batch: (
+            ActiveAsyncJoblibBatch[
+                BoundaryT,
+                CandidateT,
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
+                JoblibEvaluationPayloadT,
+            ]
+            | None
+        ) = None
         with self._lifecycle_lock:
             if self._active_attempt_batches.get(handle.batch_id) is not active_batch:
                 raise _inactive_batch_failure(handle)
 
             if proposal_index in active_batch.completed_indices:
-                duplicate_batch = self._active_attempt_batches.pop(handle.batch_id, None)
+                duplicate_batch = self._active_attempt_batches.pop(
+                    handle.batch_id, None
+                )
             else:
                 active_batch.completed_indices.add(proposal_index)
                 if len(active_batch.completed_indices) >= handle.request_count:
@@ -1605,6 +1724,7 @@ class AsyncJoblibEvaluator(
         """
         with self._lifecycle_lock:
             active_batch = self._active_batches.pop(handle.batch_id, None)
+            _ = self._suspended_batches.pop(handle.batch_id, None)
         if active_batch is None:
             return
 
@@ -1614,6 +1734,7 @@ class AsyncJoblibEvaluator(
         """Cancel an active native attempt batch."""
         with self._lifecycle_lock:
             active_batch = self._active_attempt_batches.pop(handle.batch_id, None)
+            _ = self._suspended_attempt_batches.pop(handle.batch_id, None)
         if active_batch is None:
             return
 
@@ -1637,20 +1758,28 @@ class AsyncJoblibEvaluator(
         """
         with self._lifecycle_lock:
             active_batch = self._active_batches.pop(handle.batch_id, None)
-        if active_batch is None:
-            msg = f"unknown active batch handle: {handle.batch_id}"
-            raise ValueError(msg)
-
-        self._abort_active_batch_attempt(active_batch)
-
-        with self._lifecycle_lock:
-            self._suspended_batches[handle.batch_id] = SuspendedAsyncJoblibBatch(
+            if active_batch is None:
+                msg = f"unknown active batch handle: {handle.batch_id}"
+                raise ValueError(msg)
+            suspended_batch = SuspendedAsyncJoblibBatch(
                 problem=active_batch.problem,
                 request_inputs=active_batch.request_inputs,
                 execution_resources=active_batch.execution_resources,
                 completed_indices=set(active_batch.completed_indices),
                 infrastructure_retry_count=active_batch.infrastructure_retry_count,
             )
+            self._suspended_batches[handle.batch_id] = suspended_batch
+
+        self._abort_active_batch_attempt(active_batch)
+
+        with self._lifecycle_lock:
+            if self._suspended_batches.get(handle.batch_id) is not suspended_batch:
+                msg = "async batch was cancelled while suspending"
+                raise BatchExecutionFailed(
+                    handle=handle,
+                    kind="cancelled",
+                    cause=RuntimeError(msg),
+                )
         return EvaluationBatchResumeHandle(
             batch_id=handle.batch_id,
             request_count=handle.request_count,
@@ -1664,20 +1793,31 @@ class AsyncJoblibEvaluator(
         """Suspend an active native attempt batch and return a resume handle."""
         with self._lifecycle_lock:
             active_batch = self._active_attempt_batches.pop(handle.batch_id, None)
-        if active_batch is None:
-            msg = f"unknown active attempt batch handle: {handle.batch_id}"
-            raise ValueError(msg)
-
-        self._abort_active_batch_attempt(active_batch)
-
-        with self._lifecycle_lock:
-            self._suspended_attempt_batches[handle.batch_id] = SuspendedAsyncJoblibBatch(
+            if active_batch is None:
+                msg = f"unknown active attempt batch handle: {handle.batch_id}"
+                raise ValueError(msg)
+            suspended_batch = SuspendedAsyncJoblibBatch(
                 problem=active_batch.problem,
                 request_inputs=active_batch.request_inputs,
                 execution_resources=active_batch.execution_resources,
                 completed_indices=set(active_batch.completed_indices),
                 infrastructure_retry_count=active_batch.infrastructure_retry_count,
             )
+            self._suspended_attempt_batches[handle.batch_id] = suspended_batch
+
+        self._abort_active_batch_attempt(active_batch)
+
+        with self._lifecycle_lock:
+            if (
+                self._suspended_attempt_batches.get(handle.batch_id)
+                is not suspended_batch
+            ):
+                msg = "async attempt batch was cancelled while suspending"
+                raise BatchExecutionFailed(
+                    handle=handle,
+                    kind="cancelled",
+                    cause=RuntimeError(msg),
+                )
         return EvaluationBatchResumeHandle(
             batch_id=handle.batch_id,
             request_count=handle.request_count,
@@ -1723,9 +1863,7 @@ class _AsyncJoblibAttemptSessionEvaluator(
         self,
         handle: EvaluationBatchHandle,
     ) -> tuple[
-        CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
-        ],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]],
         ...,
     ]:
         """Poll native attempt completions without blocking."""
@@ -1737,9 +1875,7 @@ class _AsyncJoblibAttemptSessionEvaluator(
         *,
         timeout: float | None = None,
     ) -> tuple[
-        CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
-        ],
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]],
         ...,
     ]:
         """Wait for native attempt completions."""

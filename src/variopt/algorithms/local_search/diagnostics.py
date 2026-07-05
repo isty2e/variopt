@@ -24,7 +24,7 @@ def _merge_failed_attempts(
     episode_failures = EvaluationAttemptBatch[
         CandidateT,
         PayloadT,
-    ].from_single_request_attempts(tuple(failed_attempts))
+    ].from_single_request_attempts(failed_attempts)
     if len(episode_failures.failures) != episode_failures.attempt_count:
         msg = "failed_attempts must contain only failed one-request attempts"
         raise ValueError(msg)

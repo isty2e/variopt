@@ -177,9 +177,11 @@ class ResumableBatchSession(
 
     Notes
     -----
-    Resumable sessions allow study-level exact-async orchestration to survive
-    process or control-flow boundaries by persisting evaluator-owned resume
-    handles.
+    Resumable sessions allow study-level exact-async orchestration to detach
+    and reattach to a logical batch when the evaluator keeps the suspended work
+    alive. The returned handle is evaluator-owned runtime state, not a generic
+    durable checkpoint; persistence and process-restart guarantees are
+    evaluator-specific.
     """
 
     @abstractmethod

@@ -13,9 +13,10 @@ format. Stability guarantees for the public surface are documented in the
 - Removed the obsolete generic request-aligned record API from the root and
   artifact facades. `EvaluationRecord`, `InteractionEvaluationRecord`, and
   `RequestAlignedEvaluationRecord` are no longer public entry points; use
-  request-free protocol payloads plus `EvaluationSuccess`/terminal artifacts, or
-  the concrete `Observation` and `ObjectiveVectorRecord` compatibility
-  projections where those concrete views are required.
+  request-free protocol payloads plus `variopt.artifacts.EvaluationSuccess`
+  and terminal artifacts, or the concrete `Observation` and
+  `ObjectiveVectorRecord` compatibility projections where those concrete views
+  are required.
 - `KernelDiagnostics` and `KernelStatus` are supported through the root facade
   and `variopt.artifacts` only. Imports such as
   `from variopt.kernel import KernelDiagnostics` now fail; use
@@ -24,8 +25,8 @@ format. Stability guarantees for the public surface are documented in the
 - `Study.run(...)` and `Study.optimize(...)` now default
   `count_evaluation_cost=True`. Evaluation budgets are charged against reported
   logical evaluation cost, including inner local-search evaluations, rather than
-  only the number of returned records. Code that intentionally wants outer-record
-  counting must pass `count_evaluation_cost=False`.
+  only the number of returned attempt slots. Code that intentionally wants
+  outer-attempt-slot counting must pass `count_evaluation_cost=False`.
 - Study execution now raises `EvaluationBudgetExhausted` instead of silently
   assimilating a step whose reported evaluation cost exceeds the remaining hard
   budget. When `stop_at_checkpoint_boundary=True` and a checkpoint-safe snapshot
@@ -65,6 +66,11 @@ format. Stability guarantees for the public surface are documented in the
   diagnostics, and failure metadata while projecting successful payloads into
   request-aligned records. The public `Study[...]` generic type therefore has
   separate payload and feedback-record axes.
+- Custom `RunMethod` implementations that need `Study` feedback must now
+  consume `tell_attempts(EvaluationAttemptBatch)`. The previous outcome-stream
+  assimilation hook is no longer adapted by `Study`; override
+  `tell_attempts(...)` directly, especially when recorded failures require
+  proposal cleanup or partial-generation handling.
 
 ### Added
 
@@ -94,7 +100,7 @@ format. Stability guarantees for the public surface are documented in the
   and verifies the optional MPI extra can be installed and imported.
 - Built-in sequential, joblib, async joblib, and MPI evaluators now expose
   `evaluate_attempts(...)` hooks that return `EvaluationAttemptBatch` values and
-  preserve user-code evaluation failures separately from successful outcomes.
+  preserve user-code evaluation failures separately from successful attempts.
 - Direct and built-in local-search kernels now use `EvaluationAttemptBatch`
   runner/result contracts. Failed inner local-search trials are charged to the
   visible top-level attempt's `evaluation_count` and summarized in

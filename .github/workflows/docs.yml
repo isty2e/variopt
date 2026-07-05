@@ -5,6 +5,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "CHANGELOG.md"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/docs.yml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "docs/**"
       - "mkdocs.yml"
+      - "CHANGELOG.md"
       - "src/**"
       - "pyproject.toml"
       - ".github/workflows/docs.yml"

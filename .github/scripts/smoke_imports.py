@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from sys import argv
 from types import ModuleType
-from typing import Literal
+from typing import Literal, cast
 
 SmokeSurface = Literal["base", "joblib-private", "mpi"]
 
@@ -19,21 +19,6 @@ BASE_INSTALL_MODULES: tuple[str, ...] = (
     "variopt.algorithms.population",
     "variopt.algorithms.local_search",
     "variopt.spaces.projections",
-)
-
-BASE_INSTALL_SYMBOLS: tuple[tuple[str, str], ...] = (
-    ("variopt", "Problem"),
-    ("variopt", "Study"),
-    ("variopt", "RealSpace"),
-    ("variopt.evaluators", "SequentialEvaluator"),
-    ("variopt.evaluators", "JoblibEvaluator"),
-    ("variopt.evaluators", "AsyncJoblibEvaluator"),
-    ("variopt.evaluators", "MpiEvaluator"),
-    ("variopt.evaluators", "MpiExecutorFactory"),
-    ("variopt.algorithms.population", "CSAOptimizer"),
-    ("variopt.algorithms.population", "DifferentialEvolutionOptimizer"),
-    ("variopt.algorithms.local_search", "StructuredHillClimbKernel"),
-    ("variopt.algorithms.local_search", "ScipyMinimizeKernel"),
 )
 
 JOBLIB_LOKY_EXCEPTION_SYMBOLS: tuple[str, ...] = (
@@ -81,6 +66,40 @@ def require_symbol(module_name: str, symbol_name: str) -> SmokeFailure | None:
     return None
 
 
+def normalize_public_symbol_names(
+    candidate: list[object] | tuple[object, ...],
+) -> tuple[str, ...] | None:
+    """Return canonical public symbol names when all entries are valid."""
+    symbol_names: list[str] = []
+    for name in candidate:
+        if not isinstance(name, str) or name == "":
+            return None
+        symbol_names.append(name)
+    return tuple(symbol_names)
+
+
+def public_symbol_names(
+    module: ModuleType, module_name: str
+) -> tuple[str, ...] | SmokeFailure:
+    """Return a module's canonical public names or a smoke failure."""
+    all_names: object = getattr(module, "__all__", None)
+    symbol_names: tuple[str, ...] | None = None
+    if isinstance(all_names, list):
+        raw_names = cast(list[object], all_names)
+        symbol_names = normalize_public_symbol_names(raw_names)
+    elif isinstance(all_names, tuple):
+        raw_names = cast(tuple[object, ...], all_names)
+        symbol_names = normalize_public_symbol_names(raw_names)
+
+    if symbol_names is None:
+        return SmokeFailure(
+            target=f"{module_name}.__all__",
+            detail="__all__ must be a list or tuple of non-empty strings",
+        )
+
+    return symbol_names
+
+
 def collect_base_failures() -> tuple[SmokeFailure, ...]:
     """Return base installed-package import failures."""
     failures: list[SmokeFailure] = []
@@ -88,11 +107,22 @@ def collect_base_failures() -> tuple[SmokeFailure, ...]:
         module = import_module_or_failure(module_name)
         if isinstance(module, SmokeFailure):
             failures.append(module)
+            continue
 
-    for module_name, symbol_name in BASE_INSTALL_SYMBOLS:
-        failure = require_symbol(module_name, symbol_name)
-        if failure is not None:
-            failures.append(failure)
+        symbol_names = public_symbol_names(module, module_name)
+        if isinstance(symbol_names, SmokeFailure):
+            failures.append(symbol_names)
+            continue
+
+        for symbol_name in symbol_names:
+            candidate: object = getattr(module, symbol_name, None)
+            if candidate is None:
+                failures.append(
+                    SmokeFailure(
+                        target=f"{module_name}.{symbol_name}",
+                        detail="public __all__ symbol is unavailable",
+                    )
+                )
 
     return tuple(failures)
 

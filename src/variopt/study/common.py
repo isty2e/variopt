@@ -330,7 +330,7 @@ def finalize_ordered_attempts(
         CandidateT,
         StudyPayloadT,
     ].from_single_request_attempts(
-        tuple(attempt for attempt in ordered_attempts if attempt is not None),
+        attempt for attempt in ordered_attempts if attempt is not None
     )
 
 

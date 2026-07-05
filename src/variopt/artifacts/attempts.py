@@ -1,6 +1,6 @@
 """Evaluation-attempt artifact definitions."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import InitVar, dataclass, field
 from typing import Generic, Protocol, TypeAlias, TypeGuard, overload, runtime_checkable
 
@@ -1383,13 +1383,13 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
     def __init__(
         self,
         *,
-        attempts: Sequence[EvaluationAttempt[CandidateT, PayloadT]],
+        attempts: Iterable[EvaluationAttempt[CandidateT, PayloadT]],
     ) -> None:
         """Create one ordered attempt batch.
 
         Parameters
         ----------
-        attempts : Sequence[EvaluationAttempt[CandidateT, PayloadT]]
+        attempts : Iterable[EvaluationAttempt[CandidateT, PayloadT]]
             Ordered attempt slots. Empty batches are valid and represent an
             empty request batch.
         """
@@ -1417,13 +1417,13 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
     @classmethod
     def from_single_request_attempts(
         cls,
-        attempts: Sequence["EvaluationAttemptBatch[CandidateT, PayloadT]"],
+        attempts: Iterable["EvaluationAttemptBatch[CandidateT, PayloadT]"],
     ) -> "EvaluationAttemptBatch[CandidateT, PayloadT]":
         """Merge one-slot attempt batches into one ordered attempt batch.
 
         Parameters
         ----------
-        attempts : Sequence[EvaluationAttemptBatch[CandidateT, PayloadT]]
+        attempts : Iterable[EvaluationAttemptBatch[CandidateT, PayloadT]]
             Attempt batches that each represent exactly one request slot.
 
         Returns
@@ -1438,17 +1438,18 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         ValueError
             If any input batch contains more or fewer than one request slot.
         """
-        merged_attempts: list[EvaluationAttempt[CandidateT, PayloadT]] = []
-        for attempt_batch in attempts:
-            if type(attempt_batch) is not EvaluationAttemptBatch:
-                msg = "attempts must contain EvaluationAttemptBatch values"
-                raise TypeError(msg)
-            if attempt_batch.attempt_count != 1:
-                msg = "each merged attempt must contain exactly one request"
-                raise ValueError(msg)
-            merged_attempts.append(attempt_batch.attempts[0])
 
-        return cls(attempts=tuple(merged_attempts))
+        def merged_attempts() -> Iterator[EvaluationAttempt[CandidateT, PayloadT]]:
+            for attempt_batch in attempts:
+                if type(attempt_batch) is not EvaluationAttemptBatch:
+                    msg = "attempts must contain EvaluationAttemptBatch values"
+                    raise TypeError(msg)
+                if attempt_batch.attempt_count != 1:
+                    msg = "each merged attempt must contain exactly one request"
+                    raise ValueError(msg)
+                yield attempt_batch.attempts[0]
+
+        return cls(attempts=merged_attempts())
 
     @classmethod
     def concatenate(

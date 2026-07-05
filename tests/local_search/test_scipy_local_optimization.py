@@ -62,8 +62,7 @@ def evaluate_query_directly(
         query.evaluation_budget.consume(len(query.proposals))
 
     requests = tuple(
-        EvaluationRequest(proposal=proposal)
-        for proposal in query.proposals
+        EvaluationRequest(proposal=proposal) for proposal in query.proposals
     )
     successes = tuple(
         EvaluationSuccess.from_scalar_observation(
@@ -620,7 +619,10 @@ class ScipyMinimizeKernelTests:
         assert success.evaluation_count == 2
         assert success.kernel_diagnostics is not None
         assert success.kernel_diagnostics.status == KernelStatus.FAILED
-        assert success.kernel_diagnostics.message == "optimized candidate evaluation failed"
+        assert (
+            success.kernel_diagnostics.message
+            == "optimized candidate evaluation failed"
+        )
         assert success.kernel_diagnostics.failed_attempt_count == 1
         assert success.kernel_diagnostics.failed_evaluation_count == 1
         assert attempts.evaluation_count == 2
@@ -941,6 +943,87 @@ class ScipyMinimizeKernelTests:
             candidate_equal=problem.space.candidates_equal,
         )
 
+    def test_no_success_budget_exhaustion_returns_recorded_failure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](method="L-BFGS-B")
+        evaluation_budget = EvaluationBudget(1)
+        runner_queries: list[
+            ProposalBatchQuery[float | int, float, ObservationPayload]
+        ] = []
+
+        def fake_run_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            _ = (
+                method,
+                coordinate_bounds,
+                tolerance,
+                options,
+            )
+            failed_score = objective_in_coordinate_space(initial_coordinates)
+            assert failed_score == float("inf")
+            _ = objective_in_coordinate_space((2.0,))
+            raise AssertionError("budget exhaustion should stop SciPy probing")
+
+        def failing_runner(
+            local_query: ProposalBatchQuery[float | int, float, ObservationPayload],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            runner_queries.append(local_query)
+            if local_query.evaluation_budget is not None:
+                local_query.evaluation_budget.consume(1)
+            proposal = local_query.proposals[0]
+            return EvaluationAttemptBatch(
+                attempts=(
+                    EvaluationFailure[float](
+                        request=EvaluationRequest(proposal=proposal),
+                        exception=EvaluationExceptionSnapshot.from_exception(
+                            ValueError("budget-bound attempt failed")
+                        ),
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            fake_run_scipy_minimize,
+        )
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(Proposal(candidate=4.0, proposal_id="p-1"),),
+            execution_resources=ExecutionResources(
+                parallel_owner="evaluator",
+                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+                owner_worker_count=1,
+                owner_backend="sequential",
+            ),
+            evaluation_budget=evaluation_budget,
+        )
+
+        attempts = kernel.run(query, failing_runner)
+
+        assert len(runner_queries) == 1
+        assert evaluation_budget.remaining == 0
+        assert attempts.successes == ()
+        assert attempts.failure_indices == (0,)
+        failure = attempts.failures[0]
+        assert failure.candidate == 4.0
+        assert failure.proposal_id == "p-1"
+        assert failure.exception.message == "budget-bound attempt failed"
+        assert attempts.evaluation_count == 1
+
     def test_scipy_rejects_multi_slot_runner_attempt_for_single_proposal(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -1062,7 +1145,9 @@ class ScipyMinimizeKernelTests:
 
         assert evaluation_budget.remaining == 0
         assert tuple(outcome.evaluation_count for outcome in outcomes) == (1, 1)
-        assert tuple(outcome.scalar_observation().candidate for outcome in outcomes) == (
+        assert tuple(
+            outcome.scalar_observation().candidate for outcome in outcomes
+        ) == (
             4.0,
             -2.0,
         )
@@ -1452,7 +1537,9 @@ class ScipyMinimizeKernelTests:
 
         outcomes = kernel.run(query, evaluate_query_directly).successes
 
-        assert tuple(outcome.scalar_observation().candidate for outcome in outcomes) == (
+        assert tuple(
+            outcome.scalar_observation().candidate for outcome in outcomes
+        ) == (
             4.0,
             1.5,
         )
@@ -1496,7 +1583,9 @@ class ScipyMinimizeKernelTests:
 
         outcome = outcomes[0]
         space.validate(outcome.scalar_observation().candidate)
-        optimized_value = problem.objective.evaluate(outcome.scalar_observation().candidate)
+        optimized_value = problem.objective.evaluate(
+            outcome.scalar_observation().candidate
+        )
         assert optimized_value < initial_value
         assert approx_equal(
             record_real(outcome.scalar_observation().candidate, "x"),
@@ -1514,7 +1603,10 @@ class ScipyMinimizeKernelTests:
         assert outcome.kernel_diagnostics.method == "Powell"
         assert outcome.refinement is not None
         assert outcome.refinement.source_candidate == initial_candidate
-        assert outcome.refinement.refined_candidate == outcome.scalar_observation().candidate
+        assert (
+            outcome.refinement.refined_candidate
+            == outcome.scalar_observation().candidate
+        )
         assert outcome.refinement.changed_leaf_paths == (("x",), ("y",))
 
     def test_rejects_non_continuous_integer_problem(self) -> None:
@@ -1917,7 +2009,9 @@ class ScipyMinimizeKernelTests:
 
         outcomes = kernel.run(query, evaluate_query_directly).successes
 
-        assert tuple(outcome.scalar_observation().candidate for outcome in outcomes) == (
+        assert tuple(
+            outcome.scalar_observation().candidate for outcome in outcomes
+        ) == (
             4.0,
             -2.0,
         )
@@ -2070,7 +2164,9 @@ class ScipyMinimizeKernelTests:
 
         outcomes = kernel.run(query, evaluate_query_directly).successes
 
-        assert tuple(outcome.scalar_observation().candidate for outcome in outcomes) == (
+        assert tuple(
+            outcome.scalar_observation().candidate for outcome in outcomes
+        ) == (
             4.0,
             1.5,
         )

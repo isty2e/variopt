@@ -94,6 +94,9 @@ objective `Exception`s become recorded `EvaluationFailure` attempts, while
 candidate validation, cancellation, and backend failures remain hard batch
 failures. Direct `Evaluator.evaluate(...)` remains available on the evaluator
 facade, but `Study` does not adapt outcome-only batches or sessions.
+Suspended async joblib batches are held in the same evaluator instance's
+in-memory runtime state; their resume handles are for live same-process control
+flow, not crash recovery.
 
 When `infrastructure_retry_limit` is positive, `AsyncJoblibEvaluator` retries
 only unfinished work after recognized backend boundary failures, such as

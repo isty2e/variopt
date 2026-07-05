@@ -542,6 +542,12 @@ class ScipyMinimizeKernel(
             )
         except EvaluationBudgetExhausted:
             if len(evaluated_successes_by_coordinates) == 0:
+                if len(failed_attempts) > 0:
+                    return self._attempt_batch_from_success_and_failures(
+                        success=None,
+                        failed_attempts=failed_attempts,
+                        failure_request=original_request,
+                    )
                 raise
             optimized_success = min(
                 evaluated_successes_by_coordinates.values(),

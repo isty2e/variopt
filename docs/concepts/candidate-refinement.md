@@ -61,9 +61,9 @@ Refinement metadata does not count evaluations by itself. Logical evaluation cos
 is carried by successful and failed attempt slots.
 
 By default, `Study.optimize(...)` charges the reported `evaluation_count` instead
-of only counting returned records. This matters when a local-search kernel
+of only counting returned attempt slots. This matters when a local-search kernel
 evaluates several inner candidates before returning one refined result. Set
-`count_evaluation_cost=False` only when you deliberately want outer-record
+`count_evaluation_cost=False` only when you deliberately want outer-attempt-slot
 counting.
 
 Terminal surfaces preserve provenance as success-aligned metadata:

@@ -116,11 +116,9 @@ class SequentialEvaluator(
             CandidateT,
             SequentialEvaluationRecordT,
         ].from_single_request_attempts(
-            tuple(
-                evaluate_request_attempt(
-                    problem=problem,
-                    request=request,
-                )
-                for request in requests
+            evaluate_request_attempt(
+                problem=problem,
+                request=request,
             )
+            for request in requests
         )

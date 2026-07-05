@@ -524,15 +524,20 @@ class Study(
         Parameters
         ----------
         max_evaluations : int
-            Evaluation budget for the run.
+            Evaluation budget for the run. With the default
+            ``count_evaluation_cost=True``, this budget is charged against
+            reported logical ``evaluation_count`` values, including inner
+            kernel work and recorded evaluation failures. With
+            ``count_evaluation_cost=False``, it is charged against returned
+            attempt slots instead.
         batch_size : int, default=1
             Number of proposals to ask for per logical step.
         execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
             Execution-model contract that controls completion and assimilation
             order.
         count_evaluation_cost : bool, default=True
-            Whether to consume budget using each outcome's logical evaluation
-            cost instead of simple record count.
+            Whether to consume budget using reported logical evaluation cost
+            instead of returned attempt-slot count.
         initial_state : RunMethodStateT | None, optional
             Optional run-method state to start from.
         stop_at_checkpoint_boundary : bool, default=False
@@ -578,15 +583,20 @@ class Study(
         Parameters
         ----------
         max_evaluations : int
-            Evaluation budget for the run.
+            Evaluation budget for the run. With the default
+            ``count_evaluation_cost=True``, this budget is charged against
+            reported logical ``evaluation_count`` values, including inner
+            kernel work and recorded evaluation failures. With
+            ``count_evaluation_cost=False``, it is charged against returned
+            attempt slots instead.
         batch_size : int, default=1
             Number of proposals to ask for per logical step.
         execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
             Execution-model contract that controls completion and assimilation
             order.
         count_evaluation_cost : bool, default=True
-            Whether to consume budget using each outcome's logical evaluation
-            cost instead of simple record count.
+            Whether to consume budget using reported logical evaluation cost
+            instead of returned attempt-slot count.
         initial_state : RunMethodStateT | None, optional
             Optional run-method state to start from.
         stop_at_checkpoint_boundary : bool, default=False

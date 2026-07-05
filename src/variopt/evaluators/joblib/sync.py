@@ -152,4 +152,4 @@ class JoblibEvaluator(
         return EvaluationAttemptBatch[
             CandidateT,
             JoblibEvaluationPayloadT,
-        ].from_single_request_attempts(tuple(attempts))
+        ].from_single_request_attempts(attempts)

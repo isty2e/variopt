@@ -3,7 +3,7 @@
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from queue import Queue
-from threading import Thread
+from threading import Event, Thread
 from typing import Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import override
@@ -25,9 +25,7 @@ from .contracts import BoundaryT, JoblibEvaluationPayloadT
 SessionEvaluationT = TypeVar("SessionEvaluationT", covariant=True)
 
 
-class AsyncJoblibBatchSessionEvaluator(
-    Protocol[SessionEvaluationT]
-):
+class AsyncJoblibBatchSessionEvaluator(Protocol[SessionEvaluationT]):
     """Minimal evaluator surface required by one resumable joblib batch session.
 
     Notes
@@ -144,10 +142,15 @@ class AsyncJoblibCompletedResult(Generic[SessionEvaluationT]):
         Logical request index completed by the joblib attempt.
     outcome : SessionEvaluationT
         Completed evaluation slot for ``index``.
+    attempt_generation : int, default=0
+        Active-attempt generation that produced this event. Retry replacement
+        increments the generation so stale events from aborted attempts are not
+        accepted as current completions.
     """
 
     index: int
     outcome: SessionEvaluationT
+    attempt_generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,14 +161,19 @@ class AsyncJoblibFailedResult:
     ----------
     exception : BaseException
         Exception raised while draining the joblib result stream.
+    attempt_generation : int, default=0
+        Active-attempt generation that produced this event.
     """
 
     exception: BaseException
+    attempt_generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class AsyncJoblibExhaustedResult:
     """Marker emitted when a joblib result stream is exhausted."""
+
+    attempt_generation: int = 0
 
 
 @dataclass(slots=True)
@@ -190,6 +198,12 @@ class ActiveAsyncJoblibBatch(
         Daemon worker that drains the blocking joblib result stream.
     abort_attempt : Callable[[], None] | None, optional
         Best-effort abort hook for the underlying joblib attempt.
+    abort_event : Event, optional
+        Cooperative stop signal observed by the drain worker when bounded
+        handoff backpressure would otherwise block producer shutdown.
+    attempt_generation : int, default=0
+        Monotonic active-attempt generation used to discard stale events after
+        retry replacement.
     completed_indices : set[int], optional
         Request indices already completed inside the active batch.
     infrastructure_retry_count : int, default=0
@@ -207,6 +221,8 @@ class ActiveAsyncJoblibBatch(
     ]
     result_worker: Thread
     abort_attempt: Callable[[], None] | None = None
+    abort_event: Event = field(default_factory=Event, repr=False)
+    attempt_generation: int = 0
     completed_indices: set[int] = field(default_factory=set)
     infrastructure_retry_count: int = 0
 
@@ -306,9 +322,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
         try:
             completion_groups = tuple(self.evaluator.poll(self.handle))
         except BatchExecutionFailed as exception:
-            self._lifecycle = (
-                "cancelled" if exception.kind == "cancelled" else "failed"
-            )
+            self._lifecycle = "cancelled" if exception.kind == "cancelled" else "failed"
             raise
 
         self._record_completion_groups(completion_groups)
@@ -349,9 +363,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
                 self.evaluator.wait(self.handle, timeout=timeout),
             )
         except BatchExecutionFailed as exception:
-            self._lifecycle = (
-                "cancelled" if exception.kind == "cancelled" else "failed"
-            )
+            self._lifecycle = "cancelled" if exception.kind == "cancelled" else "failed"
             raise
 
         self._record_completion_groups(completion_groups)
@@ -381,8 +393,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
     ) -> None:
         """Update lifecycle state after newly observed completion groups."""
         self._completed_count += sum(
-            len(completion_group.outcomes)
-            for completion_group in completion_groups
+            len(completion_group.outcomes) for completion_group in completion_groups
         )
         if self._completed_count >= self.handle.request_count:
             self._completed_count = self.handle.request_count
@@ -422,7 +433,11 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
             msg = "only active batch sessions can be suspended"
             raise RuntimeError(msg)
 
-        resume_handle = self.evaluator.suspend_batch(self.handle)
+        try:
+            resume_handle = self.evaluator.suspend_batch(self.handle)
+        except BatchExecutionFailed as exception:
+            self._lifecycle = "cancelled" if exception.kind == "cancelled" else "failed"
+            raise
         self._completed_count = resume_handle.completed_count
         self._lifecycle = "suspended"
         return resume_handle

@@ -1,7 +1,7 @@
 """Tests for runtime artifact values and terminal surfaces."""
 
 import pickle
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from inspect import signature
 from typing import Protocol, cast
@@ -70,6 +70,42 @@ class SpaceOwnedEqualityCandidate:
 
 class FloatSubclass(float):
     """Runtime float subclass used to verify scalar canonicalization."""
+
+
+class OneShotIntAttemptBatches:
+    """Iterable that fails if attempt merging tries to iterate twice."""
+
+    def __init__(
+        self,
+        attempt_batches: Sequence[EvaluationAttemptBatch[int, ObservationPayload]],
+    ) -> None:
+        self._attempt_batches: Sequence[
+            EvaluationAttemptBatch[int, ObservationPayload]
+        ] = attempt_batches
+        self.iteration_count: int = 0
+
+    def __iter__(
+        self,
+    ) -> Iterator[EvaluationAttemptBatch[int, ObservationPayload]]:
+        """Return attempt batches and reject a second traversal."""
+        self.iteration_count += 1
+        if self.iteration_count > 1:
+            msg = "attempt batches were iterated more than once"
+            raise AssertionError(msg)
+        return iter(self._attempt_batches)
+
+
+class EvaluationAttemptBatchSubclass(EvaluationAttemptBatch[int, ObservationPayload]):
+    """Non-canonical attempt-batch subclass for exact-type validation tests."""
+
+    def __init__(
+        self,
+        *,
+        attempts: Sequence[
+            EvaluationSuccess[int, ObservationPayload] | EvaluationFailure[int]
+        ],
+    ) -> None:
+        super().__init__(attempts=attempts)
 
 
 class TerminalSurfacePickleHooks(Protocol):
@@ -1806,6 +1842,32 @@ class RuntimeArtifactsTests:
         assert batch.successes == ()
         assert batch.failures == ()
 
+    def test_evaluation_attempt_batch_merges_one_shot_iterable_once(
+        self,
+    ) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        success_one = make_int_success(request_one, evaluation_count=2)
+        failure_two = make_int_failure(request_two, evaluation_count=4)
+        attempt_batches = OneShotIntAttemptBatches(
+            (
+                EvaluationAttemptBatch(attempts=(success_one,)),
+                EvaluationAttemptBatch(attempts=(failure_two,)),
+            )
+        )
+
+        batch = EvaluationAttemptBatch[
+            int,
+            ObservationPayload,
+        ].from_single_request_attempts(attempt_batches)
+
+        assert attempt_batches.iteration_count == 1
+        assert batch.attempts == (success_one, failure_two)
+        assert batch.requests == (request_one, request_two)
+        assert batch.successes == (success_one,)
+        assert batch.failures == (failure_two,)
+        assert batch.evaluation_count == 6
+
     def test_materialize_success_record_projects_scalar_payload(self) -> None:
         request = make_int_request(candidate=2, proposal_id="p-2")
         refinement = CandidateRefinement(
@@ -2217,6 +2279,21 @@ class RuntimeArtifactsTests:
         )
 
         with pytest.raises(ValueError, match="exactly one request"):
+            _ = EvaluationAttemptBatch[
+                int,
+                ObservationPayload,
+            ].from_single_request_attempts((attempt,))
+
+    def test_evaluation_attempt_batch_merge_rejects_non_canonical_batch_type(
+        self,
+    ) -> None:
+        request = make_int_request(1, "p-1")
+        success = make_int_success(request)
+        attempt: EvaluationAttemptBatch[int, ObservationPayload] = (
+            EvaluationAttemptBatchSubclass(attempts=(success,))
+        )
+
+        with pytest.raises(TypeError, match="EvaluationAttemptBatch values"):
             _ = EvaluationAttemptBatch[
                 int,
                 ObservationPayload,

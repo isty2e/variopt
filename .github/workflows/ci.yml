@@ -5,6 +5,9 @@ on:
     paths:
       - "src/**"
       - "tests/**"
+      - "docs/**"
+      - "mkdocs.yml"
+      - "CHANGELOG.md"
       - "pyproject.toml"
       - ".github/scripts/**"
       - ".github/workflows/ci.yml"
@@ -13,6 +16,9 @@ on:
     paths:
       - "src/**"
       - "tests/**"
+      - "docs/**"
+      - "mkdocs.yml"
+      - "CHANGELOG.md"
       - "pyproject.toml"
       - ".github/scripts/**"
       - ".github/workflows/ci.yml"
@@ -40,6 +46,8 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} --extra test basedpyright src tests .github/scripts
       - name: Test
         run: uv run --python ${{ matrix.python-version }} --extra test pytest tests -q
+      - name: Build docs
+        run: uv run --python ${{ matrix.python-version }} --extra docs mkdocs build --strict
       - name: Build package
         run: uv build
 

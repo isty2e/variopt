@@ -341,17 +341,16 @@ class MpiEvaluator(
                 )
                 for index, request in enumerate(requests)
             )
-            attempts = tuple(
+            return EvaluationAttemptBatch[
+                CandidateT,
+                MpiEvaluationPayloadT,
+            ].from_single_request_attempts(
                 self._resolve_ordered_attempt(
                     future=future,
                     expected_index=expected_index,
                 )
                 for expected_index, future in enumerate(futures)
             )
-            return EvaluationAttemptBatch[
-                CandidateT,
-                MpiEvaluationPayloadT,
-            ].from_single_request_attempts(attempts)
         finally:
             executor.shutdown(wait=True)
 

@@ -36,6 +36,12 @@ class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
     ordered_attempts : tuple[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None, ...]
         Attempt slots aligned to ``requests``. Completed entries contain
         one-request attempt batches; unfinished entries are ``None``.
+
+    Notes
+    -----
+    The embedded evaluator handle remains bound to the evaluator's resume
+    contract. For the built-in joblib async evaluator, that means same-process,
+    same-evaluator-instance runtime state rather than durable crash recovery.
     """
 
     evaluator_handle: EvaluationBatchResumeHandle

@@ -286,7 +286,7 @@ def _current_remaining_budget(
     evaluation_budget: EvaluationBudget | None,
     record_budget_remaining: int,
 ) -> int:
-    """Return the active loop budget for evaluation- or record-count mode."""
+    """Return the active loop budget for evaluation- or attempt-slot-count mode."""
     if evaluation_budget is None:
         return record_budget_remaining
     return evaluation_budget.remaining
@@ -919,14 +919,18 @@ def run(
         Study-like owner exposing the problem, run method, evaluator, and
         kernel.
     max_evaluations : int
-        Evaluation budget to consume.
+        Evaluation budget to consume. With ``count_evaluation_cost=True``,
+        this budget is charged against reported logical ``evaluation_count``
+        values, including inner kernel work and recorded evaluation failures.
+        With ``count_evaluation_cost=False``, it is charged against returned
+        attempt slots instead.
     batch_size : int, default=1
         Maximum number of proposals requested per step.
     execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
         Execution model controlling evaluation behavior.
     count_evaluation_cost : bool, default=True
-        Whether to debit the budget using evaluator-reported evaluation counts
-        instead of completed record count.
+        Whether to debit the budget using reported logical evaluation cost
+        instead of returned attempt-slot count.
     initial_state : RunMethodStateT | None, default=None
         Optional initial run-method state. ``None`` creates a fresh state.
     stop_at_checkpoint_boundary : bool, default=False
@@ -1202,14 +1206,18 @@ def optimize(
         Study-like owner exposing the problem, run method, evaluator, and
         kernel.
     max_evaluations : int
-        Evaluation budget to consume.
+        Evaluation budget to consume. With ``count_evaluation_cost=True``,
+        this budget is charged against reported logical ``evaluation_count``
+        values, including inner kernel work and recorded evaluation failures.
+        With ``count_evaluation_cost=False``, it is charged against returned
+        attempt slots instead.
     batch_size : int, default=1
         Maximum number of proposals requested per step.
     execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
         Execution model controlling evaluation behavior.
     count_evaluation_cost : bool, default=True
-        Whether to debit the budget using evaluator-reported evaluation counts
-        instead of completed record count.
+        Whether to debit the budget using reported logical evaluation cost
+        instead of returned attempt-slot count.
     initial_state : RunMethodStateT | None, default=None
         Optional initial run-method state. ``None`` creates a fresh state.
     stop_at_checkpoint_boundary : bool, default=False

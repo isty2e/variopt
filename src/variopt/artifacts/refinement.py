@@ -100,7 +100,8 @@ class CandidateRefinement(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Authoritative structured leaf paths whose canonical values changed
         during refinement. An empty sequence means the producer reports no
         changed structured leaf paths; absence of refinement should be
-        represented by ``EvaluationOutcome.refinement is None``.
+        represented by omitting refinement on the owning evaluation success
+        or attempt payload.
     """
 
     source_candidate: CandidateT
