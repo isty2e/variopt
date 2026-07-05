@@ -12,6 +12,7 @@ from variopt.randomness import (
     RandomStateSnapshot,
     derive_random_state_snapshot,
     normalize_random_state,
+    random_state_permutation_indices,
     random_state_randint,
 )
 
@@ -154,6 +155,17 @@ class RandomnessContractTests:
 
         assert seeds == ()
         assert next_snapshot == snapshot
+
+    @pytest.mark.parametrize("size", [0, 1, 2, 8])
+    def test_permutation_indices_are_deterministic(self, size: int) -> None:
+        random_state_one = normalize_random_state(123)
+        random_state_two = normalize_random_state(123)
+
+        indices_one = random_state_permutation_indices(random_state_one, size)
+        indices_two = random_state_permutation_indices(random_state_two, size)
+
+        assert indices_one == indices_two
+        assert sorted(indices_one) == list(range(size))
 
     def test_random_state_snapshot_from_dict_rejects_bool_position(self) -> None:
         snapshot = RandomStateSnapshot.from_seed(7).to_dict()

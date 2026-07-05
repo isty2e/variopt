@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Generic
 
-import numpy as np
-
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ......diversity import DiversityMetric
@@ -356,10 +354,14 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         comparison_score = shaped_scores[comparison_index]
 
         if self.policy.update_mode == "largest_cluster":
-            cluster_counts = np.bincount(
-                np.asarray(self.cluster_labels, dtype=np.int64),
+            cluster_counts: dict[int, int] = {}
+            for label in self.cluster_labels:
+                cluster_counts[label] = cluster_counts.get(label, 0) + 1
+
+            largest_cluster = max(
+                cluster_counts,
+                key=cluster_counts.__getitem__,
             )
-            largest_cluster = int(np.argmax(cluster_counts[1:])) + 1
             removal_cluster_indices = tuple(
                 index
                 for index, label in enumerate(self.cluster_labels)

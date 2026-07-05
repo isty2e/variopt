@@ -539,10 +539,6 @@ def normalize_objective_vector(
         msg = f"{field_name} must not be empty"
         raise ValueError(msg)
 
-    if not bool(np.all(np.isfinite(normalized_values))):
-        msg = f"{field_name} must contain only finite values"
-        raise ValueError(msg)
-
     return normalized_values
 
 

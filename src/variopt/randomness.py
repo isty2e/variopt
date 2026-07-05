@@ -152,6 +152,21 @@ class TypedRandomState(Protocol):
         """
         ...
 
+    def permutation(self, x: int) -> npt.NDArray[np.int_]:
+        """Return a random permutation of ``range(x)``.
+
+        Parameters
+        ----------
+        x : int
+            Permutation size.
+
+        Returns
+        -------
+        numpy.typing.NDArray[numpy.int_]
+            Permuted integer indices.
+        """
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class RandomStateSnapshot:
@@ -283,10 +298,11 @@ class RandomStateSnapshot:
             New random-state instance initialized from the stored payload.
         """
         random_state = np.random.RandomState()
+        key_array = np.array(memoryview(self.key_bytes).cast("I"), dtype=np.uint32)
         random_state.set_state(
             (
                 self.algorithm,
-                np.frombuffer(self.key_bytes, dtype=np.uint32),
+                key_array,
                 self.position,
                 self.has_gaussian,
                 self.cached_gaussian,
@@ -658,3 +674,29 @@ def random_state_choice_indices_without_replacement(
         np.asarray(selected_indices, dtype=np.int_).tolist(),
     )
     return tuple(selected_index_list)
+
+
+def random_state_permutation_indices(
+    random_state: np.random.RandomState,
+    size: int,
+) -> tuple[int, ...]:
+    """Draw a permutation of integer indices from a canonical random state.
+
+    Parameters
+    ----------
+    random_state : numpy.random.RandomState
+        Random-state instance used for sampling.
+    size : int
+        Number of indices in the half-open interval ``[0, size)``.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Permuted indices.
+    """
+    typed_state = cast(TypedRandomState, random_state)
+    index_list = cast(
+        list[int],
+        np.asarray(typed_state.permutation(size), dtype=np.int_).tolist(),
+    )
+    return tuple(index_list)

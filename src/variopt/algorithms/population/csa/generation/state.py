@@ -11,6 +11,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Observation
+from .....randomness import random_state_permutation_indices
 from .....typevars import CandidateT
 from .proposal.state.attribution import PlannedProposalAttribution
 
@@ -94,8 +95,7 @@ class GenerationQueue(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if not shuffle or len(candidate_tuple) <= 1:
             return cls(candidates=candidate_tuple)
 
-        indices = list(range(len(candidate_tuple)))
-        random_state.shuffle(indices)
+        indices = random_state_permutation_indices(random_state, len(candidate_tuple))
         return cls(
             candidates=tuple(candidate_tuple[index] for index in indices),
         )

@@ -144,7 +144,7 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "potential shape must match the configured adaptive-potential axes"
             raise ValueError(msg)
 
-        if not bool(np.all(np.isfinite(self.potential))):
+        if not bool(np.isfinite(self.potential).all()):
             msg = "potential values must be finite"
             raise ValueError(msg)
 

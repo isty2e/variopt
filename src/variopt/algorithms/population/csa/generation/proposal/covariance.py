@@ -22,6 +22,26 @@ FloatVector = npt.NDArray[np.float64]
 FloatMatrix = npt.NDArray[np.float64]
 
 
+def _eigh_float_matrix(matrix: FloatMatrix) -> tuple[FloatVector, FloatMatrix]:
+    """Return eigenvalues and eigenvectors for one float covariance matrix."""
+    raw_eigenvalues, raw_eigenvectors = cast(
+        tuple[FloatVector, FloatMatrix],
+        np.linalg.eigh(matrix),  # pyright: ignore[reportUnknownMemberType]
+    )
+    return (
+        np.asarray(raw_eigenvalues, dtype=np.float64),
+        np.asarray(raw_eigenvectors, dtype=np.float64),
+    )
+
+
+def _transpose_float_matrix(matrix: FloatMatrix) -> FloatMatrix:
+    """Return the transpose of one float matrix."""
+    return cast(
+        FloatMatrix,
+        matrix.T,
+    )
+
+
 def build_numeric_subspace_attribution(
     *,
     descriptor: HomogeneousNumericSubspaceDescriptor[BoundaryT, StructuredCandidateT],
@@ -243,13 +263,12 @@ def stabilize_covariance_matrix(
     FloatMatrix
         Symmetric stabilized covariance matrix suitable for sampling.
     """
+    covariance_transpose = _transpose_float_matrix(covariance_matrix)
     symmetric_covariance: FloatMatrix = np.asarray(
-        0.5 * (covariance_matrix + np.transpose(covariance_matrix)),
+        0.5 * (covariance_matrix + covariance_transpose),
         dtype=np.float64,
     )
-    raw_eigenvalues, raw_eigenvectors = np.linalg.eigh(symmetric_covariance)
-    eigenvalues: FloatVector = np.asarray(raw_eigenvalues, dtype=np.float64)
-    eigenvectors: FloatMatrix = np.asarray(raw_eigenvectors, dtype=np.float64)
+    eigenvalues, eigenvectors = _eigh_float_matrix(symmetric_covariance)
     stabilized_eigenvalues: FloatVector = np.asarray(
         np.maximum(eigenvalues, 0.0) + ridge,
         dtype=np.float64,
@@ -257,11 +276,15 @@ def stabilize_covariance_matrix(
     dimension = int(stabilized_eigenvalues.size)
     stabilized_diagonal: FloatMatrix = np.zeros((dimension, dimension), dtype=np.float64)
     np.fill_diagonal(stabilized_diagonal, stabilized_eigenvalues)
+    eigenvector_transpose = _transpose_float_matrix(eigenvectors)
     stabilized_covariance: FloatMatrix = np.asarray(
-        eigenvectors @ stabilized_diagonal @ np.transpose(eigenvectors),
+        eigenvectors @ stabilized_diagonal @ eigenvector_transpose,
         dtype=np.float64,
     )
+    stabilized_covariance_transpose = _transpose_float_matrix(
+        stabilized_covariance,
+    )
     return np.asarray(
-        0.5 * (stabilized_covariance + np.transpose(stabilized_covariance)),
+        0.5 * (stabilized_covariance + stabilized_covariance_transpose),
         dtype=np.float64,
     )
