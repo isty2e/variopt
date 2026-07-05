@@ -57,6 +57,9 @@ The following changes to the supported surface are breaking:
   types, including the shape of `RunResult` and `RunReport`.
 - Removing or renaming a public protocol (`EvaluationProtocol`, `Kernel`,
   `Evaluator`, `RunMethod`, `Objective`) or changing its required methods.
+- Changing which evaluator capabilities `Study` accepts for a documented
+  execution model, including whether outcome-only evaluator batches are adapted
+  into attempt batches.
 
 The following are *not* treated as breaking:
 

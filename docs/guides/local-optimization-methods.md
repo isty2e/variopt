@@ -17,11 +17,12 @@ Local optimization therefore lives on the kernel side of the execution path,
 not inside evaluator backends.
 
 When local optimization changes a candidate, the kernel should attach
-[`CandidateRefinement`](../reference/api/variopt.md) to the returned
-`EvaluationOutcome`. That metadata records the source candidate, the candidate
-actually evaluated, and any structured leaf paths changed by the episode. It is
-provenance, not evaluation-protocol semantics; the evaluation record remains the
-authoritative result.
+[`CandidateRefinement`](../reference/api/variopt.md) to the successful
+`EvaluationSuccess` slot in the returned `EvaluationAttemptBatch`. That metadata
+records the source candidate, the candidate actually evaluated, and any
+structured leaf paths changed by the episode. It is provenance, not
+evaluation-protocol semantics; the success payload remains the authoritative
+evaluation result.
 
 For the proposed/refined/evaluated/accepted vocabulary, see
 [Candidate Refinement](../concepts/candidate-refinement.md).
@@ -172,14 +173,14 @@ advanced kernels. `ScipyMinimizeMethod` is the literal method set accepted by
 This matters because a single kernel episode can evaluate the objective many
 times.
 
-The kernel path reports that cost through
-[`EvaluationOutcome.evaluation_count`](../reference/api/variopt.md).
+The kernel path reports that cost through successful attempt
+`evaluation_count` metadata.
 `Study.optimize(...)` then offers two modes:
 
 - default: budget decreases by the sum of objective evaluations reported by the
   kernel/evaluator path
 - `count_evaluation_cost=False`: budget decreases by the number of returned
-  observations
+  attempt slots, including recorded evaluation failures
 
 Practical guidance:
 

@@ -9,7 +9,12 @@ from typing_extensions import override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ....artifacts import Observation, Proposal
+from ....artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationSuccess,
+    Observation,
+    Proposal,
+)
 from ....distance import require_valid_distance
 from ....diversity import DiversityMetric
 from ....execution import (
@@ -613,7 +618,6 @@ class CSAOptimizer(
             observations,
         )
 
-    @override
     def tell_outcomes(
         self,
         state: CSAEngineState[CandidateT],
@@ -657,6 +661,125 @@ class CSAOptimizer(
             tuple(observations),
             explicit_local_displacement_leaf_paths=tuple(explicit_paths),
         )
+
+    def _tell_successes(
+        self,
+        state: CSAEngineState[CandidateT],
+        successes: Sequence[
+            EvaluationSuccess[OutcomeCandidateT, Observation[CandidateT]]
+        ],
+    ) -> CSAEngineState[CandidateT]:
+        observations: list[Observation[CandidateT]] = []
+        explicit_paths: list[tuple[LeafPath, ...] | None] | None = None
+        for success_index, success in enumerate(successes):
+            observations.append(success.payload)
+            refinement = success.refinement
+            if explicit_paths is not None:
+                explicit_paths.append(
+                    None if refinement is None else refinement.changed_leaf_paths
+                )
+            elif refinement is not None:
+                explicit_paths = [None for _index in range(success_index)]
+                explicit_paths.append(refinement.changed_leaf_paths)
+
+        if explicit_paths is None:
+            return self.tell(state, tuple(observations))
+
+        return self._tell_with_explicit_local_displacements(
+            state,
+            tuple(observations),
+            explicit_local_displacement_leaf_paths=tuple(explicit_paths),
+        )
+
+    @override
+    def tell_attempts(
+        self,
+        state: CSAEngineState[CandidateT],
+        attempts: EvaluationAttemptBatch[OutcomeCandidateT, Observation[CandidateT]],
+    ) -> CSAEngineState[CandidateT]:
+        """Advance CSA state from successful and failed evaluation attempts.
+
+        Parameters
+        ----------
+        state : CSAEngineState[CandidateT]
+            Current immutable CSA engine state.
+        attempts : EvaluationAttemptBatch[OutcomeCandidateT, Observation[CandidateT]]
+            Dense request-aligned attempt batch containing successful outcomes
+            and recorded evaluation failures.
+
+        Returns
+        -------
+        CSAEngineState[CandidateT]
+            Updated engine state after successes update optimizer evidence and
+            failures consume pending proposal lifecycle.
+
+        Raises
+        ------
+        ValueError
+            If failed attempts do not align with distinct pending proposal ids.
+        """
+        if not attempts.has_failures:
+            return self._tell_successes(state, attempts.successes)
+
+        failed_proposal_ids = self._validate_failed_attempt_proposal_ids(
+            state,
+            attempts,
+        )
+        next_state = state.consume_failed_pending_proposals(failed_proposal_ids)
+        if len(attempts.successes) > 0:
+            return self._tell_successes(next_state, attempts.successes)
+
+        if next_state.generation_state.ready_to_commit or (
+            next_state.pending_proposals.is_empty
+            and (
+                next_state.progression_state.has_pending_action
+                or next_state.banking_state.refresh_state is not None
+            )
+        ):
+            return self._tell_with_explicit_local_displacements(next_state, ())
+
+        return next_state
+
+    def _validate_failed_attempt_proposal_ids(
+        self,
+        state: CSAEngineState[CandidateT],
+        attempts: EvaluationAttemptBatch[OutcomeCandidateT, Observation[CandidateT]],
+    ) -> frozenset[str]:
+        failed_proposal_ids: set[str] = set()
+        successful_proposal_ids = {
+            success.proposal_id
+            for success in attempts.successes
+            if success.proposal_id is not None
+        }
+        for failure in attempts.failures:
+            proposal = failure.proposal
+            proposal_id = proposal.proposal_id
+            if proposal_id is None:
+                msg = (
+                    "failed attempts supplied to CSAOptimizer.tell_attempts "
+                    "must reference proposal ids"
+                )
+                raise ValueError(msg)
+
+            if proposal_id in failed_proposal_ids or proposal_id in successful_proposal_ids:
+                msg = (
+                    "attempts supplied to CSAOptimizer.tell_attempts must have "
+                    "distinct proposal ids"
+                )
+                raise ValueError(msg)
+
+            pending_proposal = state.pending_proposals.get(proposal_id)
+            if pending_proposal is None:
+                msg = "failed attempt does not correspond to a pending proposal"
+                raise ValueError(msg)
+
+            if pending_proposal is not proposal and pending_proposal != proposal:
+                msg = "failed attempt proposal does not match the pending proposal"
+                raise ValueError(msg)
+
+            failed_proposal_ids.add(proposal_id)
+
+        return frozenset(failed_proposal_ids)
 
     def _tell_with_explicit_local_displacements(
         self,

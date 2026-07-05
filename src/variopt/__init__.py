@@ -2,8 +2,12 @@
 
 from .artifacts import (
     CandidateRefinement,
-    EvaluationRecord,
+    EvaluationAttemptBatch,
+    EvaluationExceptionSnapshot,
+    EvaluationFailure,
     EvaluationRequest,
+    KernelDiagnostics,
+    KernelStatus,
     NondominatedRunSurface,
     ObjectiveVectorRecord,
     Observation,
@@ -29,13 +33,11 @@ from .execution import (
 )
 from .kernel import (
     Kernel,
-    KernelDiagnostics,
-    KernelStatus,
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from .methods import RunMethod
+from .methods import RunMethod, UnsupportedEvaluationFailureError
 from .objective import (
     EvaluationProtocol,
     InteractionEvaluationProtocol,
@@ -57,7 +59,7 @@ from .spaces import (
     SearchSpace,
     TupleSpace,
 )
-from .study import Study
+from .study import RunExecutionFailed, Study
 
 __all__ = [
     "ArraySpace",
@@ -65,11 +67,13 @@ __all__ = [
     "CandidateRefinement",
     "CategoricalSpace",
     "DiversityMetric",
+    "EvaluationAttemptBatch",
+    "EvaluationExceptionSnapshot",
+    "EvaluationFailure",
     "EvaluationOutcome",
     "EvaluationBudget",
     "EvaluationBudgetExhausted",
     "EvaluationProtocol",
-    "EvaluationRecord",
     "EvaluationRequest",
     "Evaluator",
     "EXACT_ASYNC_EXECUTION_MODEL",
@@ -99,6 +103,7 @@ __all__ = [
     "RealSpace",
     "RecordSpace",
     "RunMethod",
+    "RunExecutionFailed",
     "RunReport",
     "RunResult",
     "ScalarEvaluationProtocol",
@@ -108,5 +113,6 @@ __all__ = [
     "Study",
     "SYNC_BATCH_EXECUTION_MODEL",
     "TupleSpace",
+    "UnsupportedEvaluationFailureError",
     "VariationOperator",
 ]

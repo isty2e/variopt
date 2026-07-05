@@ -7,7 +7,7 @@ from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-EvaluationT = TypeVar("EvaluationT")
+EvaluationT = TypeVar("EvaluationT", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +159,12 @@ class EvaluationBatchResumeHandle:
         Total number of requests in the original batch.
     completed_count : int
         Number of requests already completed before suspension.
+
+    Notes
+    -----
+    This is an evaluator-owned runtime identity. It is only as durable as the
+    evaluator implementation's suspended-batch storage and is not, by itself, a
+    process-restart checkpoint.
     """
 
     batch_id: str

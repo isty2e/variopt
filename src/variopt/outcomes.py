@@ -1,4 +1,4 @@
-"""Execution-side evaluation outcome artifacts."""
+"""Execution-side evaluation attempt artifacts."""
 
 from dataclasses import InitVar, dataclass, field, fields
 from typing import Generic, cast
@@ -7,12 +7,13 @@ from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
+from .artifacts import KernelDiagnostics
+from .artifacts.attempts import EvaluationExceptionSnapshot, EvaluationFailure
 from .artifacts.records import Observation, RequestAlignedEvaluationRecord
 from .artifacts.refinement import (
     CandidateRefinement,
     require_matching_refined_candidate,
 )
-from .kernel import KernelDiagnostics
 from .spaces import CandidateEquality
 from .typevars import CandidateT
 
@@ -22,7 +23,12 @@ OutcomeRecordT = TypeVar(
     default=Observation[CandidateT],
 )
 
-__all__ = ["CandidateRefinement", "EvaluationOutcome"]
+__all__ = [
+    "CandidateRefinement",
+    "EvaluationExceptionSnapshot",
+    "EvaluationFailure",
+    "EvaluationOutcome",
+]
 
 _UNVALIDATED_REFINEMENT_CANDIDATE = object()
 

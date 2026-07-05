@@ -5,11 +5,10 @@ from typing import Generic, Literal
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ...artifacts import EvaluationRequest
+from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...evaluators.async_evaluator.artifacts import EvaluationBatchResumeHandle
-from ...outcomes import EvaluationOutcome
 from ...typevars import CandidateT, RunMethodStateT
-from ..common import StudyEvaluationRecordT
+from ..common import StudyPayloadT
 
 StudyExactAsyncSessionLifecycle = Literal[
     "active",
@@ -22,7 +21,7 @@ StudyExactAsyncSessionLifecycle = Literal[
 
 @dataclass(frozen=True, slots=True)
 class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
-    Generic[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    Generic[CandidateT, RunMethodStateT, StudyPayloadT]
 ):
     """Study-owned resume handle for one suspended exact-async step session.
 
@@ -34,16 +33,22 @@ class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
         Requests issued for the suspended step.
     post_ask_state : RunMethodStateT
         Run-method state captured immediately after the corresponding ``ask``.
-    ordered_outcomes : tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None, ...]
-        Outcome slots aligned to ``requests``. Completed entries contain
-        outcomes; unfinished entries are ``None``.
+    ordered_attempts : tuple[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None, ...]
+        Attempt slots aligned to ``requests``. Completed entries contain
+        one-request attempt batches; unfinished entries are ``None``.
+
+    Notes
+    -----
+    The embedded evaluator handle remains bound to the evaluator's resume
+    contract. For the built-in joblib async evaluator, that means same-process,
+    same-evaluator-instance runtime state rather than durable crash recovery.
     """
 
     evaluator_handle: EvaluationBatchResumeHandle
     requests: tuple[EvaluationRequest[CandidateT], ...]
     post_ask_state: RunMethodStateT
-    ordered_outcomes: tuple[
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None,
+    ordered_attempts: tuple[
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None,
         ...,
     ]
 
@@ -60,16 +65,16 @@ class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
             msg = "resume handle requests must align with evaluator_handle"
             raise ValueError(msg)
 
-        if len(self.ordered_outcomes) != self.evaluator_handle.request_count:
-            msg = "ordered_outcomes must align with evaluator_handle"
+        if len(self.ordered_attempts) != self.evaluator_handle.request_count:
+            msg = "ordered_attempts must align with evaluator_handle"
             raise ValueError(msg)
 
         completed_count = sum(
-            outcome is not None for outcome in self.ordered_outcomes
+            attempt is not None for attempt in self.ordered_attempts
         )
         if completed_count != self.evaluator_handle.completed_count:
             msg = (
-                "ordered_outcomes completion count must match "
+                "ordered_attempts completion count must match "
                 "evaluator_handle.completed_count"
             )
             raise ValueError(msg)

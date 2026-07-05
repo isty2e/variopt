@@ -6,18 +6,18 @@ from typing_extensions import override
 
 from variopt import (
     EvaluationProtocol,
-    EvaluationRecord,
     EvaluationRequest,
     InteractionEvaluationProtocol,
     Objective,
-    Observation,
     ObservationEvaluationProtocol,
     OptimizationDirection,
+    Proposal,
 )
 from variopt.artifacts import (
-    InteractionEvaluationRecord,
     InteractionEvaluationSpec,
     InteractionEvaluationUnit,
+    ObservationPayload,
+    ProposalEvaluationSpec,
 )
 
 
@@ -47,21 +47,32 @@ class ShiftedObservationProtocol(ObservationEvaluationProtocol[int]):
         request: EvaluationRequest[int],
         *,
         direction: OptimizationDirection,
-    ) -> Observation[int]:
+    ) -> ObservationPayload:
         candidate = request.candidate - 1
-        return Observation.from_objective_value(
-            request=request,
-            candidate=candidate,
+        return ObservationPayload.from_objective_value(
             value=float(candidate * candidate),
             direction=direction,
         )
 
 
 @dataclass(frozen=True, slots=True)
-class LabelRecord(EvaluationRecord[int]):
-    """Simple non-scalar evaluation record for protocol-path tests."""
+class LabelRecord:
+    """Simple request-aligned compatibility payload for protocol-path tests."""
+
+    request: EvaluationRequest[int]
+    candidate: int
 
     label: str
+
+    @property
+    def proposal(self) -> Proposal[int]:
+        """Return the proposal compatibility view."""
+        return self.request.proposal
+
+    @property
+    def proposal_evaluation_spec(self) -> ProposalEvaluationSpec | None:
+        """Return request-local metadata attached to the source request."""
+        return self.request.proposal_evaluation_spec
 
 
 class LabelProtocol(EvaluationProtocol[int, LabelRecord]):
@@ -88,11 +99,33 @@ class MatchupSpec(InteractionEvaluationSpec):
 
 
 @dataclass(frozen=True, slots=True)
-class MatchupRecord(InteractionEvaluationRecord[int]):
-    """Simple interaction-aware record used for sibling interaction tests."""
+class MatchupRecord:
+    """Simple interaction-aware payload used for sibling interaction tests."""
+
+    interaction_unit: InteractionEvaluationUnit[int]
 
     winner: int
     arena: str
+
+    @property
+    def requests(self) -> tuple[EvaluationRequest[int], ...]:
+        """Return request participants."""
+        return self.interaction_unit.requests
+
+    @property
+    def proposals(self) -> tuple[Proposal[int], ...]:
+        """Return proposal participants."""
+        return self.interaction_unit.proposals
+
+    @property
+    def candidates(self) -> tuple[int, ...]:
+        """Return candidate participants."""
+        return self.interaction_unit.candidates
+
+    @property
+    def interaction_evaluation_spec(self) -> InteractionEvaluationSpec | None:
+        """Return the interaction metadata attached to the source unit."""
+        return self.interaction_unit.interaction_evaluation_spec
 
 
 class MatchupProtocol(InteractionEvaluationProtocol[int, MatchupRecord]):

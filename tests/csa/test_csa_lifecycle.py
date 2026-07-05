@@ -24,10 +24,413 @@ from tests.csa_support import (
     perturbation_schedule,
     schedule,
 )
+from variopt import (
+    EvaluationAttemptBatch,
+    EvaluationFailure,
+    EvaluationRequest,
+    Observation,
+    OptimizationDirection,
+    Proposal,
+)
+from variopt.artifacts import EvaluationSuccess
+
+
+def _request(proposal: Proposal[int]) -> EvaluationRequest[int]:
+    return EvaluationRequest(proposal=proposal)
+
+
+def _success(request: EvaluationRequest[int]) -> EvaluationSuccess[int, Observation[int]]:
+    observation = Observation.from_objective_value(
+        request=request,
+        candidate=request.candidate,
+        value=float(request.candidate * request.candidate),
+        direction=OptimizationDirection.MINIMIZE,
+    )
+    return EvaluationSuccess(
+        request=request,
+        payload=observation,
+    )
+
+
+def _failure(request: EvaluationRequest[int]) -> EvaluationFailure[int]:
+    return EvaluationFailure[int].from_exception(
+        request=request,
+        exception=ValueError(f"candidate failed: {request.candidate}"),
+    )
 
 
 class CSALifecycleTests(CSAOptimizerTestCase):
     """White-box tests for CSA cutoff, refresh, and staged lifecycle transitions."""
+
+    def test_attempt_failures_consume_initial_pending_without_bank_evidence(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=2)
+        requests = tuple(_request(proposal) for proposal in proposals)
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=tuple(_failure(request) for request in requests),
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            attempts,
+        )
+
+        assert optimizer.bank.entries == ()
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert not optimizer.engine_state.generation_state.is_active
+        assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+
+    def test_attempt_failures_do_not_insert_failed_initial_candidates(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=2)
+        requests = tuple(_request(proposal) for proposal in proposals)
+        successful_success = _success(requests[0])
+        failed_proposal_id = proposals[1].proposal_id
+        attempts = EvaluationAttemptBatch(
+            attempts=(successful_success, _failure(requests[1])),
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            attempts,
+        )
+
+        assert tuple(entry.candidate for entry in optimizer.bank.entries) == (1,)
+        assert all(
+            entry.proposal_id != failed_proposal_id
+            for entry in optimizer.bank.entries
+        )
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+
+    def test_generated_failure_completes_pool_after_buffered_success(self) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((1, 2, 3, 4)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            perturbation_schedule=perturbation_schedule(
+                regular_children_per_seed=2,
+                initial_children_per_seed=0,
+                shuffle_children=False,
+            ),
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=100.0,
+                minimum_distance_cutoff=100.0,
+                reduction_factor=1.0,
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        self.fill_bank(
+            optimizer=optimizer,
+            problem=problem,
+            evaluator=evaluator,
+        )
+        proposals = optimizer.ask(batch_size=2)
+        requests = tuple(_request(proposal) for proposal in proposals)
+        success_attempt: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_success(requests[0]),),
+            )
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            success_attempt,
+        )
+        assert optimizer.engine_state.generation_state.buffered_observations != ()
+        assert optimizer.engine_state.generation_state.pending_proposal_ids == frozenset(
+            {proposals[1].proposal_id},
+        )
+
+        failure_attempt: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(requests[1]),),
+            )
+        )
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            failure_attempt,
+        )
+
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert not optimizer.engine_state.generation_state.is_active
+        assert all(
+            entry.proposal_id != proposals[1].proposal_id
+            for entry in optimizer.bank.entries
+        )
+        assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+
+    def test_generated_mixed_failure_drains_generation_pending_ids(self) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((1, 2, 3, 4)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            perturbation_schedule=perturbation_schedule(
+                regular_children_per_seed=2,
+                initial_children_per_seed=0,
+                shuffle_children=False,
+            ),
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=100.0,
+                minimum_distance_cutoff=100.0,
+                reduction_factor=1.0,
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        self.fill_bank(
+            optimizer=optimizer,
+            problem=problem,
+            evaluator=evaluator,
+        )
+        proposals = optimizer.ask(batch_size=2)
+        requests = tuple(_request(proposal) for proposal in proposals)
+        failed_proposal_id = proposals[1].proposal_id
+        attempts = EvaluationAttemptBatch(
+            attempts=(_success(requests[0]), _failure(requests[1])),
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            attempts,
+        )
+
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert not optimizer.engine_state.generation_state.is_active
+        assert all(
+            entry.proposal_id != failed_proposal_id
+            for entry in optimizer.bank.entries
+        )
+
+    def test_generated_failure_keeps_unissued_generation_queue_active(self) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((1, 2, 3, 4)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            perturbation_schedule=perturbation_schedule(
+                regular_children_per_seed=2,
+                initial_children_per_seed=0,
+                shuffle_children=False,
+            ),
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=100.0,
+                minimum_distance_cutoff=100.0,
+                reduction_factor=1.0,
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        self.fill_bank(
+            optimizer=optimizer,
+            problem=problem,
+            evaluator=evaluator,
+        )
+        proposals = optimizer.ask(batch_size=1)
+        request = _request(proposals[0])
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(_failure(request),),
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            attempts,
+        )
+
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert optimizer.engine_state.generation_state.pending_proposal_ids == frozenset()
+        assert not optimizer.engine_state.generation_state.queue.is_empty
+        assert not optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+        next_proposals = optimizer.ask(batch_size=1)
+        assert len(next_proposals) == 1
+        assert next_proposals[0].proposal_id != proposals[0].proposal_id
+
+    def test_refresh_completion_can_be_unblocked_by_failed_final_attempt(self) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((9, 8, 1, 2, 0)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            cycle_limit=0,
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=1.0,
+                minimum_distance_cutoff=1.0,
+                reduction_factor=1.0,
+                stagnation_update_limit=0,
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        self.enter_refresh(
+            optimizer=optimizer,
+            problem=problem,
+            evaluator=evaluator,
+        )
+        refresh_batch = optimizer.ask(batch_size=3)
+        optimizer.tell(
+            evaluate_observations(
+                problem,
+                evaluator,
+                refresh_batch[:2],
+            )
+        )
+        assert optimizer.state.refresh_in_progress
+        failed_request = _request(refresh_batch[2])
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(_failure(failed_request),),
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            attempts,
+        )
+
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert not optimizer.state.refresh_in_progress
+        assert {entry.candidate for entry in optimizer.bank.entries} == {1, 2}
+        assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+
+    def test_attempt_failure_rejects_missing_proposal_id_without_consuming_pending(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=1)
+        failure_request = _request(Proposal(candidate=99))
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(_failure(failure_request),),
+        )
+
+        with pytest.raises(ValueError, match="must reference proposal ids"):
+            _ = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
+
+        assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
+
+    def test_attempt_failure_rejects_unknown_proposal_without_consuming_pending(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=1)
+        failure_request = _request(Proposal(candidate=99, proposal_id="csa-missing"))
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(_failure(failure_request),),
+        )
+
+        with pytest.raises(ValueError, match="does not correspond"):
+            _ = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
+
+        assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
+
+    def test_attempt_failure_rejects_mismatched_proposal_without_consuming_pending(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=1)
+        failure_request = _request(
+            Proposal(candidate=99, proposal_id=proposals[0].proposal_id),
+        )
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(_failure(failure_request),),
+        )
+
+        with pytest.raises(ValueError, match="does not match"):
+            _ = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
+
+        assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
+
+    def test_attempt_failure_rejects_duplicate_failure_proposal_id(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=1)
+        requests = (
+            _request(proposals[0]),
+            _request(
+                Proposal(
+                    candidate=proposals[0].candidate,
+                    proposal_id=proposals[0].proposal_id,
+                ),
+            ),
+        )
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=tuple(_failure(request) for request in requests),
+        )
+
+        with pytest.raises(ValueError, match="distinct proposal ids"):
+            _ = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
+
+        assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
+
+    def test_attempt_failure_rejects_duplicate_success_failure_proposal_id(self) -> None:
+        optimizer = make_optimizer(
+            space=ScriptedIntegerSpace((1, 2)),
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            random_state=0,
+        )
+        proposals = optimizer.ask(batch_size=1)
+        success_request = _request(proposals[0])
+        failure_request = _request(
+            Proposal(
+                candidate=proposals[0].candidate,
+                proposal_id=proposals[0].proposal_id,
+            ),
+        )
+        attempts = EvaluationAttemptBatch(
+            attempts=(_success(success_request), _failure(failure_request)),
+        )
+
+        with pytest.raises(ValueError, match="distinct proposal ids"):
+            _ = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
+
+        assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
     def test_state_initializes_from_explicit_cutoff_without_advancing_on_first_bank_fill(self) -> None:
         optimizer = make_optimizer(

@@ -84,15 +84,21 @@ full decision table on kernel choice.
 ## Multi-Objective Problems
 
 The built-in population optimizers are single-objective. For multi-objective
-problems, `variopt` provides a record-first path:
+problems, keep the problem protocol request-free and let `Study` materialize
+feedback records at the run-method boundary:
 
 1. Define an [`EvaluationProtocol`][variopt.EvaluationProtocol] that returns
-   [`ObjectiveVectorRecord`][variopt.ObjectiveVectorRecord] instances.
+   request-free objective-vector payloads such as
+   [`ObjectiveVectorPayload`][variopt.artifacts.ObjectiveVectorPayload].
 2. Use `Study.run(...)` instead of `Study.optimize(...)` to get a
    [`RunReport`][variopt.RunReport].
 3. Materialize a
    [`NondominatedRunSurface`][variopt.NondominatedRunSurface] from the
    report to extract the Pareto frontier.
+
+Concrete [`ObjectiveVectorRecord`][variopt.ObjectiveVectorRecord] values remain
+the compatibility projection you see after materialization, not the preferred
+payload type for new evaluation protocols.
 
 See [Canonical Usage Patterns](canonical-usage-patterns.md#runreport-to-nondominatedrunsurface)
 for the concrete code pattern.

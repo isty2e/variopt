@@ -10,11 +10,15 @@ from typing_extensions import override
 
 from variopt import (
     CategoricalSpace,
+    EvaluationAttemptBatch,
+    EvaluationFailure,
     EvaluationRequest,
     IntegerSpace,
     Objective,
+    Observation,
     Problem,
     Proposal,
+    UnsupportedEvaluationFailureError,
 )
 from variopt.algorithms.population.de import (
     DEProfile,
@@ -234,6 +238,32 @@ class DifferentialEvolutionOptimizerTests:
 
         assert tuple(member.candidate for member in state.population) == (5, 4, 3, 2)
         assert len(state.buffered_evaluations) == 0
+
+    def test_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
+        optimizer = DifferentialEvolutionOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=1)
+        request = EvaluationRequest(proposal=proposals[0])
+        failure = EvaluationFailure[int].from_exception(
+            request=request,
+            exception=ValueError("failed"),
+        )
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(failure,),
+        )
+
+        with pytest.raises(UnsupportedEvaluationFailureError):
+            _ = optimizer.tell_attempts(state, attempts)
+
+        assert tuple(
+            pending_evaluation.proposal
+            for pending_evaluation in state.pending_evaluations
+        ) == proposals
 
     def test_optimizer_replaces_targets_only_when_trials_improve(self) -> None:
         optimizer = DifferentialEvolutionOptimizer(

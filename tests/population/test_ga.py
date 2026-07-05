@@ -8,12 +8,16 @@ import pytest
 from typing_extensions import override
 
 from variopt import (
+    EvaluationAttemptBatch,
+    EvaluationFailure,
     EvaluationRequest,
     IntegerSpace,
     Objective,
+    Observation,
     PermutationSpace,
     Problem,
     Proposal,
+    UnsupportedEvaluationFailureError,
 )
 from variopt.algorithms.population.ga import (
     GAProfile,
@@ -203,6 +207,30 @@ class GeneticAlgorithmOptimizerTests:
 
         assert tuple(member.candidate for member in state.population) == (2, 3, 4, 5)
         assert len(state.buffered_members) == 0
+
+    def test_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
+        optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=1)
+        request = EvaluationRequest(proposal=proposals[0])
+        failure = EvaluationFailure[int].from_exception(
+            request=request,
+            exception=ValueError("failed"),
+        )
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(failure,),
+        )
+
+        with pytest.raises(UnsupportedEvaluationFailureError):
+            _ = optimizer.tell_attempts(state, attempts)
+
+        assert state.pending_proposals == proposals
 
     def test_optimizer_applies_elitism_after_one_generation(self) -> None:
         optimizer = GeneticAlgorithmOptimizer(

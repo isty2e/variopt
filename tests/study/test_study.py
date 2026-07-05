@@ -1,23 +1,31 @@
 """Tests for sync and general Study facade behavior."""
 
+import pickle
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from typing import cast
+from typing import Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 import pytest
 from typing_extensions import override
 
+import variopt.study.execution as study_execution
 from tests.study_support import (
     BatchQueueOptimizer,
     BatchQueueOptimizerState,
     ContextAwareBatchQueueOptimizer,
     CountingObjective,
     DecrementKernel,
+    FailingCandidateObjective,
+    FailureRecordingBatchQueueOptimizer,
+    FailureRecordingBatchQueueOptimizerState,
+    HardFailingEvaluator,
     LabelBatchQueueOptimizer,
+    LabelBatchQueueOptimizerState,
     LabelProtocol,
     LabelRecord,
     MisorderedEvaluator,
     OutcomeAwareBatchQueueOptimizer,
+    OutOfOrderAsyncEvaluator,
     RecordingExecutionResourcesKernel,
     RecordingKernel,
     RefinementKernel,
@@ -26,14 +34,15 @@ from tests.study_support import (
     SpaceOwnedEqualityCandidate,
     SpaceOwnedEqualityObjective,
     SpaceOwnedEqualityOptimizer,
+    SpaceOwnedEqualityOptimizerState,
     SpaceOwnedEqualityRefinementKernel,
     SpaceOwnedEqualitySpace,
     SquareObjective,
 )
 from variopt import (
     CandidateRefinement,
+    EvaluationAttemptBatch,
     EvaluationBudgetExhausted,
-    EvaluationOutcome,
     EvaluationRequest,
     IntegerSpace,
     Objective,
@@ -41,11 +50,21 @@ from variopt import (
     OptimizationDirection,
     Problem,
     Proposal,
+    RunExecutionFailed,
     RunReport,
     Study,
 )
-from variopt.artifacts import ProposalEvaluationSpec, Trace, TraceEvent
-from variopt.evaluators import SequentialEvaluator
+from variopt.artifacts import (
+    DefaultEvaluationAttemptMaterializer,
+    EvaluationAttemptMaterializer,
+    EvaluationFailure,
+    EvaluationSuccess,
+    ObservationPayload,
+    ProposalEvaluationSpec,
+    Trace,
+    TraceEvent,
+)
+from variopt.evaluators import JoblibEvaluator, SequentialEvaluator
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
     SEQUENTIAL_EXECUTION_MODEL,
@@ -57,14 +76,249 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from variopt.study.common import build_evaluation_requests
-from variopt.study.execution import evaluate_batch_sync
+from variopt.study.common import CheckpointSafeRunSnapshot, build_evaluation_requests
+from variopt.study.execution import evaluate_attempts_sync
+from variopt.study.failures import build_checkpoint_safe_report_or_raise_cause
+
+ScalarBatchStudy: TypeAlias = Study[
+    int,
+    int,
+    BatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+FailureRecordingStudy: TypeAlias = Study[
+    int,
+    int,
+    FailureRecordingBatchQueueOptimizerState,
+    ObservationPayload,
+    Observation[int],
+]
+LabelStudy: TypeAlias = Study[
+    int,
+    int,
+    LabelBatchQueueOptimizerState,
+    LabelRecord,
+    LabelRecord,
+]
+SpaceOwnedEqualityStudy: TypeAlias = Study[
+    int | SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityCandidate,
+    SpaceOwnedEqualityOptimizerState,
+    ObservationPayload,
+    Observation[SpaceOwnedEqualityCandidate],
+]
+TestOutcomeCandidateT = TypeVar("TestOutcomeCandidateT")
+
+
+@runtime_checkable
+class BatchQueueRunFailure(Protocol):
+    """Typed shape for hard-failure assertions over batch-queue study runs."""
+
+    partial_report: RunReport[int, Observation[int]]
+    partial_state: BatchQueueOptimizerState
+    checkpoint_safe_report: RunReport[int, Observation[int]] | None
+    checkpoint_safe_state: BatchQueueOptimizerState | None
+    cause: Exception
+
+
+@runtime_checkable
+class FailureRecordingRunFailure(Protocol):
+    """Typed shape for hard failures over failure-recording run methods."""
+
+    partial_report: RunReport[int, Observation[int]]
+    partial_state: FailureRecordingBatchQueueOptimizerState
+    checkpoint_safe_report: RunReport[int, Observation[int]] | None
+    checkpoint_safe_state: FailureRecordingBatchQueueOptimizerState | None
+    cause: Exception
+
+
+class TraceFactoryCounter:
+    """Trace factory fixture that records materialization calls."""
+
+    calls: list[tuple[TraceEvent, ...]]
+
+    def __init__(self) -> None:
+        self.calls = []
+
+    def __call__(
+        self,
+        *,
+        events: tuple[TraceEvent, ...] = (),
+    ) -> Trace:
+        self.calls.append(tuple(events))
+        return Trace(events=events)
+
+
+class UnpicklableRuntimeError(RuntimeError):
+    """RuntimeError carrying deliberately unpicklable local state."""
+
+    _callback: Callable[[], None]
+
+    def __init__(self) -> None:
+        """Create an exception that pickle must reject instead of stringifying."""
+        super().__init__("unpicklable cause")
+        self._callback = lambda: None
+
+
+class UnsafeCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
+    """Batch-queue optimizer that never exposes a checkpoint-safe state."""
+
+    @override
+    def is_checkpoint_safe_state(self, state: BatchQueueOptimizerState) -> bool:
+        _ = state
+        return False
+
+
+class TellFailingFailureRecordingBatchQueueOptimizer(
+    FailureRecordingBatchQueueOptimizer
+):
+    """Failure-recording optimizer that fails during attempt assimilation."""
+
+    _fail_on_tell_call: int
+
+    def __init__(
+        self,
+        proposal_batches: list[tuple[Proposal[int], ...]],
+        *,
+        fail_on_tell_call: int = 1,
+    ) -> None:
+        """Create an optimizer that fails on a selected tell-attempt call."""
+        if fail_on_tell_call < 1:
+            msg = "fail_on_tell_call must be positive"
+            raise ValueError(msg)
+        super().__init__(proposal_batches)
+        self._fail_on_tell_call = fail_on_tell_call
+
+    @override
+    def tell_attempts(
+        self,
+        state: FailureRecordingBatchQueueOptimizerState,
+        attempts: EvaluationAttemptBatch[TestOutcomeCandidateT, Observation[int]],
+    ) -> FailureRecordingBatchQueueOptimizerState:
+        tell_call = len(state.tell_history) + 1
+        if tell_call != self._fail_on_tell_call:
+            return super().tell_attempts(state, attempts)
+
+        _ = attempts
+        msg = "forced sync tell failure"
+        raise RuntimeError(msg)
+
+
+class SequencedEvaluationCountKernel(
+    Kernel[
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
+    ],
+):
+    """Kernel that reports one configured logical cost per run call."""
+
+    _evaluation_counts: tuple[int, ...]
+    _call_count: int
+
+    def __init__(self, evaluation_counts: Sequence[int]) -> None:
+        self._evaluation_counts = tuple(evaluation_counts)
+        self._call_count = 0
+
+    @override
+    def run(
+        self,
+        query: ProposalBatchQuery[int, int, ObservationPayload],
+        runner: Callable[
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
+        ],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        _ = runner
+        if self._call_count >= len(self._evaluation_counts):
+            raise AssertionError("sequenced kernel called too many times")
+
+        evaluation_count = self._evaluation_counts[self._call_count]
+        self._call_count += 1
+        successes: list[EvaluationSuccess[int, ObservationPayload]] = []
+        for proposal_index, proposal in enumerate(query.proposals):
+            proposal_evaluation_spec = None
+            if query.proposal_evaluation_specs is not None:
+                proposal_evaluation_spec = query.proposal_evaluation_specs[
+                    proposal_index
+                ]
+            request = EvaluationRequest(
+                proposal=proposal,
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+            payload = ObservationPayload.from_objective_value(
+                value=float(proposal.candidate * proposal.candidate),
+                direction=query.problem.direction,
+            )
+            successes.append(
+                EvaluationSuccess(
+                    request=request,
+                    payload=payload,
+                    evaluation_count=evaluation_count,
+                )
+            )
+
+        return EvaluationAttemptBatch(attempts=tuple(successes))
+
+
+class KeyboardInterruptObjective(Objective[int]):
+    """Objective that raises KeyboardInterrupt for propagation tests."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        _ = candidate
+        raise KeyboardInterrupt
+
+
+class CountingObservationMaterializer(
+    EvaluationAttemptMaterializer[int, ObservationPayload, Observation[int]],
+):
+    """Observation materializer that records optimize/run boundary calls."""
+
+    calls: int
+    _default: DefaultEvaluationAttemptMaterializer[int]
+    _value_offset: float
+
+    def __init__(self, *, value_offset: float = 0.0) -> None:
+        self.calls = 0
+        self._default = DefaultEvaluationAttemptMaterializer()
+        self._value_offset = value_offset
+
+    @override
+    def materialize_attempts(
+        self,
+        attempts: EvaluationAttemptBatch[int, ObservationPayload],
+    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+        self.calls += 1
+        materialized_attempts = self._default.materialize_attempts(attempts)
+        if self._value_offset == 0.0:
+            return materialized_attempts
+
+        shifted_attempts: list[
+            EvaluationSuccess[int, Observation[int]] | EvaluationFailure[int]
+        ] = []
+        for attempt in materialized_attempts.attempts:
+            if isinstance(attempt, EvaluationFailure):
+                shifted_attempts.append(attempt)
+                continue
+
+            observation = attempt.payload
+            shifted_observation = Observation(
+                request=observation.request,
+                candidate=observation.candidate,
+                value=observation.value + self._value_offset,
+                score=observation.score + self._value_offset,
+                elapsed_seconds=observation.elapsed_seconds,
+            )
+            shifted_attempts.append(attempt.with_payload(shifted_observation))
+
+        return EvaluationAttemptBatch(attempts=tuple(shifted_attempts))
 
 
 class RepeatingSubqueryKernel(
     Kernel[
-        ProposalBatchQuery[int, int, Observation[int]],
-        tuple[EvaluationOutcome[int, Observation[int]], ...],
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
     ],
 ):
     """Kernel that intentionally reuses one trial subquery object."""
@@ -72,30 +326,96 @@ class RepeatingSubqueryKernel(
     @override
     def run(
         self,
-        query: ProposalBatchQuery[int, int, Observation[int]],
+        query: ProposalBatchQuery[int, int, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[int, int, Observation[int]]],
-            tuple[EvaluationOutcome[int, Observation[int]], ...],
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
         ],
-    ) -> tuple[EvaluationOutcome[int, Observation[int]], ...]:
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
         subquery = ProposalBatchQuery(
             problem=query.problem,
             proposals=(Proposal(candidate=max(0, query.proposals[0].candidate - 1)),),
             execution_resources=query.execution_resources,
         )
-        first_outcome = runner(subquery)[0]
-        second_outcome = runner(subquery)[0]
-        refined_record = second_outcome.record
-        return (
-            EvaluationOutcome(
-                record=Observation.from_objective_value(
-                    proposal=query.proposals[0],
-                    candidate=refined_record.candidate,
-                    value=refined_record.value,
-                    direction=query.problem.direction,
-                ),
-                evaluation_count=(
-                    first_outcome.evaluation_count + second_outcome.evaluation_count
+        first_success = runner(subquery).successes[0]
+        second_success = runner(subquery).successes[0]
+        refined_candidate = second_success.request.candidate
+        refinement = None
+        if refined_candidate != query.proposals[0].candidate:
+            refinement = CandidateRefinement(
+                source_candidate=query.proposals[0].candidate,
+                refined_candidate=refined_candidate,
+                changed_leaf_paths=((),),
+            )
+        proposal_evaluation_spec = None
+        if query.proposal_evaluation_specs is not None:
+            proposal_evaluation_spec = query.proposal_evaluation_specs[0]
+        request = EvaluationRequest(
+            proposal=Proposal(
+                candidate=refined_candidate,
+                proposal_id=query.proposals[0].proposal_id,
+            ),
+            proposal_evaluation_spec=proposal_evaluation_spec,
+        )
+        payload = ObservationPayload.from_objective_value(
+            value=second_success.payload.value,
+            direction=query.problem.direction,
+            elapsed_seconds=second_success.payload.elapsed_seconds,
+        )
+        success = EvaluationSuccess(
+            request=request,
+            payload=payload,
+            evaluation_count=(
+                first_success.evaluation_count + second_success.evaluation_count
+            ),
+            refinement=refinement,
+        )
+        return EvaluationAttemptBatch(
+            attempts=(success,),
+        )
+
+
+class PayloadRefinementKernel(
+    Kernel[
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
+    ],
+):
+    """Kernel that returns refined scalar payloads before record materialization."""
+
+    @override
+    def run(
+        self,
+        query: ProposalBatchQuery[int, int, ObservationPayload],
+        runner: Callable[
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
+        ],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        refined_candidate = query.proposals[0].candidate - 1
+        refined_proposal = Proposal(
+            candidate=refined_candidate,
+            proposal_id=query.proposals[0].proposal_id,
+        )
+        subquery = ProposalBatchQuery(
+            problem=query.problem,
+            proposals=(refined_proposal,),
+            execution_resources=query.execution_resources,
+            proposal_evaluation_specs=query.proposal_evaluation_specs,
+        )
+        refined_success = runner(subquery).successes[0]
+        refinement = CandidateRefinement(
+            source_candidate=query.proposals[0].candidate,
+            refined_candidate=refined_candidate,
+            changed_leaf_paths=((),),
+        )
+        return EvaluationAttemptBatch(
+            attempts=(
+                EvaluationSuccess(
+                    request=refined_success.request,
+                    payload=refined_success.payload,
+                    evaluation_count=refined_success.evaluation_count,
+                    refinement=refinement,
                 ),
             ),
         )
@@ -174,16 +494,14 @@ class RequestAwareObjective(Objective[int]):
         request: EvaluationRequest[int],
         *,
         direction: OptimizationDirection,
-    ) -> Observation[int]:
+    ) -> ObservationPayload:
         self.request_evaluation_count += 1
         spec_bonus = (
             100.0
             if isinstance(request.proposal_evaluation_spec, LocalProposalEvaluationSpec)
             else 0.0
         )
-        return Observation.from_objective_value(
-            request=request,
-            candidate=request.candidate,
+        return ObservationPayload.from_objective_value(
             value=float(request.candidate) + spec_bonus,
             direction=direction,
         )
@@ -191,6 +509,217 @@ class RequestAwareObjective(Objective[int]):
 
 class StudyTests:
     """Coverage for sync and execution-model-agnostic Study behavior."""
+
+    def test_run_execution_failed_pickle_round_trip_preserves_partial_state(
+        self,
+    ) -> None:
+        proposal = Proposal(candidate=2, proposal_id="p-ok")
+        observation = Observation(
+            proposal=proposal,
+            candidate=2,
+            value=4.0,
+            score=4.0,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=observation.request,
+            payload=observation,
+        )
+        failure_request: EvaluationRequest[int] = EvaluationRequest(
+            proposal=Proposal(candidate=5, proposal_id="p-fail"),
+        )
+        failure: EvaluationFailure[int] = EvaluationFailure[int].from_exception(
+            request=failure_request,
+            exception=ValueError("objective failed"),
+        )
+        partial_report = RunReport[int, Observation[int]].from_successes(
+            successes=(success,),
+            evaluation_count=2,
+            trace=Trace(
+                events=(
+                    TraceEvent(
+                        kind="study.step",
+                        message="completed 2 attempt(s): 1 succeeded, 1 failed",
+                    ),
+                ),
+            ),
+            failures=(failure,),
+        )
+        checkpoint_safe_report = RunReport[int, Observation[int]].from_successes(
+            successes=(success,),
+            evaluation_count=1,
+            trace=Trace(
+                events=(
+                    TraceEvent(
+                        kind="study.step",
+                        message="completed 1 attempt(s): 1 succeeded, 0 failed",
+                    ),
+                ),
+            ),
+        )
+        partial_state = BatchQueueOptimizerState(remaining_batches=())
+        checkpoint_safe_state = BatchQueueOptimizerState(
+            remaining_batches=(),
+            tell_history=((observation,),),
+        )
+        cause = RuntimeError("forced hard failure")
+        exception = RunExecutionFailed[
+            int,
+            BatchQueueOptimizerState,
+            Observation[int],
+        ](
+            partial_report=partial_report,
+            partial_state=partial_state,
+            checkpoint_safe_report=checkpoint_safe_report,
+            checkpoint_safe_state=checkpoint_safe_state,
+            cause=cause,
+        )
+        exception.__cause__ = cause
+
+        restored = cast(
+            RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+            pickle.loads(pickle.dumps(exception)),
+        )
+
+        assert type(restored) is RunExecutionFailed
+        assert restored.partial_report == partial_report
+        assert restored.partial_state == partial_state
+        assert restored.checkpoint_safe_report == checkpoint_safe_report
+        assert restored.checkpoint_safe_state == checkpoint_safe_state
+        assert type(restored.cause) is RuntimeError
+        assert str(restored.cause) == "forced hard failure"
+        assert restored.__cause__ is restored.cause
+        assert str(restored) == "study execution failed: forced hard failure"
+
+    def test_run_execution_failed_pickle_round_trip_without_checkpoint_projection(
+        self,
+    ) -> None:
+        partial_state = BatchQueueOptimizerState(remaining_batches=())
+        context = LookupError("outer context")
+        exception = RunExecutionFailed[
+            int,
+            BatchQueueOptimizerState,
+            Observation[int],
+        ](
+            partial_report=RunReport[int, Observation[int]](evaluation_count=0),
+            partial_state=partial_state,
+            checkpoint_safe_report=None,
+            checkpoint_safe_state=None,
+            cause=RuntimeError("plain hard failure"),
+        )
+        exception.__context__ = context
+        exception.__suppress_context__ = True
+
+        restored = cast(
+            RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+            pickle.loads(pickle.dumps(exception)),
+        )
+
+        assert type(restored) is RunExecutionFailed
+        assert restored.partial_report.evaluation_count == 0
+        assert restored.partial_state == partial_state
+        assert restored.checkpoint_safe_report is None
+        assert restored.checkpoint_safe_state is None
+        assert type(restored.cause) is RuntimeError
+        assert str(restored.cause) == "plain hard failure"
+        assert type(restored.__context__) is LookupError
+        assert str(restored.__context__) == "outer context"
+        assert restored.__suppress_context__ is True
+
+    def test_run_execution_failed_pickle_round_trip_from_actual_optimize_failure(
+        self,
+    ) -> None:
+        objective = CountingObjective()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=99, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        try:
+            _ = study.optimize(max_evaluations=1)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+            captured_exception = cast(
+                RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+                raw_exception,
+            )
+        else:
+            pytest.fail("expected invalid candidate hard failure")
+
+        restored = cast(
+            RunExecutionFailed[int, BatchQueueOptimizerState, Observation[int]],
+            pickle.loads(pickle.dumps(captured_exception)),
+        )
+
+        assert type(restored) is RunExecutionFailed
+        assert restored.partial_report == exception.partial_report
+        assert restored.partial_state == exception.partial_state
+        assert restored.checkpoint_safe_report == exception.checkpoint_safe_report
+        assert restored.checkpoint_safe_state == exception.checkpoint_safe_state
+        assert type(restored.cause) is ValueError
+        assert restored.__cause__ is restored.cause
+        assert objective.evaluation_count == 0
+
+    def test_run_execution_failed_pickle_rejects_unpicklable_cause(self) -> None:
+        exception = RunExecutionFailed[
+            int,
+            BatchQueueOptimizerState,
+            Observation[int],
+        ](
+            partial_report=RunReport[int, Observation[int]](evaluation_count=0),
+            partial_state=BatchQueueOptimizerState(remaining_batches=()),
+            checkpoint_safe_report=None,
+            checkpoint_safe_state=None,
+            cause=UnpicklableRuntimeError(),
+        )
+
+        with pytest.raises(AttributeError, match="lambda"):
+            _ = pickle.dumps(exception)
+
+    def test_checkpoint_safe_report_helper_rethrows_original_cause(self) -> None:
+        request = EvaluationRequest(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+        )
+        record = Observation.from_objective_value(
+            request=request,
+            candidate=request.candidate,
+            value=1.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=request,
+            payload=record,
+        )
+        snapshot: CheckpointSafeRunSnapshot[int] = CheckpointSafeRunSnapshot(
+            success_count=1,
+            failure_count=0,
+            trace_event_count=0,
+            evaluation_count=0,
+            state=3,
+        )
+        cause = RuntimeError("original hard failure")
+
+        def candidate_equal(left_candidate: int, right_candidate: int) -> bool:
+            return left_candidate == right_candidate
+
+        with pytest.raises(RuntimeError, match="original hard failure") as exc_info:
+            _ = build_checkpoint_safe_report_or_raise_cause(
+                cause=cause,
+                snapshot=snapshot,
+                successes=(success,),
+                failures=(),
+                trace_events=(),
+                candidate_equal=candidate_equal,
+            )
+
+        assert exc_info.value is cause
+        assert type(cause.__cause__) is ValueError
 
     def test_study_canonicalizes_missing_kernel_to_direct_kernel(self) -> None:
         problem = Problem(
@@ -202,7 +731,11 @@ class StudyTests:
         )
         evaluator = SequentialEvaluator[int, int]()
 
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         assert isinstance(study.kernel, DirectKernel)
 
@@ -260,10 +793,12 @@ class StudyTests:
         contexts = kernel.queries[0].proposal_kernel_hints
         assert contexts is not None
         assert contexts is not None
-        assert all(
-            isinstance(context, ProposalLocalSearchContext) for context in contexts
+        typed_contexts = tuple(
+            context
+            for context in contexts
+            if isinstance(context, ProposalLocalSearchContext)
         )
-        typed_contexts = cast(tuple[ProposalLocalSearchContext, ...], contexts)
+        assert len(typed_contexts) == len(contexts)
         assert tuple(context.local_budget for context in typed_contexts) == (1, 2)
 
     def test_step_runs_ask_evaluate_tell_once(self) -> None:
@@ -275,7 +810,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
         state = optimizer.create_initial_state()
 
         observations, next_state = study.step(state, batch_size=1)
@@ -321,7 +860,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         _ = study.step(optimizer.create_initial_state(), batch_size=1)
 
@@ -360,7 +903,7 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(
+        study: ScalarBatchStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -419,7 +962,7 @@ class StudyTests:
         assert observations[0].candidate == 2
         assert build_call_count == 3
 
-    def test_evaluate_batch_sync_uses_supplied_requests_without_rebuilding(
+    def test_evaluate_attempts_sync_uses_supplied_requests_without_rebuilding(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
@@ -446,7 +989,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
         proposals = (Proposal(candidate=3, proposal_id="p-1"),)
         requests = build_evaluation_requests(
             proposals,
@@ -458,10 +1005,35 @@ class StudyTests:
             execution_resources=evaluator.execution_resources(),
         )
 
-        outcomes = evaluate_batch_sync(study, query, requests=requests)
+        attempts = evaluate_attempts_sync(study, query, requests=requests)
+        success = attempts.successes[0]
 
-        assert outcomes[0].record.candidate == 3
-        assert outcomes[0].record.value == 9.0
+        assert success.request is requests[0]
+        assert success.candidate == 3
+        assert type(success.payload) is ObservationPayload
+        assert success.payload.value == 9.0
+
+    def test_sync_execution_rejects_attempt_session_only_evaluator(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
+        )
+        evaluator = OutOfOrderAsyncEvaluator()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+        state = optimizer.create_initial_state()
+
+        with pytest.raises(
+            TypeError,
+            match="sync execution models require evaluator.evaluate_attempts",
+        ):
+            _ = study.step(state)
 
     def test_step_uses_problem_evaluation_protocol_basis(self) -> None:
         problem = Problem(
@@ -472,13 +1044,17 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         observations, _ = study.step(optimizer.create_initial_state(), batch_size=1)
 
         assert len(observations) == 1
         assert observations[0].proposal.candidate == 4
-        assert observations[0].candidate == 3
+        assert observations[0].candidate == 4
         assert observations[0].value == 9.0
         assert observations[0].score == 9.0
 
@@ -491,7 +1067,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int, LabelRecord]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: LabelStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         records, next_state = study.step(optimizer.create_initial_state(), batch_size=1)
 
@@ -510,7 +1090,11 @@ class StudyTests:
             proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
         )
         evaluator = SequentialEvaluator[int, int, LabelRecord]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: LabelStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         with pytest.raises(TypeError):
             _ = study.optimize(max_evaluations=1)
@@ -529,7 +1113,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int, LabelRecord]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: LabelStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         report, final_state = study.run(max_evaluations=2)
 
@@ -562,7 +1150,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         result, _ = study.optimize(max_evaluations=3, batch_size=2)
 
@@ -602,7 +1194,11 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
 
         result, final_state = study.optimize(max_evaluations=3, batch_size=2)
 
@@ -627,6 +1223,74 @@ class StudyTests:
             tuple(observation.proposal.proposal_id for observation in batch)
             for batch in final_state.tell_history
         ) == (("p-1", "p-2"), ("p-3",))
+
+    def test_optimize_uses_custom_materializer_instead_of_fast_path(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        materializer = CountingObservationMaterializer()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            attempt_materializer=materializer,
+        )
+
+        result, final_state = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert materializer.calls == 1
+        assert tuple(observation.candidate for observation in result.observations) == (
+            4,
+            2,
+        )
+        assert tuple(
+            tuple(type(record) is Observation for record in batch)
+            for batch in final_state.tell_history
+        ) == ((True, True),)
+
+    def test_optimize_uses_custom_materialized_records_for_result(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=2, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        materializer = CountingObservationMaterializer(value_offset=100.0)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            attempt_materializer=materializer,
+        )
+
+        result, final_state = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert materializer.calls == 1
+        assert tuple(observation.value for observation in result.observations) == (
+            116.0,
+            104.0,
+        )
+        assert tuple(
+            tuple(record.value for record in batch)
+            for batch in final_state.tell_history
+        ) == ((116.0, 104.0),)
 
     def test_optimize_fast_path_preserves_outcome_aware_tell_hook(self) -> None:
         problem = Problem(
@@ -691,7 +1355,7 @@ class StudyTests:
 
         assert problem.direct_objective is None
         assert result.observations[0].proposal.proposal_id == "p-1"
-        assert result.observations[0].candidate == 3
+        assert result.observations[0].candidate == 4
 
     def test_optimize_keeps_request_overriding_objective_on_generic_path(self) -> None:
         spec = LocalProposalEvaluationSpec()
@@ -726,9 +1390,19 @@ class StudyTests:
         evaluator = SequentialEvaluator[int, int]()
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
-        with pytest.raises(ValueError):
+        try:
             _ = study.optimize(max_evaluations=1)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected invalid candidate hard failure")
 
+        assert isinstance(exception.cause, ValueError)
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.failures == ()
+        assert exception.partial_report.evaluation_count == 0
         assert objective.evaluation_count == 0
 
     def test_optimize_fast_path_preserves_proposal_evaluation_specs(self) -> None:
@@ -763,19 +1437,33 @@ class StudyTests:
         )
         evaluator = SequentialEvaluator[int, int]()
 
-        with pytest.raises(ValueError, match="proposal_evaluation_specs"):
+        try:
             _ = Study(
                 problem=problem,
                 run_method=spec_optimizer,
                 evaluator=evaluator,
             ).optimize(max_evaluations=1)
+        except RuntimeError as raw_exception:
+            assert type(raw_exception) is RunExecutionFailed
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            assert isinstance(raw_exception.cause, ValueError)
+            assert "proposal_evaluation_specs" in str(raw_exception.cause)
+        else:
+            pytest.fail("expected proposal_evaluation_specs hard failure")
 
-        with pytest.raises(ValueError, match="proposal_kernel_hints"):
+        try:
             _ = Study(
                 problem=problem,
                 run_method=hint_optimizer,
                 evaluator=evaluator,
             ).optimize(max_evaluations=1)
+        except RuntimeError as raw_exception:
+            assert type(raw_exception) is RunExecutionFailed
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            assert isinstance(raw_exception.cause, ValueError)
+            assert "proposal_kernel_hints" in str(raw_exception.cause)
+        else:
+            pytest.fail("expected proposal_kernel_hints hard failure")
 
     def test_optimize_fast_path_preserves_budget_boundaries(self) -> None:
         problem = Problem(
@@ -870,7 +1558,7 @@ class StudyTests:
             ],
         )
         evaluator = SequentialEvaluator[int, int]()
-        study = Study(
+        study: ScalarBatchStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -899,6 +1587,637 @@ class StudyTests:
             tuple(report.records[:2]),
             tuple(report.records[2:]),
         )
+
+    def test_run_materializes_refined_scalar_payloads_before_feedback(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=PayloadRefinementKernel(),
+        )
+
+        report, final_state = study.run(max_evaluations=1, batch_size=1)
+
+        assert tuple(record.candidate for record in report.records) == (3,)
+        assert isinstance(report.records[0], Observation)
+        assert final_state.tell_history == ((report.records[0],),)
+        assert len(report.refinements) == 1
+        refinement = report.refinements[0]
+        assert refinement is not None
+        assert refinement.source_candidate == 4
+        assert refinement.refined_candidate == 3
+
+    def test_run_records_sync_mixed_evaluation_failures(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-1"),
+                    Proposal(candidate=5, proposal_id="p-2"),
+                    Proposal(candidate=1, proposal_id="p-3"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        report, final_state = study.run(max_evaluations=3, batch_size=3)
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+            "p-3",
+        )
+        assert all(type(success.payload) is Observation for success in report.successes)
+        assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
+        assert report.failures[0].exception.exception_type == "builtins.ValueError"
+        assert report.evaluation_count == 3
+        assert tuple(
+            failure_proposal_id
+            for failure_batch in final_state.failure_history
+            for failure_proposal_id in failure_batch
+        ) == ("p-2",)
+        assert final_state.tell_history == ((report.records[0], report.records[1]),)
+        assert report.trace.events[0].message == (
+            "completed 3 attempt(s): 2 succeeded, 1 failed"
+        )
+
+    def test_run_with_joblib_evaluator_records_failures(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-1"),
+                    Proposal(candidate=5, proposal_id="p-2"),
+                    Proposal(candidate=1, proposal_id="p-3"),
+                ),
+            ],
+        )
+        evaluator = JoblibEvaluator[int, int](backend="threading", n_jobs=2)
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        report, final_state = study.run(max_evaluations=3, batch_size=3)
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+            "p-3",
+        )
+        assert tuple(failure.proposal_id for failure in report.failures) == ("p-2",)
+        assert final_state.failure_history == (("p-2",),)
+
+    def test_run_tell_failure_preserves_mixed_attempts_in_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-ok"),
+                    Proposal(candidate=5, proposal_id="p-fail"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(max_evaluations=2, batch_size=2)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected sync tell failure")
+
+        assert isinstance(exception.cause, RuntimeError)
+        assert str(exception.cause) == "forced sync tell failure"
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-ok",)
+        assert tuple(
+            success.request.proposal.proposal_id
+            for success in exception.partial_report.successes
+        ) == ("p-ok",)
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-fail",)
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 1 succeeded, 1 failed"
+        )
+
+    def test_run_tell_failure_preserves_prior_checkpoint_safe_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=3, proposal_id="p-safe"),),
+                (
+                    Proposal(candidate=2, proposal_id="p-ok"),
+                    Proposal(candidate=5, proposal_id="p-fail"),
+                ),
+            ],
+            fail_on_tell_call=2,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=3,
+                batch_size=2,
+                stop_at_checkpoint_boundary=True,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected sync tell failure")
+
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-safe", "p-ok")
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-fail",)
+        assert exception.partial_report.evaluation_count == 3
+        assert exception.partial_state.tell_history == (
+            (exception.partial_report.records[0],),
+        )
+        assert exception.partial_state.failure_history == ((),)
+
+        checkpoint_report = exception.checkpoint_safe_report
+        checkpoint_state = exception.checkpoint_safe_state
+        assert checkpoint_report is not None
+        assert checkpoint_state is not None
+        assert tuple(
+            record.proposal.proposal_id for record in checkpoint_report.records
+        ) == ("p-safe",)
+        assert checkpoint_report.failures == ()
+        assert checkpoint_report.evaluation_count == 1
+        assert checkpoint_state.tell_history == ((checkpoint_report.records[0],),)
+        assert checkpoint_state.failure_history == ((),)
+
+    def test_run_tell_failure_preserves_failure_only_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(2, 5)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-first"),
+                    Proposal(candidate=5, proposal_id="p-second"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=2,
+                count_evaluation_cost=False,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected sync tell failure")
+
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.successes == ()
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-first", "p-second")
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 0 succeeded, 2 failed"
+        )
+
+    def test_run_hard_failure_carries_partial_and_checkpoint_safe_report(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = HardFailingEvaluator(fail_on_call=2)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=1,
+                stop_at_checkpoint_boundary=True,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected hard evaluator failure")
+
+        assert isinstance(exception.cause, RuntimeError)
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-1",)
+        assert all(
+            type(success.payload) is Observation
+            for success in exception.partial_report.successes
+        )
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.tell_history == (
+            (exception.partial_report.records[0],),
+        )
+        checkpoint_report = exception.checkpoint_safe_report
+        checkpoint_state = exception.checkpoint_safe_state
+        assert checkpoint_report is not None
+        assert checkpoint_state is not None
+        assert tuple(
+            record.proposal.proposal_id for record in checkpoint_report.records
+        ) == ("p-1",)
+        assert all(
+            type(success.payload) is Observation
+            for success in checkpoint_report.successes
+        )
+        assert checkpoint_report.evaluation_count == 1
+        assert checkpoint_state.tell_history == ((checkpoint_report.records[0],),)
+
+    def test_run_checkpoint_safe_snapshots_do_not_materialize_trace_each_step(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=index, proposal_id=f"p-{index}"),)
+                for index in range(5)
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+        trace_counter = TraceFactoryCounter()
+        monkeypatch.setattr(study_execution, "Trace", trace_counter)
+
+        report, final_state = study.run(
+            max_evaluations=5,
+            batch_size=1,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert len(report.records) == 5
+        assert final_state.tell_history[-1] == (report.records[-1],)
+        assert len(trace_counter.calls) == 1
+        assert len(trace_counter.calls[0]) == 5
+
+    def test_run_hard_failure_before_safe_state_has_no_checkpoint_projection(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = UnsafeCheckpointBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=2, proposal_id="p-1"),)],
+        )
+        evaluator = HardFailingEvaluator(fail_on_call=1)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=1,
+                batch_size=1,
+                stop_at_checkpoint_boundary=True,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, BatchQueueRunFailure)
+            exception: BatchQueueRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected hard evaluator failure")
+
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.evaluation_count == 1
+        assert exception.checkpoint_safe_report is None
+        assert exception.checkpoint_safe_state is None
+
+    def test_run_report_projection_failure_preserves_original_hard_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = HardFailingEvaluator(fail_on_call=3)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RepeatingSubqueryKernel(),
+        )
+
+        with pytest.raises(RuntimeError, match="hard evaluator failure 3") as exc_info:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=1,
+                count_evaluation_cost=False,
+            )
+
+        assert type(exc_info.value) is RuntimeError
+        report_failure = exc_info.value.__cause__
+        assert type(report_failure) is ValueError
+        assert str(report_failure) == (
+            "evaluation_count must be at least the terminal attempt cost"
+        )
+
+    def test_run_checkpoint_projection_failure_preserves_original_hard_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=3, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = HardFailingEvaluator(fail_on_call=3)
+        study: ScalarBatchStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=RepeatingSubqueryKernel(),
+        )
+
+        with pytest.raises(RuntimeError, match="hard evaluator failure 3") as exc_info:
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=1,
+                count_evaluation_cost=False,
+                stop_at_checkpoint_boundary=True,
+            )
+
+        assert type(exc_info.value) is RuntimeError
+        report_failure = exc_info.value.__cause__
+        assert type(report_failure) is ValueError
+        assert str(report_failure) == (
+            "evaluation_count must be at least the terminal attempt cost"
+        )
+
+    def test_run_does_not_wrap_keyboard_interrupt(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=KeyboardInterruptObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=2, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        with pytest.raises(KeyboardInterrupt):
+            _ = study.run(max_evaluations=1)
+
+    def test_optimize_direct_scalar_fast_path_records_failures(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-1"),
+                    Proposal(candidate=5, proposal_id="p-2"),
+                    Proposal(candidate=1, proposal_id="p-3"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, final_state = study.optimize(max_evaluations=3, batch_size=3)
+
+        assert tuple(
+            observation.proposal.proposal_id for observation in result.observations
+        ) == ("p-1", "p-3")
+        assert tuple(failure.proposal_id for failure in result.failures) == ("p-2",)
+        assert result.evaluation_count == 3
+        assert result.best_observation is not None
+        assert result.best_observation.proposal.proposal_id == "p-3"
+        assert tuple(
+            failure_proposal_id
+            for failure_batch in final_state.failure_history
+            for failure_proposal_id in failure_batch
+        ) == ("p-2",)
+
+    def test_optimize_fast_path_tell_failure_preserves_mixed_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(5,)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-ok"),
+                    Proposal(candidate=5, proposal_id="p-fail"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.optimize(max_evaluations=2, batch_size=2)
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected fast-path tell failure")
+
+        assert isinstance(exception.cause, RuntimeError)
+        assert str(exception.cause) == "forced sync tell failure"
+        assert tuple(
+            record.proposal.proposal_id
+            for record in exception.partial_report.records
+        ) == ("p-ok",)
+        assert tuple(
+            success.request.proposal.proposal_id
+            for success in exception.partial_report.successes
+        ) == ("p-ok",)
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-fail",)
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 1 succeeded, 1 failed"
+        )
+
+    def test_optimize_fast_path_tell_failure_preserves_failure_only_partial_report(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(2, 5)),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-first"),
+                    Proposal(candidate=5, proposal_id="p-second"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.optimize(
+                max_evaluations=2,
+                batch_size=2,
+                count_evaluation_cost=False,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected fast-path tell failure")
+
+        assert exception.partial_report.records == ()
+        assert exception.partial_report.successes == ()
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-first", "p-second")
+        assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.ask_history == (2,)
+        assert exception.partial_state.tell_history == ()
+        assert exception.partial_state.failure_history == ()
+        assert exception.partial_report.trace.events[-1].message == (
+            "completed 2 attempt(s): 0 succeeded, 2 failed"
+        )
+
+    def test_optimize_direct_scalar_fast_path_returns_failure_only_result(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=FailingCandidateObjective(failed_candidates=(2, 5)),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (
+                    Proposal(candidate=2, proposal_id="p-1"),
+                    Proposal(candidate=5, proposal_id="p-2"),
+                ),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, final_state = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert result.observations == ()
+        assert result.best_observation is None
+        assert tuple(failure.proposal_id for failure in result.failures) == (
+            "p-1",
+            "p-2",
+        )
+        assert final_state.tell_history == ((),)
+        assert final_state.failure_history == (("p-1", "p-2"),)
 
     def test_run_keeps_no_refinement_report_allocation_light(self) -> None:
         problem = Problem(
@@ -967,6 +2286,153 @@ class StudyTests:
                 count_evaluation_cost=True,
             )
 
+    def test_run_returns_checkpoint_snapshot_when_evaluation_cost_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert report.records == ()
+        assert report.failures == ()
+        assert report.evaluation_count == 0
+        assert final_state == optimizer.create_initial_state()
+
+    def test_optimize_returns_checkpoint_snapshot_when_evaluation_cost_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        result, final_state = study.optimize(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert result.observations == ()
+        assert result.failures == ()
+        assert result.best_observation is None
+        assert result.evaluation_count == 0
+        assert final_state == optimizer.create_initial_state()
+
+    def test_run_returns_latest_checkpoint_snapshot_when_later_step_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=4, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=SequencedEvaluationCountKernel((1, 7)),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+        )
+        assert report.evaluation_count == 1
+        assert final_state.tell_history == ((report.records[0],),)
+
+    def test_run_does_not_checkpoint_rollback_when_inner_cost_counting_is_disabled(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=1,
+            count_evaluation_cost=False,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+        )
+        assert report.evaluation_count == 7
+        assert len(final_state.tell_history) == 1
+
+    def test_run_keeps_budget_exhaustion_when_no_checkpoint_snapshot_exists(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = UnsafeCheckpointBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        with pytest.raises(EvaluationBudgetExhausted):
+            _ = study.run(
+                max_evaluations=3,
+                count_evaluation_cost=True,
+                stop_at_checkpoint_boundary=True,
+            )
+
     def test_run_uses_space_candidate_equality_for_report_refinements(self) -> None:
         problem = Problem(
             space=SpaceOwnedEqualitySpace(),
@@ -977,7 +2443,7 @@ class StudyTests:
             int | SpaceOwnedEqualityCandidate,
             SpaceOwnedEqualityCandidate,
         ]()
-        study = Study(
+        study: SpaceOwnedEqualityStudy = Study(
             problem=problem,
             run_method=optimizer,
             evaluator=evaluator,
@@ -1254,7 +2720,7 @@ class StudyTests:
         state = optimizer.create_initial_state()
 
         with pytest.raises(
-            ValueError, match="evaluator outcomes must align with input request order"
+            ValueError, match="attempt batch requests must align with input request order"
         ):
             _ = study.step(state, batch_size=2)
 
@@ -1380,5 +2846,5 @@ class StudyTests:
         )
 
         assert len(result.observations) == 2
-        assert result.evaluation_count == 2
+        assert result.evaluation_count == 14
         assert len(final_state.tell_history) == 2

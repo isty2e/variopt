@@ -37,9 +37,29 @@ The generated API pages are limited to the supported facade modules:
 Those pages intentionally stop at the facade boundary. Importable deep
 submodules are not automatically part of the stable public contract.
 
-Refinement-related public artifacts are documented through the root facade and
-`variopt.artifacts`: `CandidateRefinement`, `EvaluationOutcome`, `RunReport`,
-`RunResult`, and `NondominatedRunSurface`. Kernel implementation contracts used
-by those examples, including `ProposalBatchQuery`, `KernelDiagnostics`,
-`KernelStatus`, `ExecutionResources`, and `NestedParallelismPolicy`, are also
-root-facade names.
+The root facade exposes common direct-use artifacts and contracts such as
+`CandidateRefinement`, `EvaluationOutcome`, `EvaluationFailure`,
+`EvaluationExceptionSnapshot`, `EvaluationAttemptBatch`, `EvaluationRequest`,
+`Observation`, `ObjectiveVectorRecord`, `Proposal`, `RunReport`, `RunResult`,
+and `NondominatedRunSurface`. It also exposes common execution contracts such
+as `ProposalBatchQuery`, `KernelDiagnostics`, `KernelStatus`,
+`ExecutionResources`, and `NestedParallelismPolicy`.
+
+Use `variopt.artifacts` for artifact-specific construction and projection
+helpers that are not part of the trimmed root facade. That facade includes
+`EvaluationAttempt`, `EvaluationSuccess`, `ObservationPayload`,
+`ObjectiveVectorPayload`, `EvaluationAttemptMaterializer`,
+`DefaultEvaluationAttemptMaterializer`, `materialize_success_record(...)`,
+`materialize_success_records(...)`, and
+`materialize_attempt_batch_records(...)`. Custom payload-to-record mappings
+should provide an explicit `EvaluationAttemptMaterializer` when constructing a
+`Study`; materializers may change successful payload representation, but must
+not drop, reorder, flip, or rewrite attempt slots or their accounting and
+provenance metadata.
+
+Run-method attempt assimilation exposes `UnsupportedEvaluationFailureError` for
+optimizers that cannot safely consume recorded failures; study orchestration
+exposes `RunExecutionFailed` for hard failures with partial run state. Supported
+diagnostics import paths are `from variopt import KernelDiagnostics,
+KernelStatus` and `from variopt.artifacts import KernelDiagnostics,
+KernelStatus`; `variopt.kernel` is not a supported diagnostics facade.

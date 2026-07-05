@@ -15,6 +15,7 @@ from .....json_types import (
     require_json_finite_float,
     require_json_int,
 )
+from .....randomness import random_state_permutation_indices
 from .....typevars import CandidateT
 
 
@@ -243,6 +244,7 @@ class Bank(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "bank does not contain enough entries for the requested arity"
             raise ValueError(msg)
 
-        indices = list(range(len(self.entries)))
-        random_state.shuffle(indices)
-        return tuple(self.entries[index].candidate for index in indices[:arity])
+        indices = random_state_permutation_indices(random_state, len(self.entries))
+        return tuple(
+            self.entries[index].candidate for index in indices[:arity]
+        )

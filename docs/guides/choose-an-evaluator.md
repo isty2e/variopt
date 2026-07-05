@@ -76,3 +76,38 @@ batch and later return ordered `CompletionGroup` slices. `EvaluationBatchSession
 is the lifecycle object returned by that submission. `ResumableAsyncEvaluator`
 adds evaluator-owned suspend/resume handles for exact-async sessions without
 changing the run method's execution model.
+
+`Study` requires native attempt-aware evaluator capability. Synchronous study
+execution calls `evaluate_attempts(...)`; async study execution uses
+attempt-batch session hooks such as `open_attempt_session(...)` and, for
+resumable exact-async sessions, `resume_attempt_session(...)`.
+Those attempts may carry request-free scalar or vector payloads such as
+`ObservationPayload` and `ObjectiveVectorPayload`, or already request-aligned
+record payloads. `Study` materializes successful payload attempts into feedback
+records before calling the run method, so scalar and vector evaluators do not
+need to build terminal records themselves. If a custom integration needs a
+payload family to feed a different feedback-record family, pass an explicit
+`EvaluationAttemptMaterializer` to `Study`.
+
+`AsyncJoblibEvaluator` provides the async hooks. In that path, ordinary
+objective `Exception`s become recorded `EvaluationFailure` attempts, while
+candidate validation, cancellation, and backend failures remain hard batch
+failures. Direct `Evaluator.evaluate(...)` remains available on the evaluator
+facade, but `Study` does not adapt outcome-only batches or sessions.
+Suspended async joblib batches are held in the same evaluator instance's
+in-memory runtime state; their resume handles are for live same-process control
+flow, not crash recovery.
+
+When `infrastructure_retry_limit` is positive, `AsyncJoblibEvaluator` retries
+only unfinished work after recognized backend boundary failures, such as
+joblib/loky or `concurrent.futures` process-pool breakage. User exceptions from
+the objective remain user-code failures even if their class names resemble
+backend exceptions.
+
+Suspending, resuming, cancelling, or retrying an async joblib batch is
+at-least-once at the backend boundary. `variopt` preserves completed request
+indices and removes evaluator-owned active state before retrying or cancelling,
+but joblib may not be able to stop already-dispatched work immediately. If the
+backend abort hook or fallback generator close fails, `AsyncJoblibEvaluator`
+emits a `RuntimeWarning`; treat side-effecting objectives as non-idempotent
+unless you provide your own external transaction boundary.

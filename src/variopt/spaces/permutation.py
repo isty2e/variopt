@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from typing_extensions import override
 
+from ..randomness import random_state_permutation_indices
 from .scalar import IntegerSpace
 from .structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
 from .types import SpaceCandidateValue
@@ -140,9 +141,7 @@ class PermutationSpace(
         tuple[int, ...]
             Canonical sampled permutation.
         """
-        values = list(range(self.size))
-        random_state.shuffle(values)
-        return tuple(values)
+        return random_state_permutation_indices(random_state, self.size)
 
     @override
     def leaf_paths(self) -> tuple[LeafPath, ...]:

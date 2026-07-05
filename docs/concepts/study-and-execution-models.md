@@ -57,7 +57,11 @@ So the practical default today is:
 `StudyExactAsyncStepSession` and `StudyExactAsyncStepResumeHandle` are the
 study-side lifecycle objects for one exact-async step. Most users do not need
 them directly; they exist for explicit polling, suspension, and resumption
-around evaluators that support the corresponding async lifecycle.
+around evaluators that support the corresponding async lifecycle. They are live
+evaluator/session handles, not durable checkpoint artifacts; do not serialize
+them for crash recovery. With `AsyncJoblibEvaluator`, suspended batches are
+stored in the same evaluator instance's in-memory runtime state, so a resume
+handle is only valid while that evaluator instance remains alive.
 
 ## Exact-Async Example
 
@@ -110,15 +114,31 @@ the same logical sequence it would under `sync_batch`.
 
 ## Outcome Metadata
 
-Each execution model transports `EvaluationOutcome` values, not just raw
-records. That matters for kernel diagnostics, evaluation-cost accounting, and
-candidate-refinement provenance.
+Execution boundaries transport `EvaluationAttemptBatch` values, not just raw
+records. Successful attempts carry `EvaluationSuccess` metadata for kernel
+diagnostics, evaluation-cost accounting, and candidate-refinement provenance.
+Recorded user-code failures remain separate `EvaluationFailure` attempts.
 
-`Study` preserves that metadata in terminal surfaces while keeping the semantic
-feedback record-based. Run methods normally consume `EvaluationRecord` values
-through `tell(...)`; methods that adapt from execution-side metadata can
-override `tell_outcomes(...)` without making refinement part of the evaluation
-protocol.
+`Study` keeps evaluator and kernel execution payload-based, then materializes
+successful payload attempts into request-aligned records at the run-method
+feedback boundary. In synchronous execution this happens after the kernel
+returns an aligned attempt batch. In exact async execution it happens when the
+step session finishes. In stale async execution it happens for each completed
+group immediately before incremental feedback. Async session and resume
+storage therefore keep payload attempts, not terminal feedback records.
+
+Run methods consume the materialized record attempts through
+`tell_attempts(...)`; the default implementation still delegates success-only
+batches to record-based `tell(...)`. `Study` orchestration does not call
+outcome-only hooks; custom run methods that need failure-aware proposal cleanup
+must implement `tell_attempts(...)`.
+
+Among the built-in population methods, `CSAOptimizer` consumes recorded failed
+attempts by draining the failed proposal ids from pending CSA lifecycle state
+without treating them as observations. GA and DE-family optimizers currently
+raise `UnsupportedEvaluationFailureError` for failure-bearing attempt batches
+because they require an explicit partial-generation policy before failures can
+be assimilated safely.
 
 For the refinement vocabulary, see
 [Candidate Refinement](candidate-refinement.md).

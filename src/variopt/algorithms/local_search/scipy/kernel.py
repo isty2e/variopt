@@ -1,7 +1,7 @@
 """SciPy-backed kernel implementation for continuous local search."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 from typing_extensions import override
@@ -10,22 +10,29 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ....artifacts import (
     CandidateRefinement,
-    Observation,
+    EvaluationAttemptBatch,
+    EvaluationRequest,
+    EvaluationSuccess,
+    KernelDiagnostics,
+    KernelStatus,
+    ObservationPayload,
     Proposal,
     ProposalEvaluationSpec,
 )
 from ....execution import EvaluationBudgetExhausted
 from ....kernel import (
     Kernel,
-    KernelDiagnostics,
-    KernelStatus,
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from ....outcomes import EvaluationOutcome
+from ....spaces import SearchSpace
 from ....spaces.projections import ContinuousStructuredSpaceCodec
 from ....spaces.types import SpaceCandidateValue
+from ..diagnostics import (
+    diagnostics_with_failed_attempts,
+    top_level_failure_from_failed_attempts,
+)
 from .contracts import ScipyMinimizeMethod
 from .results import ScipyMinimizeResult
 from .runner import run_scipy_minimize
@@ -89,6 +96,26 @@ def _as_local_search_context(
     return hint
 
 
+@dataclass(slots=True)
+class _ContinuousCodecProvider(Generic[BoundaryT, ContinuousCandidateT]):
+    space: SearchSpace[BoundaryT, ContinuousCandidateT]
+    _codec: ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT] | None = (
+        field(default=None, init=False, repr=False)
+    )
+
+    def codec(
+        self,
+    ) -> ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT]:
+        codec = self._codec
+        if codec is None:
+            codec = ContinuousStructuredSpaceCodec[
+                BoundaryT,
+                ContinuousCandidateT,
+            ].from_space(self.space)
+            self._codec = codec
+        return codec
+
+
 @dataclass(frozen=True, slots=True)
 class ScipyMinimizeKernel(
     FrozenGenericSlotsCompat,
@@ -96,14 +123,11 @@ class ScipyMinimizeKernel(
         ProposalBatchQuery[
             BoundaryT,
             ContinuousCandidateT,
-            Observation[ContinuousCandidateT],
+            ObservationPayload,
         ],
-        tuple[
-            EvaluationOutcome[
-                ContinuousCandidateT,
-                Observation[ContinuousCandidateT],
-            ],
-            ...,
+        EvaluationAttemptBatch[
+            ContinuousCandidateT,
+            ObservationPayload,
         ],
     ],
     Generic[BoundaryT, ContinuousCandidateT],
@@ -170,7 +194,7 @@ class ScipyMinimizeKernel(
     def _proposal_context(
         self,
         *,
-        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload],
         proposal_index: int,
     ) -> ProposalLocalSearchContext | None:
         """Return the canonical local-search context for one proposal index."""
@@ -179,48 +203,93 @@ class ScipyMinimizeKernel(
         hint = query.proposal_kernel_hints[proposal_index]
         return _as_local_search_context(hint)
 
+    def _attempt_batch_from_success_and_failures(
+        self,
+        *,
+        success: EvaluationSuccess[ContinuousCandidateT, ObservationPayload] | None,
+        failed_attempts: Sequence[
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
+        ],
+        failure_request: EvaluationRequest[ContinuousCandidateT] | None = None,
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
+        """Return one top-level attempt slot for a SciPy local-search episode."""
+        if success is not None:
+            fallback_diagnostics = None
+            if success.kernel_diagnostics is None and len(failed_attempts) > 0:
+                fallback_diagnostics = KernelDiagnostics(
+                    backend="scipy.optimize.minimize",
+                    method=self.method,
+                )
+            diagnostics = diagnostics_with_failed_attempts(
+                success.kernel_diagnostics,
+                failed_attempts,
+                fallback_diagnostics=fallback_diagnostics,
+            )
+            return EvaluationAttemptBatch(
+                attempts=(success.with_kernel_diagnostics(diagnostics),),
+            )
+
+        return top_level_failure_from_failed_attempts(
+            failed_attempts,
+            failure_request=failure_request,
+        )
+
     def _evaluate_original_proposal(
         self,
         *,
-        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload],
         proposal: Proposal[ContinuousCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
         runner: Callable[
-            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
-            tuple[EvaluationOutcome[ContinuousCandidateT], ...],
+            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
         ],
-    ) -> EvaluationOutcome[ContinuousCandidateT]:
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
         """Evaluate one original proposal once without local search."""
-        local_outcome = self._evaluate_proposal(
+        local_attempt = self._evaluate_proposal_attempt(
             query=query,
             proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
             runner=runner,
         )
-        return EvaluationOutcome(
-            record=local_outcome.record,
-            evaluation_count=local_outcome.evaluation_count,
+        local_success = local_attempt.single_success_or_none()
+        if local_success is None:
+            return local_attempt
+
+        success = EvaluationSuccess[
+            ContinuousCandidateT,
+            ObservationPayload,
+        ].from_scalar_observation(
+            observation=local_success.scalar_observation(),
+            request=local_success.request,
+            evaluation_count=local_success.evaluation_count,
             kernel_diagnostics=KernelDiagnostics(
                 backend="scipy.optimize.minimize",
                 method=self.method,
                 status=KernelStatus.STOPPED,
                 message="local search disabled by run-method context",
             ),
+            refinement=local_success.refinement,
+            candidate_equal=query.problem.space.candidates_equal,
+        )
+        return self._attempt_batch_from_success_and_failures(
+            success=success,
+            failed_attempts=(),
         )
 
-    def _evaluate_proposal(
+    def _evaluate_proposal_attempt(
         self,
         *,
-        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload],
         proposal: Proposal[ContinuousCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
         runner: Callable[
-            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
-            tuple[EvaluationOutcome[ContinuousCandidateT], ...],
+            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
         ],
-    ) -> EvaluationOutcome[ContinuousCandidateT]:
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
         """Evaluate one concrete proposal through the supplied evaluator runner."""
-        local_outcomes = runner(
+        local_attempts = runner(
             ProposalBatchQuery(
                 problem=query.problem,
                 proposals=(proposal,),
@@ -233,11 +302,11 @@ class ScipyMinimizeKernel(
                 evaluation_budget=query.evaluation_budget,
             ),
         )
-        if len(local_outcomes) != 1:
-            msg = "kernel runner must return exactly one outcome for one proposal"
+        if local_attempts.attempt_count != 1:
+            msg = "kernel runner must return exactly one attempt for one proposal"
             raise ValueError(msg)
 
-        return local_outcomes[0]
+        return local_attempts
 
     def _scipy_options(
         self,
@@ -253,19 +322,19 @@ class ScipyMinimizeKernel(
             return {}
         return {"maxiter": max_iterations}
 
-    def _evaluate_candidate(
+    def _evaluate_candidate_attempt(
         self,
         *,
-        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload],
         candidate: ContinuousCandidateT,
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
         runner: Callable[
-            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
-            tuple[EvaluationOutcome[ContinuousCandidateT], ...],
+            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
         ],
-    ) -> EvaluationOutcome[ContinuousCandidateT]:
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
         """Evaluate one candidate through the supplied evaluator runner."""
-        local_outcomes = runner(
+        local_attempts = runner(
             ProposalBatchQuery(
                 problem=query.problem,
                 proposals=(Proposal(candidate=candidate),),
@@ -278,15 +347,15 @@ class ScipyMinimizeKernel(
                 evaluation_budget=query.evaluation_budget,
             ),
         )
-        if len(local_outcomes) != 1:
-            msg = "kernel runner must return exactly one outcome for one proposal"
+        if local_attempts.attempt_count != 1:
+            msg = "kernel runner must return exactly one attempt for one proposal"
             raise ValueError(msg)
-        return local_outcomes[0]
+        return local_attempts
 
     def _optimize_proposal(
         self,
         *,
-        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload],
         proposal_index: int,
         proposal: Proposal[ContinuousCandidateT],
         codec_provider: Callable[
@@ -294,11 +363,11 @@ class ScipyMinimizeKernel(
             ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT],
         ],
         runner: Callable[
-            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
-            tuple[EvaluationOutcome[ContinuousCandidateT], ...],
+            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
         ],
         reserved_count: int,
-    ) -> EvaluationOutcome[ContinuousCandidateT]:
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
         """Run one local descent episode for one original proposal."""
         context = self._proposal_context(query=query, proposal_index=proposal_index)
         proposal_evaluation_spec = (
@@ -314,71 +383,151 @@ class ScipyMinimizeKernel(
                 runner=runner,
             )
 
+        failed_attempts: list[
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
+        ] = []
         codec = codec_provider()
         initial_coordinates = codec.coordinates_from_candidate(proposal.candidate)
-        evaluation_count = 0
-        evaluated_outcomes_by_coordinates: dict[
+        evaluated_attempts_by_coordinates: dict[
             tuple[float, ...],
-            EvaluationOutcome[ContinuousCandidateT],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
         ] = {}
+        evaluated_successes_by_coordinates: dict[
+            tuple[float, ...],
+            EvaluationSuccess[ContinuousCandidateT, ObservationPayload],
+        ] = {}
+
+        def record_attempt_success(
+            attempt: EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
+        ) -> EvaluationSuccess[ContinuousCandidateT, ObservationPayload] | None:
+            success = attempt.single_success_or_none()
+            if success is None:
+                failed_attempts.append(attempt)
+            return success
+
+        def successful_evaluation_count() -> int:
+            return sum(
+                success.evaluation_count
+                for success in evaluated_successes_by_coordinates.values()
+            )
+
+        def failed_evaluation_count() -> int:
+            return sum(attempt.evaluation_count for attempt in failed_attempts)
+
+        def total_evaluation_count() -> int:
+            return successful_evaluation_count() + failed_evaluation_count()
 
         def can_evaluate_local_candidate() -> bool:
             budget = query.evaluation_budget
             return budget is None or budget.can_consume(1 + reserved_count)
 
-        def budget_exhausted_outcome(
-            optimized_outcome: EvaluationOutcome[ContinuousCandidateT],
-        ) -> EvaluationOutcome[ContinuousCandidateT]:
-            optimized_candidate = optimized_outcome.record.candidate
+        def result_request(
+            candidate: ContinuousCandidateT,
+        ) -> EvaluationRequest[ContinuousCandidateT]:
+            return EvaluationRequest(
+                proposal=Proposal(
+                    candidate=candidate,
+                    proposal_id=proposal.proposal_id,
+                ),
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+
+        original_request = EvaluationRequest(
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+        )
+
+        def success_from_success(
+            optimized_success: EvaluationSuccess[
+                ContinuousCandidateT,
+                ObservationPayload,
+            ],
+            *,
+            status: KernelStatus,
+            message: str,
+        ) -> EvaluationSuccess[ContinuousCandidateT, ObservationPayload]:
+            observation = optimized_success.scalar_observation()
+            optimized_candidate = optimized_success.candidate
             refinement = _candidate_refinement_from_codec(
                 codec=codec,
                 source_candidate=proposal.candidate,
                 refined_candidate=optimized_candidate,
             )
-            return EvaluationOutcome(
-                record=Observation(
-                    proposal=proposal,
-                    proposal_evaluation_spec=proposal_evaluation_spec,
-                    candidate=optimized_candidate,
-                    value=optimized_outcome.record.value,
-                    score=optimized_outcome.record.score,
-                    elapsed_seconds=optimized_outcome.record.elapsed_seconds,
-                ),
-                evaluation_count=evaluation_count,
+            return EvaluationSuccess[
+                ContinuousCandidateT,
+                ObservationPayload,
+            ].from_scalar_observation(
+                observation=observation,
+                request=result_request(optimized_candidate),
+                evaluation_count=total_evaluation_count(),
                 kernel_diagnostics=KernelDiagnostics(
                     backend="scipy.optimize.minimize",
                     method=self.method,
-                    status=KernelStatus.STOPPED,
-                    message="evaluation budget exhausted before local convergence",
+                    status=status,
+                    message=message,
                 ),
                 refinement=refinement,
                 candidate_equal=query.problem.space.candidates_equal,
             )
 
+        def batch_from_success_and_failures(
+            optimized_success: EvaluationSuccess[
+                ContinuousCandidateT,
+                ObservationPayload,
+            ],
+            *,
+            status: KernelStatus,
+            message: str,
+        ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
+            return self._attempt_batch_from_success_and_failures(
+                success=success_from_success(
+                    optimized_success,
+                    status=status,
+                    message=message,
+                ),
+                failed_attempts=failed_attempts,
+            )
+
         def objective_in_coordinate_space(
             coordinates: Sequence[float],
         ) -> float:
-            nonlocal evaluation_count
+            coordinate_key = tuple(float(coordinate) for coordinate in coordinates)
+            cached_attempt = evaluated_attempts_by_coordinates.get(coordinate_key)
+            if cached_attempt is not None:
+                cached_success = cached_attempt.single_success_or_none()
+                if cached_success is None:
+                    return float("inf")
+                return cached_success.payload.score
+
             if not can_evaluate_local_candidate():
                 msg = "evaluation budget exhausted"
                 raise EvaluationBudgetExhausted(msg)
-            coordinate_key = tuple(float(coordinate) for coordinate in coordinates)
-            local_candidate = codec.candidate_from_coordinates(
-                proposal.candidate,
-                coordinate_key,
-            )
-            local_outcome = self._evaluate_candidate(
-                query=query,
-                candidate=local_candidate,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                runner=runner,
-            )
-            evaluation_count += local_outcome.evaluation_count
-            # Local search assumes deterministic evaluations; if SciPy probes
-            # the same coordinates more than once, keep the latest outcome seen
-            # by the minimized function.
-            evaluated_outcomes_by_coordinates[coordinate_key] = local_outcome
-            return local_outcome.record.score
+
+            if coordinate_key == initial_coordinates:
+                local_attempt = self._evaluate_proposal_attempt(
+                    query=query,
+                    proposal=proposal,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    runner=runner,
+                )
+            else:
+                local_candidate = codec.candidate_from_coordinates(
+                    proposal.candidate,
+                    coordinate_key,
+                )
+                local_attempt = self._evaluate_candidate_attempt(
+                    query=query,
+                    candidate=local_candidate,
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                    runner=runner,
+                )
+            evaluated_attempts_by_coordinates[coordinate_key] = local_attempt
+            local_success = record_attempt_success(local_attempt)
+            if local_success is None:
+                return float("inf")
+
+            evaluated_successes_by_coordinates[coordinate_key] = local_success
+            return local_success.payload.score
 
         try:
             scipy_result = ScipyMinimizeResult.from_optimize_result(
@@ -392,37 +541,64 @@ class ScipyMinimizeKernel(
                 )
             )
         except EvaluationBudgetExhausted:
-            if len(evaluated_outcomes_by_coordinates) == 0:
+            if len(evaluated_successes_by_coordinates) == 0:
+                if len(failed_attempts) > 0:
+                    return self._attempt_batch_from_success_and_failures(
+                        success=None,
+                        failed_attempts=failed_attempts,
+                        failure_request=original_request,
+                    )
                 raise
-            optimized_outcome = min(
-                evaluated_outcomes_by_coordinates.values(),
-                key=lambda outcome: outcome.record.score,
+            optimized_success = min(
+                evaluated_successes_by_coordinates.values(),
+                key=lambda success: success.payload.score,
             )
-            return budget_exhausted_outcome(optimized_outcome)
+            return batch_from_success_and_failures(
+                optimized_success,
+                status=KernelStatus.STOPPED,
+                message="evaluation budget exhausted before local convergence",
+            )
         if not scipy_result.has_finite_solution:
-            original_outcome = evaluated_outcomes_by_coordinates.get(
+            original_attempt = evaluated_attempts_by_coordinates.get(
                 initial_coordinates,
             )
-            if original_outcome is None:
+            original_success = (
+                None if original_attempt is None else original_attempt.single_success_or_none()
+            )
+            if original_success is None and original_attempt is None:
                 if (
                     query.evaluation_budget is not None
                     and not can_evaluate_local_candidate()
-                    and len(evaluated_outcomes_by_coordinates) > 0
+                    and len(evaluated_successes_by_coordinates) > 0
                 ):
-                    original_outcome = min(
-                        evaluated_outcomes_by_coordinates.values(),
-                        key=lambda outcome: outcome.record.score,
+                    original_success = min(
+                        evaluated_successes_by_coordinates.values(),
+                        key=lambda success: success.payload.score,
                     )
                 else:
-                    original_outcome = self._evaluate_proposal(
+                    original_attempt = self._evaluate_proposal_attempt(
                         query=query,
                         proposal=proposal,
                         proposal_evaluation_spec=proposal_evaluation_spec,
                         runner=runner,
                     )
-                    evaluation_count += original_outcome.evaluation_count
+                    evaluated_attempts_by_coordinates[
+                        initial_coordinates
+                    ] = original_attempt
+                    original_success = record_attempt_success(original_attempt)
+                    if original_success is not None:
+                        evaluated_successes_by_coordinates[
+                            initial_coordinates
+                        ] = original_success
 
-            fallback_candidate = original_outcome.record.candidate
+            if original_success is None:
+                return self._attempt_batch_from_success_and_failures(
+                    success=None,
+                    failed_attempts=failed_attempts,
+                    failure_request=original_request,
+                )
+            fallback_observation = original_success.scalar_observation()
+            fallback_candidate = original_success.candidate
             refinement = None
             if not query.problem.space.candidates_equal(
                 proposal.candidate,
@@ -433,119 +609,158 @@ class ScipyMinimizeKernel(
                     source_candidate=proposal.candidate,
                     refined_candidate=fallback_candidate,
                 )
-            return EvaluationOutcome(
-                record=Observation(
-                    proposal=proposal,
-                    proposal_evaluation_spec=proposal_evaluation_spec,
-                    candidate=fallback_candidate,
-                    value=original_outcome.record.value,
-                    score=original_outcome.record.score,
-                    elapsed_seconds=original_outcome.record.elapsed_seconds,
-                ),
-                evaluation_count=evaluation_count,
+            success = EvaluationSuccess[
+                ContinuousCandidateT,
+                ObservationPayload,
+            ].from_scalar_observation(
+                observation=fallback_observation,
+                request=result_request(fallback_candidate),
+                evaluation_count=total_evaluation_count(),
                 kernel_diagnostics=scipy_result.diagnostics(method=self.method),
                 refinement=refinement,
                 candidate_equal=query.problem.space.candidates_equal,
             )
+            return self._attempt_batch_from_success_and_failures(
+                success=success,
+                failed_attempts=failed_attempts,
+            )
 
         optimized_coordinates = scipy_result.coordinates
-        optimized_candidate = codec.candidate_from_coordinates(
-            proposal.candidate,
+        cached_optimized_attempt = evaluated_attempts_by_coordinates.get(
             optimized_coordinates,
         )
-        cached_optimized_outcome = evaluated_outcomes_by_coordinates.get(
-            optimized_coordinates,
+        cached_optimized_success = (
+            None
+            if cached_optimized_attempt is None
+            else cached_optimized_attempt.single_success_or_none()
         )
-        if cached_optimized_outcome is None:
+        if cached_optimized_success is None:
+            if cached_optimized_attempt is not None:
+                if len(evaluated_successes_by_coordinates) == 0:
+                    return self._attempt_batch_from_success_and_failures(
+                        success=None,
+                        failed_attempts=failed_attempts,
+                        failure_request=original_request,
+                    )
+                best_seen_success = min(
+                    evaluated_successes_by_coordinates.values(),
+                    key=lambda success: success.payload.score,
+                )
+                return batch_from_success_and_failures(
+                    best_seen_success,
+                    status=KernelStatus.FAILED,
+                    message="optimized candidate evaluation failed",
+                )
+
             if (
                 query.evaluation_budget is not None
                 and not can_evaluate_local_candidate()
-                and len(evaluated_outcomes_by_coordinates) > 0
+                and len(evaluated_successes_by_coordinates) > 0
             ):
-                best_seen_outcome = min(
-                    evaluated_outcomes_by_coordinates.values(),
-                    key=lambda outcome: outcome.record.score,
+                best_seen_success = min(
+                    evaluated_successes_by_coordinates.values(),
+                    key=lambda success: success.payload.score,
                 )
-                return budget_exhausted_outcome(best_seen_outcome)
+                return batch_from_success_and_failures(
+                    best_seen_success,
+                    status=KernelStatus.STOPPED,
+                    message="evaluation budget exhausted before local convergence",
+                )
 
-            cached_optimized_outcome = self._evaluate_candidate(
+            optimized_candidate = codec.candidate_from_coordinates(
+                proposal.candidate,
+                optimized_coordinates,
+            )
+            optimized_attempt = self._evaluate_candidate_attempt(
                 query=query,
                 candidate=optimized_candidate,
                 proposal_evaluation_spec=proposal_evaluation_spec,
                 runner=runner,
             )
-            evaluation_count += cached_optimized_outcome.evaluation_count
+            evaluated_attempts_by_coordinates[optimized_coordinates] = optimized_attempt
+            cached_optimized_success = record_attempt_success(optimized_attempt)
+            if cached_optimized_success is None:
+                if len(evaluated_successes_by_coordinates) == 0:
+                    return self._attempt_batch_from_success_and_failures(
+                        success=None,
+                        failed_attempts=failed_attempts,
+                        failure_request=original_request,
+                    )
+                best_seen_success = min(
+                    evaluated_successes_by_coordinates.values(),
+                    key=lambda success: success.payload.score,
+                )
+                return batch_from_success_and_failures(
+                    best_seen_success,
+                    status=KernelStatus.FAILED,
+                    message="optimized candidate evaluation failed",
+                )
+            evaluated_successes_by_coordinates[
+                optimized_coordinates
+            ] = cached_optimized_success
+        optimized_candidate = cached_optimized_success.candidate
         refinement = _candidate_refinement_from_codec(
             codec=codec,
             source_candidate=proposal.candidate,
             refined_candidate=optimized_candidate,
         )
-        return EvaluationOutcome(
-            record=Observation(
-                proposal=proposal,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                candidate=optimized_candidate,
-                value=cached_optimized_outcome.record.value,
-                score=cached_optimized_outcome.record.score,
-                elapsed_seconds=cached_optimized_outcome.record.elapsed_seconds,
-            ),
-            evaluation_count=evaluation_count,
+        success = EvaluationSuccess[
+            ContinuousCandidateT,
+            ObservationPayload,
+        ].from_scalar_observation(
+            observation=cached_optimized_success.scalar_observation(),
+            request=result_request(optimized_candidate),
+            evaluation_count=total_evaluation_count(),
             kernel_diagnostics=scipy_result.diagnostics(method=self.method),
             refinement=refinement,
             candidate_equal=query.problem.space.candidates_equal,
+        )
+        return self._attempt_batch_from_success_and_failures(
+            success=success,
+            failed_attempts=failed_attempts,
         )
 
     @override
     def run(
         self,
-        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT],
+        query: ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT]],
-            tuple[EvaluationOutcome[ContinuousCandidateT], ...],
+            [ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]],
+            EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload],
         ],
-    ) -> tuple[EvaluationOutcome[ContinuousCandidateT], ...]:
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
         """Run proposal-local SciPy minimization for each proposal in a batch.
 
         Parameters
         ----------
-        query : ProposalBatchQuery[BoundaryT, ContinuousCandidateT]
+        query : ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]
             Proposal batch and evaluation context to optimize.
-        runner : Callable[[ProposalBatchQuery[BoundaryT, ContinuousCandidateT]], tuple[EvaluationOutcome[ContinuousCandidateT], ...]]
+        runner : Callable[[ProposalBatchQuery[BoundaryT, ContinuousCandidateT, ObservationPayload]], EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]]
             Evaluator runner used to score proposals during local search.
 
         Returns
         -------
-        tuple[EvaluationOutcome[ContinuousCandidateT], ...]
-            Locally improved outcomes aligned to ``query.proposals``.
+        EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
+            Locally improved top-level attempts with inner failures summarized in diagnostics.
         """
-        prepared_codec: (
-            ContinuousStructuredSpaceCodec[
-                BoundaryT,
-                ContinuousCandidateT,
-            ]
-            | None
-        ) = None
-
-        def codec_provider() -> ContinuousStructuredSpaceCodec[
+        codec_provider = _ContinuousCodecProvider[
             BoundaryT,
             ContinuousCandidateT,
-        ]:
-            nonlocal prepared_codec
-            if prepared_codec is None:
-                prepared_codec = ContinuousStructuredSpaceCodec[
-                    BoundaryT,
-                    ContinuousCandidateT,
-                ].from_space(query.problem.space)
-            return prepared_codec
+        ](space=query.problem.space)
 
-        return tuple(
-            self._optimize_proposal(
-                query=query,
-                proposal_index=proposal_index,
-                proposal=proposal,
-                codec_provider=codec_provider,
-                runner=runner,
-                reserved_count=len(query.proposals) - proposal_index - 1,
+        return EvaluationAttemptBatch[
+            ContinuousCandidateT,
+            ObservationPayload,
+        ].concatenate(
+            tuple(
+                self._optimize_proposal(
+                    query=query,
+                    proposal_index=proposal_index,
+                    proposal=proposal,
+                    codec_provider=codec_provider.codec,
+                    runner=runner,
+                    reserved_count=len(query.proposals) - proposal_index - 1,
+                )
+                for proposal_index, proposal in enumerate(query.proposals)
             )
-            for proposal_index, proposal in enumerate(query.proposals)
         )

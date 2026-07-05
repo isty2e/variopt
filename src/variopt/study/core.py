@@ -1,7 +1,9 @@
 """Thin public facade for optimization runs."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Generic
+from typing import Generic, overload
 
 from typing_extensions import TypeVar
 
@@ -10,8 +12,19 @@ from variopt.generic_runtime import (
     install_frozen_generic_slots_pickle,
 )
 
-from ..artifacts import EvaluationRequest, Proposal, RunReport, RunResult
-from ..evaluators.base import Evaluator
+from ..artifacts import (
+    DefaultEvaluationAttemptMaterializer,
+    EvaluationAttemptBatch,
+    EvaluationAttemptMaterializer,
+    ObjectiveVectorPayload,
+    ObjectiveVectorRecord,
+    Observation,
+    ObservationPayload,
+    Proposal,
+    RunReport,
+    RunResult,
+)
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,
@@ -19,10 +32,14 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT, RunMethodStateT
-from .common import StudyEvaluationRecordT
+from .common import (
+    StudyEvaluationPayload,
+    StudyEvaluator,
+    StudyPayloadT,
+    StudyRecordT,
+)
 from .exact_async.artifacts import (
     StudyExactAsyncStepResumeHandle,
 )
@@ -40,26 +57,39 @@ from .execution import step as step_study
 from .stale_async import run_stale_async
 
 BoundaryT = TypeVar("BoundaryT")
+ConstructorBoundaryT = TypeVar("ConstructorBoundaryT")
+ConstructorCandidateT = TypeVar("ConstructorCandidateT")
+ConstructorRunMethodStateT = TypeVar("ConstructorRunMethodStateT")
+ConstructorPayloadT = TypeVar(
+    "ConstructorPayloadT",
+    bound=StudyEvaluationPayload,
+)
+ConstructorRecordT = TypeVar(
+    "ConstructorRecordT",
+    bound=RequestAlignedEvaluationRecord[object],
+)
 
 
 @dataclass(frozen=True, slots=True, init=False)
 class Study(
     FrozenGenericSlotsCompat,
-    Generic[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT],
+    Generic[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT],
 ):
     """User-facing facade for running an optimization study.
 
     Parameters
     ----------
-    problem : Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    problem : Problem[BoundaryT, CandidateT, StudyPayloadT]
         Problem that defines the search space and evaluation semantics.
-    run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyEvaluationRecordT]
+    run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyRecordT]
         Stateful optimizer that owns cross-step search memory.
-    evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
-        Execution backend that turns requests into evaluation outcomes.
-    kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]] | None, optional
+    evaluator : StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+        Execution backend that exposes native attempt-batch execution resources.
+    kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT], EvaluationAttemptBatch[CandidateT, StudyPayloadT]] | None, optional
         Optional within-step refinement kernel. Defaults to
         :class:`~variopt.kernel.DirectKernel`.
+    attempt_materializer : EvaluationAttemptMaterializer[CandidateT, StudyPayloadT, StudyRecordT] | None, optional
+        Payload-to-record boundary used before run-method feedback.
 
     Notes
     -----
@@ -68,54 +98,297 @@ class Study(
     object, then exposes sync, exact-async, and stale-async execution methods.
     """
 
-    problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+    problem: Problem[BoundaryT, CandidateT, StudyPayloadT]
     run_method: RunMethod[
         RunMethodStateT,
         Proposal[CandidateT],
-        StudyEvaluationRecordT,
+        StudyRecordT,
     ]
-    evaluator: Evaluator[
-        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
-    ]
+    evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
     kernel: Kernel[
-        ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+        ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
+        EvaluationAttemptBatch[CandidateT, StudyPayloadT],
+    ]
+    attempt_materializer: EvaluationAttemptMaterializer[
+        CandidateT,
+        StudyPayloadT,
+        StudyRecordT,
     ]
 
+    @overload
     def __init__(
-        self,
-        *,
-        problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-        run_method: RunMethod[
-            RunMethodStateT,
-            Proposal[CandidateT],
-            StudyEvaluationRecordT,
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ObservationPayload,
+            Observation[ConstructorCandidateT],
         ],
-        evaluator: Evaluator[
-            Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
-            EvaluationRequest[CandidateT],
-            EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        *,
+        problem: Problem[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObservationPayload,
+        ],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            Observation[ConstructorCandidateT],
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObservationPayload,
         ],
         kernel: Kernel[
-            ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
-            tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObservationPayload],
         ]
         | None = None,
+        attempt_materializer: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ObjectiveVectorPayload,
+            ObjectiveVectorRecord[ConstructorCandidateT],
+        ],
+        *,
+        problem: Problem[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObjectiveVectorPayload,
+        ],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            ObjectiveVectorRecord[ConstructorCandidateT],
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ObjectiveVectorPayload,
+        ],
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObjectiveVectorPayload],
+        ]
+        | None = None,
+        attempt_materializer: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ConstructorRecordT,
+            ConstructorRecordT,
+        ],
+        *,
+        problem: Problem[ConstructorBoundaryT, ConstructorCandidateT, ConstructorRecordT],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            ConstructorRecordT,
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRecordT,
+        ],
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorRecordT],
+        ]
+        | None = None,
+        attempt_materializer: None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ConstructorPayloadT,
+            ConstructorRecordT,
+        ],
+        *,
+        problem: Problem[ConstructorBoundaryT, ConstructorCandidateT, ConstructorPayloadT],
+        run_method: RunMethod[
+            ConstructorRunMethodStateT,
+            Proposal[ConstructorCandidateT],
+            ConstructorRecordT,
+        ],
+        evaluator: StudyEvaluator[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorPayloadT,
+        ],
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorPayloadT],
+        ]
+        | None = None,
+        attempt_materializer: EvaluationAttemptMaterializer[
+            ConstructorCandidateT,
+            ConstructorPayloadT,
+            ConstructorRecordT,
+        ],
+    ) -> None: ...
+
+    def __init__(
+        self: Study[
+            ConstructorBoundaryT,
+            ConstructorCandidateT,
+            ConstructorRunMethodStateT,
+            ConstructorPayloadT,
+            ConstructorRecordT,
+        ],
+        *,
+        problem: (
+            Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ]
+            | Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ]
+            | Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ]
+            | Problem[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ]
+        ),
+        run_method: (
+            RunMethod[
+                ConstructorRunMethodStateT,
+                Proposal[ConstructorCandidateT],
+                Observation[ConstructorCandidateT],
+            ]
+            | RunMethod[
+                ConstructorRunMethodStateT,
+                Proposal[ConstructorCandidateT],
+                ObjectiveVectorRecord[ConstructorCandidateT],
+            ]
+            | RunMethod[
+                ConstructorRunMethodStateT,
+                Proposal[ConstructorCandidateT],
+                ConstructorRecordT,
+            ]
+        ),
+        evaluator: (
+            StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ]
+            | StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ]
+            | StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ]
+            | StudyEvaluator[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ]
+        ),
+        kernel: Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObservationPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObservationPayload],
+        ]
+        | Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ObjectiveVectorPayload,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ObjectiveVectorPayload],
+        ]
+        | Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorRecordT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorRecordT],
+        ]
+        | Kernel[
+            ProposalBatchQuery[
+                ConstructorBoundaryT,
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+            ],
+            EvaluationAttemptBatch[ConstructorCandidateT, ConstructorPayloadT],
+        ]
+        | None = None,
+        attempt_materializer: (
+            EvaluationAttemptMaterializer[
+                ConstructorCandidateT,
+                ConstructorPayloadT,
+                ConstructorRecordT,
+            ]
+            | None
+        ) = None,
     ) -> None:
         """Create a study over one problem and execution stack.
 
         Parameters
         ----------
-        problem : Problem[BoundaryT, CandidateT, StudyEvaluationRecordT]
+        problem : Problem[BoundaryT, CandidateT, StudyPayloadT]
             Problem that defines candidate validity and evaluation semantics.
-        run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyEvaluationRecordT]
+        run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyRecordT]
             Stateful optimizer that emits proposals and assimilates records.
-        evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
-            Execution backend that evaluates requests.
-        kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]] | None, optional
+        evaluator : StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+            Execution backend that evaluates requests through native attempt
+            batches or attempt sessions.
+        kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT], EvaluationAttemptBatch[CandidateT, StudyPayloadT]] | None, optional
             Optional within-step refinement kernel.
+        attempt_materializer : EvaluationAttemptMaterializer[CandidateT, StudyPayloadT, StudyRecordT] | None, optional
+            Materializer used to project evaluator payload attempts into
+            run-method feedback records. Defaults to the built-in scalar,
+            vector, and same-record pass-through materializer. Custom
+            payload-to-record mappings must provide an explicit materializer.
         """
         object.__setattr__(self, "problem", problem)
         object.__setattr__(self, "run_method", run_method)
@@ -124,6 +397,15 @@ class Study(
             self,
             "kernel",
             DirectKernel() if kernel is None else kernel,
+        )
+        object.__setattr__(
+            self,
+            "attempt_materializer",
+            (
+                DefaultEvaluationAttemptMaterializer()
+                if attempt_materializer is None
+                else attempt_materializer
+            ),
         )
 
     def open_exact_async_step_session(
@@ -134,7 +416,8 @@ class Study(
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ]:
         """Open a resumable exact-async step session.
 
@@ -147,7 +430,7 @@ class Study(
 
         Returns
         -------
-        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
             Open session that can be polled, suspended, resumed, and eventually
             committed back into the run method.
         """
@@ -162,24 +445,25 @@ class Study(
         handle: StudyExactAsyncStepResumeHandle[
             CandidateT,
             RunMethodStateT,
-            StudyEvaluationRecordT,
+            StudyPayloadT,
         ],
     ) -> StudyExactAsyncStepSession[
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ]:
         """Resume a suspended exact-async step session.
 
         Parameters
         ----------
-        handle : StudyExactAsyncStepResumeHandle[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        handle : StudyExactAsyncStepResumeHandle[CandidateT, RunMethodStateT, StudyPayloadT]
             Resume handle produced when an exact-async session was suspended.
 
         Returns
         -------
-        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+        StudyExactAsyncStepSession[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
             Resumed session ready for further polling or completion.
         """
         return resume_exact_async_step_session_for_study(self, handle)
@@ -200,7 +484,7 @@ class Study(
         batch_size: int = 1,
         *,
         execution_model: ExecutionModel = SYNC_BATCH_EXECUTION_MODEL,
-    ) -> tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]:
+    ) -> tuple[tuple[StudyRecordT, ...], RunMethodStateT]:
         """Run one ask/evaluate/tell step.
 
         Parameters
@@ -215,7 +499,7 @@ class Study(
 
         Returns
         -------
-        tuple[tuple[StudyEvaluationRecordT, ...], RunMethodStateT]
+        tuple[tuple[StudyRecordT, ...], RunMethodStateT]
             Step records followed by the next run-method state.
         """
         return step_study(
@@ -234,21 +518,26 @@ class Study(
         count_evaluation_cost: bool = True,
         initial_state: RunMethodStateT | None = None,
         stop_at_checkpoint_boundary: bool = False,
-    ) -> tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]:
+    ) -> tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]:
         """Run the study until the evaluation budget is exhausted.
 
         Parameters
         ----------
         max_evaluations : int
-            Evaluation budget for the run.
+            Evaluation budget for the run. With the default
+            ``count_evaluation_cost=True``, this budget is charged against
+            reported logical ``evaluation_count`` values, including inner
+            kernel work and recorded evaluation failures. With
+            ``count_evaluation_cost=False``, it is charged against returned
+            attempt slots instead.
         batch_size : int, default=1
             Number of proposals to ask for per logical step.
         execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
             Execution-model contract that controls completion and assimilation
             order.
         count_evaluation_cost : bool, default=True
-            Whether to consume budget using each outcome's logical evaluation
-            cost instead of simple record count.
+            Whether to consume budget using reported logical evaluation cost
+            instead of returned attempt-slot count.
         initial_state : RunMethodStateT | None, optional
             Optional run-method state to start from.
         stop_at_checkpoint_boundary : bool, default=False
@@ -256,7 +545,7 @@ class Study(
 
         Returns
         -------
-        tuple[RunReport[CandidateT, StudyEvaluationRecordT], RunMethodStateT]
+        tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]
             Terminal run report followed by the final run-method state.
         """
         if execution_model == STALE_ASYNC_EXECUTION_MODEL:
@@ -294,15 +583,20 @@ class Study(
         Parameters
         ----------
         max_evaluations : int
-            Evaluation budget for the run.
+            Evaluation budget for the run. With the default
+            ``count_evaluation_cost=True``, this budget is charged against
+            reported logical ``evaluation_count`` values, including inner
+            kernel work and recorded evaluation failures. With
+            ``count_evaluation_cost=False``, it is charged against returned
+            attempt slots instead.
         batch_size : int, default=1
             Number of proposals to ask for per logical step.
         execution_model : ExecutionModel, default=SYNC_BATCH_EXECUTION_MODEL
             Execution-model contract that controls completion and assimilation
             order.
         count_evaluation_cost : bool, default=True
-            Whether to consume budget using each outcome's logical evaluation
-            cost instead of simple record count.
+            Whether to consume budget using reported logical evaluation cost
+            instead of returned attempt-slot count.
         initial_state : RunMethodStateT | None, optional
             Optional run-method state to start from.
         stop_at_checkpoint_boundary : bool, default=False

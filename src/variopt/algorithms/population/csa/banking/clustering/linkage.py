@@ -1,8 +1,10 @@
 """Cluster-linkage helpers for CSA clustering state."""
 
 from collections.abc import Sequence
+from typing import cast
 
 import numpy as np
+import numpy.typing as npt
 from scipy.cluster import hierarchy  # pyright: ignore[reportMissingTypeStubs]
 
 from ......distance import require_valid_distance
@@ -43,19 +45,24 @@ def cluster_labels_for_entries(
         condensed_distances(entries=entries, diversity_metric=diversity_metric),
         dtype=np.float64,
     )
-    linkage_matrix = np.asarray(
+    linkage_output = cast(
+        npt.NDArray[np.float64],
         hierarchy.linkage(condensed_distance_values),  # pyright: ignore[reportUnknownMemberType]
-        dtype=np.float64,
     )
-    cluster_labels = np.asarray(
+    linkage_matrix = np.asarray(linkage_output, dtype=np.float64)
+    cluster_label_array = cast(
+        npt.NDArray[np.int_],
         hierarchy.fcluster(  # pyright: ignore[reportUnknownMemberType]
             linkage_matrix,
             cluster_distance,
             criterion="distance",
         ),
-        dtype=np.int64,
     )
-    return tuple(int(label) for label in cluster_labels)  # pyright: ignore[reportAny]
+    cluster_label_list = cast(
+        list[int],
+        np.asarray(cluster_label_array, dtype=np.int_).tolist(),
+    )
+    return tuple(cluster_label_list)
 
 
 def condensed_distances(

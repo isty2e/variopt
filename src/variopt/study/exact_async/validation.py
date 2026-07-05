@@ -5,7 +5,7 @@ from typing_extensions import TypeVar
 from ...execution import EXACT_ASYNC_EXECUTION_MODEL
 from ...kernel import DirectKernel
 from ...typevars import CandidateT, RunMethodStateT
-from ..common import StudyEvaluationRecordT
+from ..common import StudyPayloadT, StudyRecordT
 from ..validation import (
     require_resumable_async_evaluator,
     validate_execution_request,
@@ -20,7 +20,8 @@ def validate_resumable_exact_async_request(
         BoundaryT,
         CandidateT,
         RunMethodStateT,
-        StudyEvaluationRecordT,
+        StudyPayloadT,
+        StudyRecordT,
     ],
     *,
     state: RunMethodStateT,
@@ -30,7 +31,7 @@ def validate_resumable_exact_async_request(
 
     Parameters
     ----------
-    study : StudyExactAsyncOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    study : StudyExactAsyncOwner[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
         Study-like owner providing the exact-async execution boundary.
     state : RunMethodStateT
         Current run-method state.
@@ -50,7 +51,7 @@ def validate_resumable_exact_async_request(
         batch_size=batch_size,
         execution_model=EXACT_ASYNC_EXECUTION_MODEL,
     )
-    _ = require_resumable_async_evaluator(study)
+    require_resumable_async_evaluator(study)
 
     if not isinstance(study.kernel, DirectKernel):
         msg = (

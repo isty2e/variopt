@@ -3,7 +3,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum
 from typing import Generic
 
 from typing_extensions import TypeVar, override
@@ -14,7 +13,6 @@ from .artifacts import (
     Observation,
     Proposal,
     ProposalEvaluationSpec,
-    RequestAlignedEvaluationRecord,
 )
 from .execution import EvaluationBudget, ExecutionResources
 from .problem import Problem
@@ -23,71 +21,12 @@ from .spaces import LeafPath
 
 BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT")
-QueryEvaluationRecordT = TypeVar(
-    "QueryEvaluationRecordT",
-    bound=RequestAlignedEvaluationRecord,
+QueryEvaluationPayloadT = TypeVar(
+    "QueryEvaluationPayloadT",
     default=Observation[CandidateT],
 )
 KernelQueryT = TypeVar("KernelQueryT")
 KernelReportT = TypeVar("KernelReportT")
-
-
-class KernelStatus(Enum):
-    """Execution status for one kernel episode.
-
-    Notes
-    -----
-    These statuses describe the outcome of a single kernel invocation, not the
-    enclosing run method or study as a whole.
-    """
-
-    CONVERGED = "converged"
-    STOPPED = "stopped"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True, slots=True)
-class KernelDiagnostics:
-    """Execution-facing diagnostics for one kernel episode.
-
-    Parameters
-    ----------
-    backend : str
-        Name of the backend or implementation family that produced the
-        diagnostics.
-    method : str | None, optional
-        Optional backend-specific method name.
-    status : KernelStatus | None, optional
-        Optional terminal status reported by the kernel backend.
-    message : str | None, optional
-        Optional human-readable detail for logs and traces.
-    """
-
-    backend: str
-    method: str | None = None
-    status: KernelStatus | None = None
-    message: str | None = None
-
-    def __post_init__(self) -> None:
-        """Validate diagnostic metadata.
-
-        Raises
-        ------
-        ValueError
-            If ``backend`` is empty, or if optional string fields are provided
-            as empty strings.
-        """
-        if self.backend == "":
-            msg = "backend must not be empty"
-            raise ValueError(msg)
-
-        if self.method == "":
-            msg = "method must not be empty"
-            raise ValueError(msg)
-
-        if self.message == "":
-            msg = "message must not be empty"
-            raise ValueError(msg)
 
 
 class ProposalKernelHint(ABC):
@@ -162,13 +101,13 @@ class ProposalLocalSearchContext(ProposalKernelHint):
 
 @dataclass(frozen=True, slots=True)
 class ProposalBatchQuery(
-    FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, QueryEvaluationRecordT]
+    FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, QueryEvaluationPayloadT]
 ):
     """Canonical kernel query over a proposal batch.
 
     Parameters
     ----------
-    problem : Problem[BoundaryT, CandidateT, QueryEvaluationRecordT]
+    problem : Problem[BoundaryT, CandidateT, QueryEvaluationPayloadT]
         Problem that owns the proposals and evaluation semantics.
     proposals : tuple[Proposal[CandidateT], ...]
         Proposals to evaluate or refine during this kernel episode.
@@ -189,7 +128,7 @@ class ProposalBatchQuery(
     only preserves alignment and ownership.
     """
 
-    problem: Problem[BoundaryT, CandidateT, QueryEvaluationRecordT]
+    problem: Problem[BoundaryT, CandidateT, QueryEvaluationPayloadT]
     proposals: tuple[Proposal[CandidateT], ...]
     execution_resources: ExecutionResources
     proposal_evaluation_specs: tuple[ProposalEvaluationSpec | None, ...] | None = None

@@ -10,7 +10,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Proposal
-from .....json_types import JSONDict, JSONValue, require_json_int
+from .....json_types import JSONDict, JSONValue, require_json_int, require_json_str
 from .....randomness import RandomStateSnapshot
 from .....typevars import CandidateT
 from ..banking.clustering.policy import CSAClusteringPolicy
@@ -268,8 +268,8 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ValueError
             If the snapshot format or version is unsupported.
         """
-        format_name = data.get("format")
-        version = data.get("version")
+        format_name = require_json_str(data.get("format"), field_name="format")
+        version = require_json_int(data.get("version"), field_name="version")
         raw_random_state = data.get("random_state")
         raw_banking_state = data.get("banking_state")
         raw_progression_state = data.get("progression_state")
@@ -417,4 +417,33 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return replace(
             self,
             pending_proposals=self.pending_proposals.remove_many(proposal_ids),
+        )
+
+    def consume_failed_pending_proposals(self, proposal_ids: AbstractSet[str]) -> Self:
+        """Return an engine state after failed pending attempts are consumed.
+
+        Parameters
+        ----------
+        proposal_ids : collections.abc.Set[str]
+            Pending proposal identifiers whose evaluation attempts failed.
+
+        Returns
+        -------
+        Self
+            Engine state with failed proposal identifiers removed from the
+            pending registry, generation runtime, and proposal-attribution
+            queue without creating successful optimizer evidence.
+        """
+        if not proposal_ids:
+            return self
+
+        return replace(
+            self,
+            pending_proposals=self.pending_proposals.remove_many(proposal_ids),
+            generation_state=self.generation_state.consume_failed_proposals(
+                proposal_ids,
+            ),
+            proposal_state=self.proposal_state.remove_pending_attributions(
+                proposal_ids,
+            ),
         )

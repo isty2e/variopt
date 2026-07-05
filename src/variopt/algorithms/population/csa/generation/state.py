@@ -1,6 +1,7 @@
 """CSA generation queue and runtime-state definitions."""
 
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Generic
 
@@ -10,6 +11,7 @@ from typing_extensions import Self
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....artifacts import Observation
+from .....randomness import random_state_permutation_indices
 from .....typevars import CandidateT
 from .proposal.state.attribution import PlannedProposalAttribution
 
@@ -93,8 +95,7 @@ class GenerationQueue(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if not shuffle or len(candidate_tuple) <= 1:
             return cls(candidates=candidate_tuple)
 
-        indices = list(range(len(candidate_tuple)))
-        random_state.shuffle(indices)
+        indices = random_state_permutation_indices(random_state, len(candidate_tuple))
         return cls(
             candidates=tuple(candidate_tuple[index] for index in indices),
         )
@@ -253,6 +254,29 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             queue=self.queue,
             pending_proposal_ids=self.pending_proposal_ids - consumed_ids,
             buffered_observations=self.buffered_observations + tuple(observations),
+        )
+
+    def consume_failed_proposals(self, proposal_ids: AbstractSet[str]) -> Self:
+        """Return a runtime with failed proposal ids removed from the pool.
+
+        Parameters
+        ----------
+        proposal_ids : collections.abc.Set[str]
+            Proposal identifiers whose evaluation attempts failed.
+
+        Returns
+        -------
+        Self
+            Runtime state with the failed proposal identifiers removed while
+            preserving queued children and successful buffered observations.
+        """
+        if not proposal_ids:
+            return self
+
+        return type(self)(
+            queue=self.queue,
+            pending_proposal_ids=self.pending_proposal_ids - proposal_ids,
+            buffered_observations=self.buffered_observations,
         )
 
     def release_buffer(self) -> tuple[tuple[Observation[CandidateT], ...], Self]:

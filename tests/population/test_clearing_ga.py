@@ -8,12 +8,16 @@ import pytest
 from typing_extensions import override
 
 from variopt import (
+    EvaluationAttemptBatch,
+    EvaluationFailure,
     EvaluationRequest,
     IntegerSpace,
     Objective,
+    Observation,
     PermutationSpace,
     Problem,
     Proposal,
+    UnsupportedEvaluationFailureError,
 )
 from variopt.algorithms import (
     ClearingGAProfile,
@@ -209,6 +213,31 @@ class ClearingGeneticAlgorithmOptimizerTests:
         assert state.generation_index == 1
         assert tuple(member.candidate for member in state.population) == (0, 1, 7, 9)
         assert len(state.population) == 4
+
+    def test_clearing_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
+        optimizer = ClearingGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((9, 8, 1, 0)),
+            random_state=0,
+        )
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=1)
+        request = EvaluationRequest(proposal=proposals[0])
+        failure = EvaluationFailure[int].from_exception(
+            request=request,
+            exception=ValueError("failed"),
+        )
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
+            attempts=(failure,),
+        )
+
+        with pytest.raises(UnsupportedEvaluationFailureError):
+            _ = optimizer.tell_attempts(state, attempts)
+
+        assert state.pending_proposals == proposals
 
     def test_clearing_backfill_differs_from_species_seed_backfill(self) -> None:
         clearing_optimizer = TestableClearingGA(

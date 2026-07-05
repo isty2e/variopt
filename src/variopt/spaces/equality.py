@@ -1,11 +1,27 @@
 """Candidate equality helpers for search-space contracts."""
 
-from collections.abc import Callable
-from typing import TypeAlias
+from typing import Protocol
+
+from typing_extensions import TypeVar
 
 from ..typevars import CandidateT
 
-CandidateEquality: TypeAlias = Callable[[CandidateT, CandidateT], bool]
+CandidateEqualityCandidateT = TypeVar(
+    "CandidateEqualityCandidateT",
+    contravariant=True,
+)
+
+
+class CandidateEquality(Protocol[CandidateEqualityCandidateT]):
+    """Callable contract for search-space-owned candidate equality."""
+
+    def __call__(
+        self,
+        left_candidate: CandidateEqualityCandidateT,
+        right_candidate: CandidateEqualityCandidateT,
+    ) -> bool:
+        """Return whether two candidates are equal under the space contract."""
+        ...
 
 
 def scalar_candidate_equality(

@@ -7,11 +7,14 @@ It sits between a run method's proposal and the evaluation record:
 
 ```text
 RunMethod.ask -> Proposal -> Kernel or evaluator execution
-    -> EvaluationOutcome(record, refinement) -> Study -> RunMethod feedback
+    -> EvaluationAttemptBatch(EvaluationSuccess or EvaluationFailure slots)
+    -> Study -> RunMethod feedback
 ```
 
-The evaluation record remains the semantic result. Refinement metadata explains
-how execution reached the candidate in that record.
+The successful attempt remains the semantic result: it owns the evaluated
+request, the payload, and optional refinement metadata. New problem protocols
+normally return request-free payloads; legacy records and observations are
+compatibility projections from that success.
 
 ## Candidate Vocabulary
 
@@ -19,18 +22,18 @@ how execution reached the candidate in that record.
 | --- | --- | --- |
 | Proposed candidate | `RunMethod` / `Proposal` | The candidate selected by the search method before execution. |
 | Source candidate | `CandidateRefinement.source_candidate` | The candidate before execution-side refinement. Usually the proposal candidate. |
-| Refined candidate | `CandidateRefinement.refined_candidate` | The candidate after refinement. It must match the aligned evaluation record candidate. |
-| Evaluated candidate | `EvaluationRecord.candidate` | The canonical candidate evaluated by the problem's evaluation protocol. |
+| Refined candidate | `CandidateRefinement.refined_candidate` | The candidate after refinement. It must match the aligned success request candidate. |
+| Evaluated candidate | `EvaluationSuccess.request.candidate` | The canonical candidate evaluated by the problem's evaluation protocol. |
 | Accepted candidate | `RunMethod` state | A candidate admitted into optimizer state, such as a CSA bank entry. Not every evaluated candidate is accepted. |
 
 The important invariant is:
 
 ```text
-EvaluationOutcome.refinement.refined_candidate == EvaluationOutcome.record.candidate
+EvaluationSuccess.refinement.refined_candidate == EvaluationSuccess.request.candidate
 ```
 
-`EvaluationOutcome` validates that invariant when refinement metadata is
-present.
+`EvaluationSuccess`, legacy `EvaluationOutcome` compatibility records, and
+terminal successes validate that invariant when refinement metadata is present.
 
 ## Ownership Boundary
 
@@ -42,10 +45,12 @@ Refinement is not owned by `EvaluationProtocol`.
   metadata if it deliberately transforms a candidate before protocol evaluation.
 - `EvaluationProtocol` owns only the meaning of evaluating the actual candidate
   it receives.
-- `Study` transports outcomes, records accounting, and preserves aligned
+- `Study` transports payload attempt batches at execution boundaries,
+  materializes successful payloads into request-aligned records at run-method
+  feedback, records accounting, and preserves aligned successful-outcome
   refinement metadata in terminal reports.
 - `RunMethod.tell(...)` remains record-based. A run method that needs
-  execution-side metadata can override `RunMethod.tell_outcomes(...)`.
+  execution-side metadata can override `RunMethod.tell_attempts(...)`.
 
 This split keeps local search and repair-style execution behavior out of the
 problem's semantic evaluation rule.
@@ -53,28 +58,35 @@ problem's semantic evaluation rule.
 ## Accounting
 
 Refinement metadata does not count evaluations by itself. Logical evaluation cost
-is carried by `EvaluationOutcome.evaluation_count`.
+is carried by successful and failed attempt slots.
 
 By default, `Study.optimize(...)` charges the reported `evaluation_count` instead
-of only counting returned records. This matters when a local-search kernel
+of only counting returned attempt slots. This matters when a local-search kernel
 evaluates several inner candidates before returning one refined result. Set
-`count_evaluation_cost=False` only when you deliberately want outer-record
+`count_evaluation_cost=False` only when you deliberately want outer-attempt-slot
 counting.
 
-Terminal surfaces preserve provenance only as aligned metadata:
+Terminal surfaces preserve provenance as success-aligned metadata:
 
-- `RunReport.refinements` aligns with `RunReport.records`.
-- `RunResult.refinements` aligns with `RunResult.observations`.
-- `NondominatedRunSurface.refinements` aligns with its source vector records.
+- `RunReport.refinements` aligns with `RunReport.successes`; `records` is the
+  legacy payload projection. A projected record's request may preserve the
+  source proposal while its `candidate` is the evaluated candidate.
+- `RunResult.refinements` aligns with `RunResult.successes`; `observations` is
+  the scalar compatibility projection.
+- `NondominatedRunSurface.refinements` aligns with
+  `NondominatedRunSurface.successes`; vector records and frontier records are
+  compatibility projections.
 
 When no refinement metadata was recorded, these fields use the compact empty
-tuple. If some records have refinement and some do not, unrefined positions are
+tuple. If some successes have refinement and some do not, unrefined positions are
 represented by `None`.
 
 ## Local Search Behavior
 
-Built-in local-search kernels attach `CandidateRefinement` when the episode
-returns a candidate with changed canonical leaf values.
+Built-in local-search kernels attach `CandidateRefinement` to successful
+`EvaluationSuccess` values when the episode returns a candidate with changed
+canonical leaf values. Recorded `EvaluationFailure` attempts never receive
+kernel refinement metadata.
 
 For structured spaces, `changed_leaf_paths` is the authoritative set of leaf
 paths reported by the refinement producer. A scalar leaf uses the root path

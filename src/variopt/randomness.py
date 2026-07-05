@@ -3,16 +3,26 @@
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import blake2b
+from math import isfinite
 from typing import Protocol, TypeAlias, TypeVar, cast, overload
 
 import numpy as np
 import numpy.typing as npt
 from typing_extensions import Self
 
-from .json_types import JSONDict, JSONValue
+from .json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_finite_float,
+    require_json_int,
+    require_json_str,
+)
 
 RandomSeed: TypeAlias = int | None
 ResultT = TypeVar("ResultT")
+_RANDOM_STATE_ALGORITHM = "MT19937"
+_MT19937_KEY_COUNT = 624
+_UINT32_BYTE_COUNT = np.dtype(np.uint32).itemsize
 
 
 class TypedRandomState(Protocol):
@@ -142,6 +152,21 @@ class TypedRandomState(Protocol):
         """
         ...
 
+    def permutation(self, x: int) -> npt.NDArray[np.int_]:
+        """Return a random permutation of ``range(x)``.
+
+        Parameters
+        ----------
+        x : int
+            Permutation size.
+
+        Returns
+        -------
+        numpy.typing.NDArray[numpy.int_]
+            Permuted integer indices.
+        """
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class RandomStateSnapshot:
@@ -179,16 +204,45 @@ class RandomStateSnapshot:
             msg = "algorithm must not be empty"
             raise ValueError(msg)
 
+        if self.algorithm != _RANDOM_STATE_ALGORITHM:
+            msg = "algorithm must be MT19937"
+            raise ValueError(msg)
+
+        if type(self.position) is not int:
+            msg = "position must be an integer"
+            raise TypeError(msg)
+
+        if type(self.has_gaussian) is not int:
+            msg = "has_gaussian must be an integer"
+            raise TypeError(msg)
+
+        if type(self.cached_gaussian) not in {int, float}:
+            msg = "cached_gaussian must be numeric"
+            raise TypeError(msg)
+        cached_gaussian = float(self.cached_gaussian)
+        if not isfinite(cached_gaussian):
+            msg = "cached_gaussian must be finite"
+            raise ValueError(msg)
+        object.__setattr__(self, "cached_gaussian", cached_gaussian)
+
         if len(self.key_bytes) == 0:
             msg = "key_bytes must not be empty"
             raise ValueError(msg)
 
-        if len(self.key_bytes) % np.dtype(np.uint32).itemsize != 0:
+        if len(self.key_bytes) % _UINT32_BYTE_COUNT != 0:
             msg = "key_bytes must encode a whole number of uint32 keys"
+            raise ValueError(msg)
+
+        if len(self.key_bytes) != _MT19937_KEY_COUNT * _UINT32_BYTE_COUNT:
+            msg = "key_bytes must encode exactly 624 MT19937 uint32 keys"
             raise ValueError(msg)
 
         if self.position < 0:
             msg = "position must be non-negative"
+            raise ValueError(msg)
+
+        if self.position > _MT19937_KEY_COUNT:
+            msg = "position must be at most 624 for MT19937"
             raise ValueError(msg)
 
         if self.has_gaussian not in {0, 1}:
@@ -244,10 +298,11 @@ class RandomStateSnapshot:
             New random-state instance initialized from the stored payload.
         """
         random_state = np.random.RandomState()
+        key_array = np.array(memoryview(self.key_bytes).cast("I"), dtype=np.uint32)
         random_state.set_state(
             (
                 self.algorithm,
-                np.frombuffer(self.key_bytes, dtype=np.uint32),
+                key_array,
                 self.position,
                 self.has_gaussian,
                 self.cached_gaussian,
@@ -291,38 +346,29 @@ class RandomStateSnapshot:
         TypeError
             If the supplied mapping carries invalid field types.
         """
-        algorithm = data.get("algorithm")
-        key_hex = data.get("key_hex")
-        position = data.get("position")
-        has_gaussian = data.get("has_gaussian")
-        cached_gaussian = data.get("cached_gaussian")
-
-        if not isinstance(algorithm, str):
-            msg = "random-state snapshot requires string algorithm"
-            raise TypeError(msg)
-
-        if not isinstance(key_hex, str):
-            msg = "random-state snapshot requires string key_hex"
-            raise TypeError(msg)
-
-        if not isinstance(position, int):
-            msg = "random-state snapshot requires integer position"
-            raise TypeError(msg)
-
-        if not isinstance(has_gaussian, int):
-            msg = "random-state snapshot requires integer has_gaussian"
-            raise TypeError(msg)
-
-        if not isinstance(cached_gaussian, (int, float)):
-            msg = "random-state snapshot requires numeric cached_gaussian"
-            raise TypeError(msg)
+        algorithm = require_json_str(data.get("algorithm"), field_name="algorithm")
+        key_hex = require_json_str(data.get("key_hex"), field_name="key_hex")
+        position = require_json_int(data.get("position"), field_name="position")
+        has_gaussian = require_json_int(
+            data.get("has_gaussian"),
+            field_name="has_gaussian",
+        )
+        cached_gaussian = require_json_finite_float(
+            data.get("cached_gaussian"),
+            field_name="cached_gaussian",
+        )
+        try:
+            key_bytes = bytes.fromhex(key_hex)
+        except ValueError as exc:
+            msg = "key_hex must encode hexadecimal bytes"
+            raise ValueError(msg) from exc
 
         return cls(
             algorithm=algorithm,
-            key_bytes=bytes.fromhex(key_hex),
+            key_bytes=key_bytes,
             position=position,
             has_gaussian=has_gaussian,
-            cached_gaussian=float(cached_gaussian),
+            cached_gaussian=cached_gaussian,
         )
 
     def advance(
@@ -628,3 +674,29 @@ def random_state_choice_indices_without_replacement(
         np.asarray(selected_indices, dtype=np.int_).tolist(),
     )
     return tuple(selected_index_list)
+
+
+def random_state_permutation_indices(
+    random_state: np.random.RandomState,
+    size: int,
+) -> tuple[int, ...]:
+    """Draw a permutation of integer indices from a canonical random state.
+
+    Parameters
+    ----------
+    random_state : numpy.random.RandomState
+        Random-state instance used for sampling.
+    size : int
+        Number of indices in the half-open interval ``[0, size)``.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Permuted indices.
+    """
+    typed_state = cast(TypedRandomState, random_state)
+    index_list = cast(
+        list[int],
+        np.asarray(typed_state.permutation(size), dtype=np.int_).tolist(),
+    )
+    return tuple(index_list)

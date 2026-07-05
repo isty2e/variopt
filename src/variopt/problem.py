@@ -1,7 +1,7 @@
 """Problem definitions."""
 
 from dataclasses import dataclass, field
-from typing import Generic, cast
+from typing import Generic
 
 from typing_extensions import TypeVar, override
 
@@ -12,9 +12,8 @@ from variopt.generic_runtime import (
 
 from .artifacts import (
     EvaluationRequest,
-    Observation,
+    ObservationPayload,
     Proposal,
-    RequestAlignedEvaluationRecord,
 )
 from .direction import OptimizationDirection
 from .objective import (
@@ -27,11 +26,7 @@ from .spaces import SearchSpace
 from .typevars import CandidateT
 
 BoundaryT = TypeVar("BoundaryT")
-ProblemEvaluationRecordT = TypeVar(
-    "ProblemEvaluationRecordT",
-    bound=RequestAlignedEvaluationRecord,
-    default=Observation[CandidateT],
-)
+ProblemPayloadT = TypeVar("ProblemPayloadT", default=ObservationPayload)
 InteractionProblemRecordT = TypeVar("InteractionProblemRecordT")
 
 
@@ -65,17 +60,17 @@ class _ProtocolObjectiveCompatibilityView(FrozenGenericSlotsCompat, Generic[Cand
             Raw objective value recovered from the wrapped observation
             protocol.
         """
-        observation = self.evaluation_protocol.evaluate_request(
+        payload = self.evaluation_protocol.evaluate_request(
             EvaluationRequest(proposal=Proposal(candidate=candidate)),
             direction=self.direction,
         )
-        return observation.value
+        return payload.value
 
 
 @dataclass(frozen=True, slots=True)
 class _ObservationProtocolEvaluationProtocolAdapter(FrozenGenericSlotsCompat,
     Generic[CandidateT],
-    EvaluationProtocol[CandidateT, Observation[CandidateT]],
+    EvaluationProtocol[CandidateT, ObservationPayload],
 ):
     """Direction-free evaluation view over a scalar observation protocol.
 
@@ -94,7 +89,7 @@ class _ObservationProtocolEvaluationProtocolAdapter(FrozenGenericSlotsCompat,
     def evaluate_request(
         self,
         request: EvaluationRequest[CandidateT],
-    ) -> Observation[CandidateT]:
+    ) -> ObservationPayload:
         """Evaluate a canonical request through the wrapped protocol.
 
         Parameters
@@ -104,8 +99,8 @@ class _ObservationProtocolEvaluationProtocolAdapter(FrozenGenericSlotsCompat,
 
         Returns
         -------
-        Observation[CandidateT]
-            Scalar observation emitted by the wrapped observation protocol.
+        ObservationPayload
+            Scalar payload emitted by the wrapped observation protocol.
         """
         return self.observation_evaluation_protocol.evaluate_request(
             request,
@@ -114,7 +109,7 @@ class _ObservationProtocolEvaluationProtocolAdapter(FrozenGenericSlotsCompat,
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEvaluationRecordT]):
+class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPayloadT]):
     """Immutable proposal-local optimization problem.
 
     Parameters
@@ -124,7 +119,7 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
     objective : Objective[CandidateT] | None, optional
         Optional scalar objective compatibility view. Provide this for the
         simplest scalar problem definitions.
-    evaluation_protocol : EvaluationProtocol[CandidateT, ProblemEvaluationRecordT] | ObservationEvaluationProtocol[CandidateT] | None, optional
+    evaluation_protocol : EvaluationProtocol[CandidateT, ProblemPayloadT] | ObservationEvaluationProtocol[CandidateT] | None, optional
         Optional canonical request-aligned evaluation protocol. This may be
         direction-free or a scalar observation protocol that ``Problem`` will
         lower into the canonical request-based contract.
@@ -140,12 +135,12 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
     Internally, ``Problem`` stores the direction-free
     :class:`~variopt.objective.EvaluationProtocol` contract and exposes
     ``objective`` only as a compatibility view when a scalar interpretation is
-    available. The canonical evaluation protocol must emit request-aligned
-    records suitable for evaluator, kernel, and study orchestration.
+    available. The canonical evaluation protocol must emit request-free
+    payloads; execution layers own request identity and attempt recording.
     """
 
     space: SearchSpace[BoundaryT, CandidateT]
-    evaluation_protocol: EvaluationProtocol[CandidateT, ProblemEvaluationRecordT]
+    evaluation_protocol: EvaluationProtocol[CandidateT, ProblemPayloadT]
     direction: OptimizationDirection = OptimizationDirection.MINIMIZE
     name: str | None = None
     _objective_compat: Objective[CandidateT] | None = field(
@@ -160,7 +155,7 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
         space: SearchSpace[BoundaryT, CandidateT],
         objective: Objective[CandidateT] | None = None,
         evaluation_protocol: (
-            EvaluationProtocol[CandidateT, ProblemEvaluationRecordT]
+            EvaluationProtocol[CandidateT, ProblemPayloadT]
             | ObservationEvaluationProtocol[CandidateT]
         )
         | None = None,
@@ -176,8 +171,8 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
             semantics.
         objective : Objective[CandidateT] | None, optional
             Optional scalar objective compatibility view.
-        evaluation_protocol : EvaluationProtocol[CandidateT, ProblemEvaluationRecordT] | ObservationEvaluationProtocol[CandidateT] | None, optional
-            Optional canonical request-aligned evaluation protocol or scalar
+        evaluation_protocol : EvaluationProtocol[CandidateT, ProblemPayloadT] | ObservationEvaluationProtocol[CandidateT] | None, optional
+            Optional canonical payload-returning evaluation protocol or scalar
             observation protocol.
         direction : OptimizationDirection, default=OptimizationDirection.MINIMIZE
             Scalar direction bound at construction time when needed.
@@ -201,33 +196,27 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemEv
             msg = "evaluation_protocol normalization failed"
             raise RuntimeError(msg)
 
-        canonical_protocol: EvaluationProtocol[CandidateT, ProblemEvaluationRecordT]
+        canonical_protocol: (
+            EvaluationProtocol[CandidateT, ProblemPayloadT]
+            | _ObservationProtocolEvaluationProtocolAdapter[CandidateT]
+        )
         objective_compat: Objective[CandidateT] | None
         if objective is not None:
-            canonical_protocol = cast(
-                EvaluationProtocol[CandidateT, ProblemEvaluationRecordT],
-                _ObservationProtocolEvaluationProtocolAdapter(
-                    observation_evaluation_protocol=objective,
-                    direction=direction,
-                ),
+            canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
+                observation_evaluation_protocol=objective,
+                direction=direction,
             )
             objective_compat = objective
         elif isinstance(protocol, Objective):
-            canonical_protocol = cast(
-                EvaluationProtocol[CandidateT, ProblemEvaluationRecordT],
-                _ObservationProtocolEvaluationProtocolAdapter(
-                    observation_evaluation_protocol=protocol,
-                    direction=direction,
-                ),
+            canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
+                observation_evaluation_protocol=protocol,
+                direction=direction,
             )
             objective_compat = protocol
         elif isinstance(protocol, ObservationEvaluationProtocol):
-            canonical_protocol = cast(
-                EvaluationProtocol[CandidateT, ProblemEvaluationRecordT],
-                _ObservationProtocolEvaluationProtocolAdapter(
-                    observation_evaluation_protocol=protocol,
-                    direction=direction,
-                ),
+            canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
+                observation_evaluation_protocol=protocol,
+                direction=direction,
             )
             objective_compat = _ProtocolObjectiveCompatibilityView(
                 evaluation_protocol=protocol,

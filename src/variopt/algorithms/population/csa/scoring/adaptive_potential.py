@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import product
 from math import prod
 from typing import Generic
 
@@ -13,7 +14,12 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
-from .....json_types import JSONDict, JSONValue
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_finite_float,
+    require_json_list,
+)
 from .....typevars import CandidateT
 from .model import CSAAdaptivePotential
 
@@ -64,6 +70,58 @@ def _nested_potential_json_value(
     return items, next_offset
 
 
+def _potential_from_json_value(
+    value: JSONValue,
+    *,
+    shape: tuple[int, ...],
+) -> NDArray[np.float64]:
+    values = _potential_values_from_json_value(
+        value,
+        shape=shape,
+        axis=0,
+        field_name="potential",
+    )
+    potential = np.empty(shape, dtype=np.float64)
+    index_ranges = tuple(range(axis_length) for axis_length in shape)
+    for index, potential_value in zip(product(*index_ranges), values, strict=True):
+        potential[index] = potential_value
+    return potential
+
+
+def _potential_values_from_json_value(
+    value: JSONValue,
+    *,
+    shape: tuple[int, ...],
+    axis: int,
+    field_name: str,
+) -> tuple[float, ...]:
+    if axis == len(shape):
+        return (
+            require_json_finite_float(
+                value,
+                field_name=field_name,
+            ),
+        )
+
+    items = require_json_list(value, field_name=field_name)
+    expected_count = shape[axis]
+    if len(items) != expected_count:
+        msg = f"{field_name} must contain {expected_count} items"
+        raise ValueError(msg)
+
+    values: list[float] = []
+    for item_index, item in enumerate(items):
+        values.extend(
+            _potential_values_from_json_value(
+                item,
+                shape=shape,
+                axis=axis + 1,
+                field_name=f"{field_name}[{item_index}]",
+            ),
+        )
+    return tuple(values)
+
+
 @dataclass(frozen=True, slots=True)
 class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
     """Canonical adaptive-potential state.
@@ -84,6 +142,10 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         expected_shape = tuple(axis.bin_count for axis in self.model.axes)
         if self.potential.shape != expected_shape:
             msg = "potential shape must match the configured adaptive-potential axes"
+            raise ValueError(msg)
+
+        if not bool(np.isfinite(self.potential).all()):
+            msg = "potential values must be finite"
             raise ValueError(msg)
 
     def score_candidate(
@@ -221,13 +283,12 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        raw_potential = data.get("potential")
-        if not isinstance(raw_potential, list):
-            msg = "adaptive-potential snapshot requires potential list"
-            raise TypeError(msg)
         return cls(
             model=model,
-            potential=np.asarray(raw_potential, dtype=np.float64),
+            potential=_potential_from_json_value(
+                data.get("potential"),
+                shape=tuple(axis.bin_count for axis in model.axes),
+            ),
         )
 
 
