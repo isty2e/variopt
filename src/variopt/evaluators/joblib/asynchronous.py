@@ -1,12 +1,16 @@
 """Asynchronous joblib-backed evaluator and retry runtime."""
 
 from collections.abc import Callable, Generator, Iterator, Sequence
+from concurrent.futures.process import BrokenProcessPool as FuturesBrokenProcessPool
 from dataclasses import dataclass, field
+from importlib import import_module
 from itertools import count
 from queue import Empty, Queue
 from threading import Thread, current_thread
 from time import monotonic
+from types import ModuleType
 from typing import Generic, Literal, TypeVar, cast
+from warnings import warn
 
 import joblib  # pyright: ignore[reportMissingTypeStubs]
 from typing_extensions import override
@@ -45,7 +49,49 @@ from .contracts import (
 from .execution import build_execution_resources, validate_joblib_configuration
 
 _ABORT_JOIN_TIMEOUT_SECONDS = 0.01
+_JOBLIB_PROCESS_EXECUTOR_MODULE = "joblib.externals.loky.process_executor"
 JoblibEvaluationResultT = TypeVar("JoblibEvaluationResultT")
+
+
+def _exception_type_from_module(
+    module: ModuleType,
+    name: str,
+) -> type[BaseException] | None:
+    """Return one exception type from a dynamically imported module."""
+    candidate: object = getattr(module, name, None)
+    if not isinstance(candidate, type):
+        return None
+
+    if not issubclass(candidate, BaseException):
+        return None
+
+    return candidate
+
+
+def _joblib_process_failure_types() -> tuple[type[BaseException], ...]:
+    """Return joblib/loky process-pool exception types when available."""
+    try:
+        process_executor_module = import_module(_JOBLIB_PROCESS_EXECUTOR_MODULE)
+    except ModuleNotFoundError as exception:
+        if (
+            exception.name is None
+            or not _JOBLIB_PROCESS_EXECUTOR_MODULE.startswith(exception.name)
+        ):
+            raise
+        return ()
+
+    failure_types: list[type[BaseException]] = []
+    for name in ("BrokenProcessPool", "TerminatedWorkerError"):
+        failure_type = _exception_type_from_module(process_executor_module, name)
+        if failure_type is not None:
+            failure_types.append(failure_type)
+    return tuple(failure_types)
+
+
+_PROCESS_POOL_INFRASTRUCTURE_FAILURE_TYPES = (
+    FuturesBrokenProcessPool,
+    *_joblib_process_failure_types(),
+)
 
 
 def _evaluate_indexed_request_outcome(
@@ -113,10 +159,7 @@ def _classify_joblib_attempt_failure(
 
 def _is_retryable_joblib_infrastructure_failure(exception: BaseException) -> bool:
     """Return whether a joblib failure may be retried for unfinished requests."""
-    return isinstance(exception, TimeoutError) or type(exception).__name__ in {
-        "BrokenProcessPool",
-        "TerminatedWorkerError",
-    }
+    return isinstance(exception, _PROCESS_POOL_INFRASTRUCTURE_FAILURE_TYPES)
 
 
 def _remaining_async_joblib_request_inputs(
@@ -215,6 +258,8 @@ class AsyncJoblibEvaluator(
         Joblib backend used for request execution.
     infrastructure_retry_limit : int, default=0
         Number of times to retry unfinished work after infrastructure failures.
+        Retries apply only to backend boundary failures such as process-pool
+        termination, not to ordinary objective exceptions.
     """
 
     n_jobs: int = -1
@@ -765,15 +810,56 @@ class AsyncJoblibEvaluator(
         ],
     ) -> None:
         """Best-effort abort for one active joblib attempt."""
-        try:
-            if active_batch.abort_attempt is not None:
+        abort_failure: Exception | None = None
+        if active_batch.abort_attempt is not None:
+            try:
                 active_batch.abort_attempt()
-            else:
-                close_method = getattr(active_batch.result_generator, "close", None)
-                if callable(close_method):
+            except Exception as exception:
+                abort_failure = exception
+
+        close_failure: Exception | None = None
+        close_method_missing = False
+        if active_batch.abort_attempt is None or abort_failure is not None:
+            close_method = getattr(active_batch.result_generator, "close", None)
+            if callable(close_method):
+                try:
                     _ = close_method()
-        except Exception:
-            pass
+                except Exception as exception:
+                    close_failure = exception
+            else:
+                close_method_missing = True
+
+        if abort_failure is not None and close_failure is None and not close_method_missing:
+            warn(
+                (
+                    "async joblib abort hook failed; fallback generator close "
+                    "was used "
+                    f"({type(abort_failure).__name__}: {abort_failure})"
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        if close_failure is not None or close_method_missing:
+            close_detail = (
+                "close method unavailable"
+                if close_method_missing
+                else f"{type(close_failure).__name__}: {close_failure}"
+            )
+            abort_detail = (
+                ""
+                if abort_failure is None
+                else f"; abort hook failed first ({type(abort_failure).__name__}: {abort_failure})"
+            )
+            warn(
+                (
+                    "failed to abort async joblib attempt; detached backend work "
+                    "may continue after evaluator state is cleared "
+                    f"({close_detail}{abort_detail})"
+                ),
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         if active_batch.result_worker is not current_thread():
             active_batch.result_worker.join(timeout=_ABORT_JOIN_TIMEOUT_SECONDS)

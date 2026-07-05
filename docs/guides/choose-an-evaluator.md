@@ -94,3 +94,17 @@ objective `Exception`s become recorded `EvaluationFailure` attempts, while
 candidate validation, cancellation, and backend failures remain hard batch
 failures. Direct `Evaluator.evaluate(...)` remains available on the evaluator
 facade, but `Study` does not adapt outcome-only batches or sessions.
+
+When `infrastructure_retry_limit` is positive, `AsyncJoblibEvaluator` retries
+only unfinished work after recognized backend boundary failures, such as
+joblib/loky or `concurrent.futures` process-pool breakage. User exceptions from
+the objective remain user-code failures even if their class names resemble
+backend exceptions.
+
+Suspending, resuming, cancelling, or retrying an async joblib batch is
+at-least-once at the backend boundary. `variopt` preserves completed request
+indices and removes evaluator-owned active state before retrying or cancelling,
+but joblib may not be able to stop already-dispatched work immediately. If the
+backend abort hook or fallback generator close fails, `AsyncJoblibEvaluator`
+emits a `RuntimeWarning`; treat side-effecting objectives as non-idempotent
+unless you provide your own external transaction boundary.

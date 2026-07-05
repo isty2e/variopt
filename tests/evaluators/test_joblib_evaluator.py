@@ -1,8 +1,13 @@
 """Tests for execution-only joblib evaluators."""
 
 import time
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Sequence
+from concurrent.futures.process import BrokenProcessPool as FuturesBrokenProcessPool
 from dataclasses import dataclass
+from importlib import import_module
+from queue import Queue
+from threading import current_thread
+from types import ModuleType
 from typing import Literal, TypeGuard, TypeVar, final
 
 import pytest
@@ -27,6 +32,7 @@ from variopt.evaluation_pipeline import evaluate_request_outcome
 from variopt.evaluators import (
     AsyncJoblibEvaluator,
     BatchExecutionFailed,
+    EvaluationBatchHandle,
     EvaluationBatchResumeHandle,
     EvaluationBatchSessionState,
     JoblibEvaluator,
@@ -35,7 +41,13 @@ from variopt.evaluators import (
     ResumableBatchSession,
 )
 from variopt.evaluators.async_evaluator.sessions import EvaluationBatchSession
-from variopt.evaluators.joblib.batches import AsyncJoblibRequestInput
+from variopt.evaluators.joblib.batches import (
+    ActiveAsyncJoblibBatch,
+    AsyncJoblibCompletedResult,
+    AsyncJoblibExhaustedResult,
+    AsyncJoblibFailedResult,
+    AsyncJoblibRequestInput,
+)
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
     SEQUENTIAL_EXECUTION_MODEL,
@@ -47,6 +59,38 @@ from variopt.execution import (
 
 AttemptCandidateT = TypeVar("AttemptCandidateT")
 SessionEvaluationT = TypeVar("SessionEvaluationT")
+InjectedAsyncJoblibFailureMode = Literal[
+    "infrastructure_once",
+    "infrastructure_always",
+    "user_code_once",
+    "user_timeout_error_once",
+    "keyboard_interrupt_once",
+    "loky_broken_process_pool_once",
+    "loky_terminated_worker_once",
+    "futures_broken_process_pool_once",
+    "user_broken_process_pool_once",
+    "user_terminated_worker_once",
+]
+
+
+def _joblib_process_executor_module() -> ModuleType:
+    return import_module("joblib.externals.loky.process_executor")
+
+
+def _joblib_process_executor_exception_type(
+    name: Literal["BrokenProcessPool", "TerminatedWorkerError"],
+) -> type[BaseException]:
+    candidate: object = getattr(_joblib_process_executor_module(), name, None)
+    if not isinstance(candidate, type) or not issubclass(candidate, BaseException):
+        pytest.fail(f"joblib process executor exception is unavailable: {name}")
+    return candidate
+
+
+def _make_loky_process_executor_exception(
+    name: Literal["BrokenProcessPool", "TerminatedWorkerError"],
+) -> BaseException:
+    exception_type = _joblib_process_executor_exception_type(name)
+    return exception_type(f"synthetic loky {name}")
 
 
 def _is_int_observation_record(
@@ -67,6 +111,19 @@ def _make_observation_outcome(
         raise TypeError(msg)
     return EvaluationOutcome(
         record=record,
+        evaluation_count=outcome.evaluation_count,
+        refinement=outcome.refinement,
+    )
+
+
+def _make_request_aligned_observation_outcome(
+    *,
+    problem: Problem[int, int, Observation[int]],
+    request: EvaluationRequest[int],
+) -> EvaluationOutcome[int, RequestAlignedEvaluationRecord]:
+    outcome = _make_observation_outcome(problem=problem, request=request)
+    return EvaluationOutcome(
+        record=outcome.record,
         evaluation_count=outcome.evaluation_count,
         refinement=outcome.refinement,
     )
@@ -230,11 +287,7 @@ class FlakyAsyncJoblibEvaluator(AsyncJoblibEvaluator[int, int, Observation[int]]
     def __init__(
         self,
         *,
-        failure_mode: Literal[
-            "infrastructure_once",
-            "infrastructure_always",
-            "user_code_once",
-        ],
+        failure_mode: InjectedAsyncJoblibFailureMode,
         infrastructure_retry_limit: int,
     ) -> None:
         super().__init__(
@@ -250,11 +303,9 @@ class FlakyAsyncJoblibEvaluator(AsyncJoblibEvaluator[int, int, Observation[int]]
         problem: Problem[int, int, Observation[int]],
         request: EvaluationRequest[int],
     ) -> EvaluationOutcome[int, RequestAlignedEvaluationRecord]:
-        outcome = _make_observation_outcome(problem=problem, request=request)
-        return EvaluationOutcome(
-            record=outcome.record,
-            evaluation_count=outcome.evaluation_count,
-            refinement=outcome.refinement,
+        return _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=request,
         )
 
     @override
@@ -274,31 +325,63 @@ class FlakyAsyncJoblibEvaluator(AsyncJoblibEvaluator[int, int, Observation[int]]
         attempt_count = self.attempt_count
         immutable_request_inputs = tuple(request_inputs)
 
+        def first_completion() -> tuple[
+            int,
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+        ]:
+            first_input = immutable_request_inputs[0]
+            return first_input.index, self._build_outcome(
+                problem,
+                first_input.request,
+            )
+
         def iterator():
             if self.failure_mode == "infrastructure_once" and attempt_count == 1:
-                first_input = immutable_request_inputs[0]
-                yield first_input.index, self._build_outcome(
-                    problem,
-                    first_input.request,
-                )
-                raise TimeoutError("transient infrastructure failure")
+                yield first_completion()
+                raise FuturesBrokenProcessPool("transient infrastructure failure")
 
             if self.failure_mode == "infrastructure_always":
                 if attempt_count == 1 and len(immutable_request_inputs) > 1:
-                    first_input = immutable_request_inputs[0]
-                    yield first_input.index, self._build_outcome(
-                        problem,
-                        first_input.request,
-                    )
-                raise TimeoutError("persistent infrastructure failure")
+                    yield first_completion()
+                raise FuturesBrokenProcessPool("persistent infrastructure failure")
+
+            if self.failure_mode == "keyboard_interrupt_once" and attempt_count == 1:
+                yield first_completion()
+                raise KeyboardInterrupt
 
             if self.failure_mode == "user_code_once" and attempt_count == 1:
-                first_input = immutable_request_inputs[0]
-                yield first_input.index, self._build_outcome(
-                    problem,
-                    first_input.request,
-                )
+                yield first_completion()
                 raise ValueError("boom")
+
+            if self.failure_mode == "user_timeout_error_once" and attempt_count == 1:
+                yield first_completion()
+                raise TimeoutError("user timeout")
+
+            if self.failure_mode == "loky_broken_process_pool_once" and attempt_count == 1:
+                yield first_completion()
+                raise _make_loky_process_executor_exception("BrokenProcessPool")
+
+            if self.failure_mode == "loky_terminated_worker_once" and attempt_count == 1:
+                yield first_completion()
+                raise _make_loky_process_executor_exception("TerminatedWorkerError")
+
+            if self.failure_mode == "futures_broken_process_pool_once" and attempt_count == 1:
+                yield first_completion()
+                raise FuturesBrokenProcessPool("synthetic futures BrokenProcessPool")
+
+            if self.failure_mode == "user_broken_process_pool_once" and attempt_count == 1:
+                class BrokenProcessPool(RuntimeError):
+                    """User exception with a backend-like class name."""
+
+                yield first_completion()
+                raise BrokenProcessPool("user boom")
+
+            if self.failure_mode == "user_terminated_worker_once" and attempt_count == 1:
+                class TerminatedWorkerError(RuntimeError):
+                    """User exception with a backend-like class name."""
+
+                yield first_completion()
+                raise TerminatedWorkerError("user boom")
 
             for request_input in immutable_request_inputs:
                 yield request_input.index, self._build_outcome(
@@ -309,6 +392,28 @@ class FlakyAsyncJoblibEvaluator(AsyncJoblibEvaluator[int, int, Observation[int]]
         return iterator()
 
 
+@final
+class AbortInspectionAsyncJoblibEvaluator(
+    AsyncJoblibEvaluator[int, int, Observation[int]]
+):
+    """Test evaluator exposing active-batch inspection without private test access."""
+
+    def install_active_batch(
+        self,
+        handle: EvaluationBatchHandle,
+        active_batch: ActiveAsyncJoblibBatch[
+            int,
+            int,
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+            Observation[int],
+        ],
+    ) -> None:
+        self._active_batches[handle.batch_id] = active_batch
+
+    def has_active_batch(self, handle: EvaluationBatchHandle) -> bool:
+        return handle.batch_id in self._active_batches
+
+
 def _requests(
     proposals: Sequence[Proposal[int]],
 ) -> tuple[EvaluationRequest[int], ...]:
@@ -316,6 +421,52 @@ def _requests(
     return tuple(
         EvaluationRequest(proposal=proposal)
         for proposal in proposals
+    )
+
+
+def _request_inputs(
+    requests: Sequence[EvaluationRequest[int]],
+) -> tuple[AsyncJoblibRequestInput[int], ...]:
+    return tuple(
+        AsyncJoblibRequestInput(index=index, request=request)
+        for index, request in enumerate(requests)
+    )
+
+
+def _active_observation_joblib_batch(
+    *,
+    problem: Problem[int, int, Observation[int]],
+    request_inputs: tuple[AsyncJoblibRequestInput[int], ...],
+    result_generator: Generator[
+        tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+        None,
+        None,
+    ],
+    abort_attempt: Callable[[], None] | None = None,
+) -> ActiveAsyncJoblibBatch[
+    int,
+    int,
+    EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+    Observation[int],
+]:
+    result_queue: Queue[
+        AsyncJoblibCompletedResult[
+            EvaluationOutcome[int, RequestAlignedEvaluationRecord]
+        ]
+        | AsyncJoblibFailedResult
+        | AsyncJoblibExhaustedResult
+    ] = Queue()
+    return ActiveAsyncJoblibBatch(
+        problem=problem,
+        request_inputs=request_inputs,
+        execution_resources=ExecutionResources(
+            parallel_owner="evaluator",
+            nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+        ),
+        result_generator=result_generator,
+        result_queue=result_queue,
+        result_worker=current_thread(),
+        abort_attempt=abort_attempt,
     )
 
 
@@ -720,6 +871,180 @@ class AsyncJoblibEvaluatorTests:
                 lifecycle="cancelled",
             )
 
+    def test_cancel_uses_private_abort_hook_when_available(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        broad_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        generator_closed = False
+        abort_called = False
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            nonlocal generator_closed
+            try:
+                yield 0, broad_outcome
+            finally:
+                generator_closed = True
+
+        def abort_attempt() -> None:
+            nonlocal abort_called
+            abort_called = True
+
+        generator = result_generator()
+        _ = next(generator)
+        evaluator = AbortInspectionAsyncJoblibEvaluator()
+        handle = EvaluationBatchHandle(batch_id="joblib-test", request_count=1)
+        evaluator.install_active_batch(
+            handle,
+            _active_observation_joblib_batch(
+                problem=problem,
+                request_inputs=_request_inputs(requests),
+                result_generator=generator,
+                abort_attempt=abort_attempt,
+            ),
+        )
+
+        evaluator.cancel(handle)
+
+        assert abort_called
+        assert not generator_closed
+        assert not evaluator.has_active_batch(handle)
+
+    def test_cancel_falls_back_to_generator_close_when_abort_hook_fails(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        broad_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        generator_closed = False
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            nonlocal generator_closed
+            try:
+                yield 0, broad_outcome
+            finally:
+                generator_closed = True
+
+        def abort_attempt() -> None:
+            msg = "abort hook failed"
+            raise RuntimeError(msg)
+
+        generator = result_generator()
+        _ = next(generator)
+        evaluator = AbortInspectionAsyncJoblibEvaluator()
+        handle = EvaluationBatchHandle(batch_id="joblib-test", request_count=1)
+        evaluator.install_active_batch(
+            handle,
+            _active_observation_joblib_batch(
+                problem=problem,
+                request_inputs=_request_inputs(requests),
+                result_generator=generator,
+                abort_attempt=abort_attempt,
+            ),
+        )
+
+        with pytest.warns(
+            RuntimeWarning,
+            match="fallback generator close was used",
+        ):
+            evaluator.cancel(handle)
+
+        assert generator_closed
+        assert not evaluator.has_active_batch(handle)
+
+    def test_cancel_falls_back_to_generator_close_without_private_abort_hook(
+        self,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        broad_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+        generator_closed = False
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            nonlocal generator_closed
+            try:
+                yield 0, broad_outcome
+            finally:
+                generator_closed = True
+
+        generator = result_generator()
+        _ = next(generator)
+        evaluator = AbortInspectionAsyncJoblibEvaluator()
+        handle = EvaluationBatchHandle(batch_id="joblib-test", request_count=1)
+        evaluator.install_active_batch(
+            handle,
+            _active_observation_joblib_batch(
+                problem=problem,
+                request_inputs=_request_inputs(requests),
+                result_generator=generator,
+            ),
+        )
+
+        evaluator.cancel(handle)
+
+        assert generator_closed
+        assert not evaluator.has_active_batch(handle)
+
+    def test_cancel_warns_when_abort_fallback_close_fails(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        requests = _requests((Proposal(candidate=4, proposal_id="p-1"),))
+        broad_outcome = _make_request_aligned_observation_outcome(
+            problem=problem,
+            request=requests[0],
+        )
+
+        def result_generator() -> Generator[
+            tuple[int, EvaluationOutcome[int, RequestAlignedEvaluationRecord]],
+            None,
+            None,
+        ]:
+            try:
+                yield 0, broad_outcome
+            except GeneratorExit as exception:
+                msg = "close failed"
+                raise RuntimeError(msg) from exception
+
+        generator = result_generator()
+        _ = next(generator)
+        evaluator = AbortInspectionAsyncJoblibEvaluator()
+        handle = EvaluationBatchHandle(batch_id="joblib-test", request_count=1)
+        evaluator.install_active_batch(
+            handle,
+            _active_observation_joblib_batch(
+                problem=problem,
+                request_inputs=_request_inputs(requests),
+                result_generator=generator,
+            ),
+        )
+
+        with pytest.warns(
+            RuntimeWarning,
+            match="failed to abort async joblib attempt",
+        ):
+            evaluator.cancel(handle)
+
+        assert not evaluator.has_active_batch(handle)
+
     def test_open_session_exposes_resumable_capability(self) -> None:
         problem = _legacy_observation_problem(DelayedSquareObjective())
         evaluator = AsyncJoblibEvaluator[int, int, Observation[int]](backend="threading", n_jobs=2)
@@ -968,11 +1293,11 @@ class AsyncJoblibEvaluatorTests:
                     Proposal(candidate=1, proposal_id="p-2"),
                     )
                 ),
-            )
+        )
 
         assert evaluator.attempt_count == 2
         assert caught.value.kind == "infrastructure"
-        assert isinstance(caught.value.cause, TimeoutError)
+        assert isinstance(caught.value.cause, FuturesBrokenProcessPool)
 
     def test_does_not_retry_user_code_failure(self) -> None:
         problem = _legacy_observation_problem(SquareObjective())
@@ -995,6 +1320,117 @@ class AsyncJoblibEvaluatorTests:
         assert evaluator.attempt_count == 1
         assert caught.value.kind == "user_code"
         assert isinstance(caught.value.cause, ValueError)
+
+    def test_does_not_retry_user_timeout_error(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        evaluator = FlakyAsyncJoblibEvaluator(
+            failure_mode="user_timeout_error_once",
+            infrastructure_retry_limit=3,
+        )
+
+        with pytest.raises(BatchExecutionFailed) as caught:
+            _ = evaluator.evaluate(
+                problem,
+                _requests(
+                    (
+                        Proposal(candidate=4, proposal_id="p-1"),
+                        Proposal(candidate=1, proposal_id="p-2"),
+                    )
+                ),
+            )
+
+        assert evaluator.attempt_count == 1
+        assert caught.value.kind == "user_code"
+        assert isinstance(caught.value.cause, TimeoutError)
+
+    def test_does_not_retry_keyboard_interrupt(self) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        evaluator = FlakyAsyncJoblibEvaluator(
+            failure_mode="keyboard_interrupt_once",
+            infrastructure_retry_limit=3,
+        )
+
+        with pytest.raises(BatchExecutionFailed) as caught:
+            _ = evaluator.evaluate(
+                problem,
+                _requests(
+                    (
+                        Proposal(candidate=4, proposal_id="p-1"),
+                        Proposal(candidate=1, proposal_id="p-2"),
+                    )
+                ),
+            )
+
+        assert evaluator.attempt_count == 1
+        assert caught.value.kind == "cancelled"
+        assert isinstance(caught.value.cause, KeyboardInterrupt)
+
+    @pytest.mark.parametrize(
+        "failure_mode",
+        (
+            "loky_broken_process_pool_once",
+            "loky_terminated_worker_once",
+            "futures_broken_process_pool_once",
+        ),
+    )
+    def test_retries_structural_process_pool_infrastructure_failures(
+        self,
+        failure_mode: InjectedAsyncJoblibFailureMode,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        evaluator = FlakyAsyncJoblibEvaluator(
+            failure_mode=failure_mode,
+            infrastructure_retry_limit=1,
+        )
+
+        outcomes = evaluator.evaluate(
+            problem,
+            _requests(
+                (
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=1, proposal_id="p-2"),
+                )
+            ),
+        )
+
+        assert evaluator.attempt_count == 2
+        assert tuple(outcome.observation.proposal.proposal_id for outcome in outcomes) == ("p-1", "p-2")
+        assert tuple(outcome.observation.value for outcome in outcomes) == (16.0, 1.0)
+
+    @pytest.mark.parametrize(
+        "failure_mode",
+        (
+            "user_broken_process_pool_once",
+            "user_terminated_worker_once",
+        ),
+    )
+    def test_does_not_retry_user_exception_with_backend_like_name(
+        self,
+        failure_mode: InjectedAsyncJoblibFailureMode,
+    ) -> None:
+        problem = _legacy_observation_problem(SquareObjective())
+        evaluator = FlakyAsyncJoblibEvaluator(
+            failure_mode=failure_mode,
+            infrastructure_retry_limit=3,
+        )
+
+        with pytest.raises(BatchExecutionFailed) as caught:
+            _ = evaluator.evaluate(
+                problem,
+                _requests(
+                    (
+                        Proposal(candidate=4, proposal_id="p-1"),
+                        Proposal(candidate=1, proposal_id="p-2"),
+                    )
+                ),
+            )
+
+        assert evaluator.attempt_count == 1
+        assert caught.value.kind == "user_code"
+        assert type(caught.value.cause).__name__ in {
+            "BrokenProcessPool",
+            "TerminatedWorkerError",
+        }
 
     def test_study_step_exact_async_uses_async_joblib_backend(self) -> None:
         @dataclass(frozen=True, slots=True)
