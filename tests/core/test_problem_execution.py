@@ -94,6 +94,24 @@ class MismatchedCandidateLabelProtocol(EvaluationProtocol[int, LabelRecord]):
         )
 
 
+class AttributeBagProtocol(EvaluationProtocol[int, CompatibilityEvaluationPayload]):
+    """Protocol that returns a record-shaped object without a canonical request."""
+
+    @override
+    def evaluate_request(
+        self,
+        request: EvaluationRequest[int],
+    ) -> CompatibilityEvaluationPayload:
+        candidate = request.candidate
+
+        class AttributeBagPayload:
+            def __init__(self) -> None:
+                self.request = "not an evaluation request"
+                self.candidate = candidate
+
+        return cast(CompatibilityEvaluationPayload, AttributeBagPayload())
+
+
 class VectorPayloadProtocol(EvaluationProtocol[int, ObjectiveVectorPayload]):
     """Protocol that returns a request-free vector payload."""
 
@@ -306,7 +324,7 @@ class ProblemExecutionTests:
 
         attempts = evaluate_request_attempt(problem=problem, request=request)
 
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failure_indices == (0,)
         assert attempts.failures[0].request is request
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
@@ -379,24 +397,20 @@ class ProblemExecutionTests:
                 request=request,
             )
 
-    def test_legacy_attempt_projection_rejects_payload_without_record_shape(
+    def test_canonical_attempt_accepts_payload_without_legacy_projection(
         self,
     ) -> None:
         problem: Problem[int, int, MarkerPayload] = Problem(
             space=IntegerSpace(low=0, high=10),
             evaluation_protocol=MarkerPayloadProtocol(),
         )
-        compatibility_problem = cast(
-            Problem[int, int, CompatibilityEvaluationPayload],
-            cast(object, problem),
-        )
         request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
 
-        with pytest.raises(TypeError, match="could not be projected"):
-            _ = evaluate_request_attempt(
-                problem=compatibility_problem,
-                request=request,
-            )
+        attempts = evaluate_request_attempt(problem=problem, request=request)
+
+        assert attempts.success_indices == (0,)
+        assert attempts.successes[0].request is request
+        assert attempts.payloads == (MarkerPayload(label="marker:4"),)
 
     def test_legacy_outcome_projection_rejects_partial_record_shaped_payloads(
         self,
@@ -447,6 +461,18 @@ class ProblemExecutionTests:
                 request=request,
             )
 
+    def test_legacy_outcome_projection_rejects_attribute_bag_payload(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=AttributeBagProtocol(),
+        )
+        request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
+
+        with pytest.raises(TypeError, match="could not be projected"):
+            _ = evaluate_request_outcome(problem=problem, request=request)
+
     def test_legacy_outcome_projection_rejects_mismatched_record_candidate(
         self,
     ) -> None:
@@ -468,7 +494,7 @@ class ProblemExecutionTests:
         )
         request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
 
-        with pytest.raises(ValueError, match="outcome record candidate"):
+        with pytest.raises(ValueError, match="success payload candidate"):
             _ = evaluate_request_attempt(problem=problem, request=request)
 
     def test_legacy_vector_payload_projection_is_request_aligned(self) -> None:
@@ -574,12 +600,11 @@ class ProblemExecutionTests:
         )
 
         assert attempts.requests == (request_one, request_two, request_three)
-        assert attempts.outcome_indices == (0, 2)
+        assert attempts.success_indices == (0, 2)
         assert attempts.failure_indices == (1,)
-        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
-            1.0,
-            2.0,
-        )
+        assert tuple(
+            success.scalar_observation().value for success in attempts.successes
+        ) == (1.0, 2.0)
         failure = attempts.failures[0]
         assert failure.request is request_two
         assert failure.exception.exception_type == "builtins.ValueError"
@@ -609,11 +634,11 @@ class ProblemExecutionTests:
         )
 
         assert attempts.requests == (request_one, request_two, request_three)
-        assert attempts.outcome_indices == (1,)
+        assert attempts.success_indices == (1,)
         assert attempts.failure_indices == (0, 2)
-        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
-            1.0,
-        )
+        assert tuple(
+            success.scalar_observation().value for success in attempts.successes
+        ) == (1.0,)
         assert tuple(failure.proposal_id for failure in attempts.failures) == (
             "p-1",
             "p-3",
@@ -637,8 +662,8 @@ class ProblemExecutionTests:
             (request_one, request_two),
         )
 
-        assert attempts.outcomes == ()
-        assert attempts.outcome_indices == ()
+        assert attempts.successes == ()
+        assert attempts.success_indices == ()
         assert attempts.failure_indices == (0, 1)
         assert tuple(failure.proposal_id for failure in attempts.failures) == (
             "p-1",
@@ -655,7 +680,7 @@ class ProblemExecutionTests:
         attempts = SequentialEvaluator[int, int]().evaluate_attempts(problem, ())
 
         assert attempts.requests == ()
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failures == ()
         assert attempts.evaluation_count == 0
 
@@ -673,7 +698,7 @@ class ProblemExecutionTests:
             (request,),
         )
 
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failure_indices == (0,)
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
 
@@ -731,7 +756,7 @@ class ProblemExecutionTests:
             proposal=Proposal(candidate=4, proposal_id="p-1"),
         )
 
-        with pytest.raises(ValueError, match="outcome record request"):
+        with pytest.raises(ValueError, match="success payload request"):
             _ = SequentialEvaluator[int, int, LabelRecord]().evaluate_attempts(
                 problem,
                 (request,),

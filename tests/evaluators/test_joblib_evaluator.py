@@ -9,6 +9,7 @@ import pytest
 from typing_extensions import override
 
 from variopt import (
+    EvaluationAttemptBatch,
     EvaluationOutcome,
     EvaluationProtocol,
     EvaluationRequest,
@@ -43,7 +44,6 @@ from variopt.execution import (
     ExecutionResources,
     NestedParallelismPolicy,
 )
-from variopt.outcomes import EvaluationAttemptBatch
 
 AttemptCandidateT = TypeVar("AttemptCandidateT")
 SessionEvaluationT = TypeVar("SessionEvaluationT")
@@ -83,6 +83,13 @@ def _require_observation_records(
             raise TypeError(msg)
         observations.append(record)
     return tuple(observations)
+
+
+def _successful_observation_records(
+    attempts: EvaluationAttemptBatch[int, RequestAlignedEvaluationRecord],
+) -> tuple[Observation[int], ...]:
+    """Project successful scalar attempts into observation compatibility records."""
+    return tuple(success.scalar_observation() for success in attempts.successes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,9 +362,11 @@ class JoblibEvaluatorTests:
             ),
         )
 
-        assert attempts.outcome_indices == (0,)
+        assert attempts.success_indices == (0,)
         assert attempts.failure_indices == (1,)
-        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
+        assert tuple(
+            observation.value for observation in _successful_observation_records(attempts)
+        ) == (
             1.0,
         )
         assert attempts.failures[0].proposal_id == "p-2"
@@ -381,9 +390,11 @@ class JoblibEvaluatorTests:
             ),
         )
 
-        assert attempts.outcome_indices == (0, 2)
+        assert attempts.success_indices == (0, 2)
         assert attempts.failure_indices == (1,)
-        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
+        assert tuple(
+            observation.value for observation in _successful_observation_records(attempts)
+        ) == (
             1.0,
             4.0,
         )
@@ -406,8 +417,8 @@ class JoblibEvaluatorTests:
             ),
         )
 
-        assert attempts.outcomes == ()
-        assert attempts.outcome_indices == ()
+        assert attempts.successes == ()
+        assert attempts.success_indices == ()
         assert attempts.failure_indices == (0, 1)
         assert tuple(failure.proposal_id for failure in attempts.failures) == (
             "p-1",
@@ -422,7 +433,7 @@ class JoblibEvaluatorTests:
         attempts = evaluator.evaluate_attempts(problem, ())
 
         assert attempts.requests == ()
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failures == ()
         assert attempts.evaluation_count == 0
 
@@ -475,9 +486,11 @@ class AsyncJoblibEvaluatorTests:
             ),
         )
 
-        assert attempts.outcome_indices == (0, 2)
+        assert attempts.success_indices == (0, 2)
         assert attempts.failure_indices == (1,)
-        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
+        assert tuple(
+            observation.value for observation in _successful_observation_records(attempts)
+        ) == (
             1.0,
             4.0,
         )
@@ -491,7 +504,7 @@ class AsyncJoblibEvaluatorTests:
         attempts = evaluator.evaluate_attempts(problem, ())
 
         assert attempts.requests == ()
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failures == ()
         assert attempts.evaluation_count == 0
 
@@ -750,7 +763,7 @@ class AsyncJoblibEvaluatorTests:
         ].from_single_request_attempts(
             tuple(attempt for attempt in ordered_attempts if attempt is not None),
         )
-        assert attempts.outcome_indices == (0, 2)
+        assert attempts.success_indices == (0, 2)
         assert attempts.failure_indices == (1,)
         assert tuple(failure.proposal_id for failure in attempts.failures) == ("p-2",)
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
@@ -803,7 +816,7 @@ class AsyncJoblibEvaluatorTests:
             tuple(attempt for attempt in ordered_attempts if attempt is not None),
         )
 
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failure_indices == (0, 1)
         assert tuple(failure.proposal_id for failure in attempts.failures) == (
             "p-1",
@@ -857,7 +870,7 @@ class AsyncJoblibEvaluatorTests:
         ].from_single_request_attempts(
             tuple(attempt for attempt in ordered_attempts if attempt is not None),
         )
-        assert attempts.outcome_indices == (0,)
+        assert attempts.success_indices == (0,)
         assert attempts.failure_indices == (1,)
         assert attempts.failures[0].proposal_id == "p-2"
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
@@ -1136,7 +1149,7 @@ class AsyncJoblibEvaluatorTests:
                 return _State(
                     remaining_batches=state.remaining_batches,
                     tell_history=state.tell_history
-                    + (_require_observation_records(attempts.records),),
+                    + (_successful_observation_records(attempts),),
                     failure_history=state.failure_history
                     + (tuple(failure.proposal_id for failure in attempts.failures),),
                 )

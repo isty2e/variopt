@@ -6,15 +6,22 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....artifacts import CandidateRefinement, Proposal, ProposalEvaluationSpec
-from .....kernel import (
+from .....artifacts import (
+    CandidateRefinement,
+    EvaluationAttemptBatch,
+    EvaluationRequest,
+    EvaluationSuccess,
     KernelDiagnostics,
     KernelStatus,
+    ObservationPayload,
+    Proposal,
+    ProposalEvaluationSpec,
+)
+from .....kernel import (
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
-from .....outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from .....spaces import LeafPath
 from ..neighborhood import (
     BoundaryT,
@@ -40,37 +47,41 @@ def _as_local_search_context(
 
 def structured_episode_attempt_batch(
     *,
-    outcome: EvaluationOutcome[StructuredCandidateT] | None,
-    failed_attempts: Sequence[EvaluationAttemptBatch[StructuredCandidateT]],
-) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    success: EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None,
+    failed_attempts: Sequence[
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
+    ],
+) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
     """Build one structured local-search episode attempt batch.
 
     Parameters
     ----------
-    outcome : EvaluationOutcome[StructuredCandidateT] | None
-        Terminal successful outcome selected by the local-search episode, or
+    success : EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
+        Terminal successful attempt selected by the local-search episode, or
         ``None`` when no candidate evaluation succeeded.
-    failed_attempts : Sequence[EvaluationAttemptBatch[StructuredCandidateT]]
+    failed_attempts : Sequence[EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]]
         One-request failed evaluator attempts in encounter order.
 
     Returns
     -------
-    EvaluationAttemptBatch[StructuredCandidateT]
+    EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
         Dense attempt batch with the selected success first when present,
         followed by recorded failures.
     """
-    attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
-    if outcome is not None:
+    attempts: list[
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
+    ] = []
+    if success is not None:
         attempts.append(
             EvaluationAttemptBatch(
-                requests=(outcome.observation.request,),
-                outcomes=(outcome,),
+                attempts=(success,),
             )
         )
     attempts.extend(failed_attempts)
-    return EvaluationAttemptBatch[StructuredCandidateT].from_single_request_attempts(
-        tuple(attempts)
-    )
+    return EvaluationAttemptBatch[
+        StructuredCandidateT,
+        ObservationPayload,
+    ].from_single_request_attempts(tuple(attempts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,9 +93,9 @@ class PreparedStructuredLocalSearchRuntime(
 
     Parameters
     ----------
-    query : ProposalBatchQuery[BoundaryT, StructuredCandidateT]
+    query : ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]
         Original kernel batch query.
-    runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], EvaluationAttemptBatch[StructuredCandidateT]]
+    runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]], EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]]
         Evaluation runner bound to the current kernel invocation.
     neighborhood : StructuredDiscreteNeighborhood[BoundaryT, StructuredCandidateT]
         Prepared discrete neighborhood metadata.
@@ -94,10 +105,10 @@ class PreparedStructuredLocalSearchRuntime(
         Lookup table from leaf path to leaf space.
     """
 
-    query: ProposalBatchQuery[BoundaryT, StructuredCandidateT]
+    query: ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]
     runner: Callable[
-        [ProposalBatchQuery[BoundaryT, StructuredCandidateT]],
-        EvaluationAttemptBatch[StructuredCandidateT],
+        [ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]],
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload],
     ]
     neighborhood: StructuredDiscreteNeighborhood[BoundaryT, StructuredCandidateT]
     default_schedule: tuple[tuple[LeafPath, DiscreteLeafSpace], ...]
@@ -121,7 +132,7 @@ class PreparedStructuredLocalSearchRuntime(
         candidate: StructuredCandidateT,
         proposal: Proposal[StructuredCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
-    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Evaluate one canonical candidate through the prepared runner.
 
         Parameters
@@ -136,7 +147,7 @@ class PreparedStructuredLocalSearchRuntime(
 
         Returns
         -------
-        EvaluationAttemptBatch[StructuredCandidateT]
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
             Single-slot evaluation attempt batch returned by the runner.
 
         Raises
@@ -166,14 +177,14 @@ class PreparedStructuredLocalSearchRuntime(
             raise ValueError(msg)
         return local_attempt
 
-    def evaluate_candidate(
+    def evaluate_candidate_success(
         self,
         *,
         candidate: StructuredCandidateT,
         proposal: Proposal[StructuredCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
-    ) -> EvaluationOutcome[StructuredCandidateT] | None:
-        """Evaluate one candidate and return its successful outcome, if any.
+    ) -> EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None:
+        """Evaluate one candidate and return its successful attempt, if any.
 
         Parameters
         ----------
@@ -186,8 +197,8 @@ class PreparedStructuredLocalSearchRuntime(
 
         Returns
         -------
-        EvaluationOutcome[StructuredCandidateT] | None
-            Successful outcome returned by the runner, or ``None`` when the
+        EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
+            Successful attempt returned by the runner, or ``None`` when the
             single attempt slot records an evaluator failure.
 
         Raises
@@ -201,7 +212,7 @@ class PreparedStructuredLocalSearchRuntime(
             candidate=candidate,
             proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
-        ).single_outcome_or_none()
+        ).single_success_or_none()
 
     def evaluate_original_proposal(
         self,
@@ -209,7 +220,7 @@ class PreparedStructuredLocalSearchRuntime(
         proposal: Proposal[StructuredCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
         method: str,
-    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Evaluate one original proposal once without local search.
 
         Parameters
@@ -223,7 +234,7 @@ class PreparedStructuredLocalSearchRuntime(
 
         Returns
         -------
-        EvaluationAttemptBatch[StructuredCandidateT]
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
             Single attempt marked as stopped when successful, or the original
             failure attempt when evaluation failed.
 
@@ -249,22 +260,28 @@ class PreparedStructuredLocalSearchRuntime(
             msg = "kernel runner must return exactly one attempt for one proposal"
             raise ValueError(msg)
 
-        local_outcome = local_attempt.single_outcome_or_none()
-        if local_outcome is None:
+        local_success = local_attempt.single_success_or_none()
+        if local_success is None:
             return local_attempt
 
-        outcome: EvaluationOutcome[StructuredCandidateT] = EvaluationOutcome(
-            record=local_outcome.record,
-            evaluation_count=local_outcome.evaluation_count,
+        success = EvaluationSuccess[
+            StructuredCandidateT,
+            ObservationPayload,
+        ].from_scalar_observation(
+            observation=local_success.scalar_observation(),
+            request=local_success.request,
+            evaluation_count=local_success.evaluation_count,
             kernel_diagnostics=KernelDiagnostics(
                 backend="structured.local_search",
                 method=method,
                 status=KernelStatus.STOPPED,
                 message="local search disabled by run-method context",
             ),
+            refinement=local_success.refinement,
+            candidate_equal=self.query.problem.space.candidates_equal,
         )
         return structured_episode_attempt_batch(
-            outcome=outcome,
+            success=success,
             failed_attempts=(),
         )
 
@@ -422,22 +439,76 @@ class PreparedStructuredLocalSearchRuntime(
             changed_leaf_paths=changed_leaf_paths,
         )
 
+    def scalar_success(
+        self,
+        *,
+        proposal: Proposal[StructuredCandidateT],
+        proposal_evaluation_spec: ProposalEvaluationSpec | None,
+        candidate: StructuredCandidateT,
+        value: float,
+        evaluation_count: int,
+        refinement: CandidateRefinement[StructuredCandidateT] | None = None,
+        kernel_diagnostics: KernelDiagnostics | None = None,
+    ) -> EvaluationSuccess[StructuredCandidateT, ObservationPayload]:
+        """Build a canonical scalar success for a structured kernel result.
+
+        Parameters
+        ----------
+        proposal : Proposal[StructuredCandidateT]
+            Original proposal whose id should be preserved for the kernel result.
+        proposal_evaluation_spec : ProposalEvaluationSpec | None
+            Optional proposal-local evaluation metadata to preserve.
+        candidate : StructuredCandidateT
+            Candidate whose scalar payload is reported by the result.
+        value : float
+            Raw scalar objective value.
+        evaluation_count : int
+            Logical evaluation cost accumulated by the kernel episode.
+        refinement : CandidateRefinement[StructuredCandidateT] | None, optional
+            Optional provenance from the original proposal candidate to
+            ``candidate``.
+        kernel_diagnostics : KernelDiagnostics | None, optional
+            Optional diagnostics emitted by the kernel episode.
+
+        Returns
+        -------
+        EvaluationSuccess[StructuredCandidateT, ObservationPayload]
+            Request-owned success with request-free scalar payload.
+        """
+        return EvaluationSuccess(
+            request=EvaluationRequest(
+                proposal=Proposal(
+                    candidate=candidate,
+                    proposal_id=proposal.proposal_id,
+                ),
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            ),
+            payload=ObservationPayload.from_objective_value(
+                value=value,
+                direction=self.query.problem.direction,
+            ),
+            evaluation_count=evaluation_count,
+            refinement=refinement,
+            kernel_diagnostics=kernel_diagnostics,
+            candidate_equal=self.query.problem.space.candidates_equal,
+        )
+
 
 def prepare_structured_local_search_runtime(
     *,
-    query: ProposalBatchQuery[BoundaryT, StructuredCandidateT],
+    query: ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload],
     runner: Callable[
-        [ProposalBatchQuery[BoundaryT, StructuredCandidateT]],
-        EvaluationAttemptBatch[StructuredCandidateT],
+        [ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]],
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload],
     ],
 ) -> PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT]:
     """Prepare immutable neighborhood helpers once for one query.
 
     Parameters
     ----------
-    query : ProposalBatchQuery[BoundaryT, StructuredCandidateT]
+    query : ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]
         Original kernel batch query.
-    runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], EvaluationAttemptBatch[StructuredCandidateT]]
+    runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]], EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]]
         Evaluation runner bound to the current kernel invocation.
 
     Returns

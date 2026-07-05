@@ -22,7 +22,7 @@ from ..async_evaluator.artifacts import (
 from ..async_evaluator.sessions import PendingAwareBatchSession, ResumableBatchSession
 from .contracts import BoundaryT, JoblibEvaluationPayloadT
 
-SessionEvaluationT = TypeVar("SessionEvaluationT")
+SessionEvaluationT = TypeVar("SessionEvaluationT", covariant=True)
 
 
 class AsyncJoblibBatchSessionEvaluator(

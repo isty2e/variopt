@@ -7,7 +7,7 @@ from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-EvaluationT = TypeVar("EvaluationT")
+EvaluationT = TypeVar("EvaluationT", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)

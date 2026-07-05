@@ -111,16 +111,17 @@ the same logical sequence it would under `sync_batch`.
 ## Outcome Metadata
 
 Execution boundaries transport `EvaluationAttemptBatch` values, not just raw
-records. Successful attempts carry `EvaluationOutcome` metadata for kernel
+records. Successful attempts carry `EvaluationSuccess` metadata for kernel
 diagnostics, evaluation-cost accounting, and candidate-refinement provenance.
 Recorded user-code failures remain separate `EvaluationFailure` attempts.
 
 `Study` preserves successful-outcome metadata in terminal surfaces while
 keeping the semantic feedback payload-based. Run methods normally consume
 successful payload projections through `tell(...)`; methods that adapt from
-execution-side metadata can override `tell_outcomes(...)` or
-`tell_attempts(...)` without making refinement or failure reporting part of the
-evaluation protocol.
+execution-side metadata can override `tell_attempts(...)` without making
+refinement or failure reporting part of the evaluation protocol. The older
+`tell_outcomes(...)` hook remains for successful `EvaluationOutcome`
+compatibility streams.
 
 Among the built-in population methods, `CSAOptimizer` consumes recorded failed
 attempts by draining the failed proposal ids from pending CSA lifecycle state

@@ -7,9 +7,12 @@ import variopt
 import variopt.artifacts as artifact_facade
 from variopt.artifacts import (
     CandidateRefinement,
+    EvaluationAttemptBatch,
     EvaluationExceptionSnapshot,
     EvaluationFailure,
     EvaluationRequest,
+    KernelDiagnostics,
+    KernelStatus,
     NondominatedRunSurface,
     Observation,
     Proposal,
@@ -30,15 +33,13 @@ from variopt.execution import (
 )
 from variopt.kernel import (
     Kernel,
-    KernelDiagnostics,
-    KernelStatus,
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
 from variopt.methods import RunMethod, UnsupportedEvaluationFailureError
 from variopt.objective import Objective
-from variopt.outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from variopt.outcomes import EvaluationOutcome
 from variopt.problem import Problem
 from variopt.sampling import CandidateSampler
 from variopt.spaces import (

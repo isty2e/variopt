@@ -5,7 +5,12 @@ from typing import Generic
 
 from typing_extensions import TypeVar
 
-from ...artifacts import EvaluationRequest
+from ...artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationRequest,
+    materialize_attempt_batch_records,
+    materialize_success_records,
+)
 from ...evaluators.async_evaluator.artifacts import (
     BatchExecutionFailed,
     CompletionGroup,
@@ -16,7 +21,6 @@ from ...evaluators.async_evaluator.sessions import (
     EvaluationBatchSession,
     ResumableBatchSession,
 )
-from ...outcomes import EvaluationAttemptBatch
 from ...spaces import CandidateEquality
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import (
@@ -42,7 +46,7 @@ class StudyExactAsyncStepSession(
 
     Parameters
     ----------
-    study : StudyRunMethodOwner[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    study : StudyRunMethodOwner[RunMethodStateT, StudyEvaluationRecordT]
         Study façade that owns the run method and evaluator.
     requests : tuple[EvaluationRequest[CandidateT], ...]
         Requests issued for this step.
@@ -54,11 +58,7 @@ class StudyExactAsyncStepSession(
         Optional pre-filled attempt slots aligned to ``requests``.
     """
 
-    study: StudyRunMethodOwner[
-        CandidateT,
-        RunMethodStateT,
-        StudyEvaluationRecordT,
-    ]
+    study: StudyRunMethodOwner[RunMethodStateT, StudyEvaluationRecordT]
     requests: tuple[EvaluationRequest[CandidateT], ...]
     post_ask_state: RunMethodStateT
     batch_session: EvaluationBatchSession[
@@ -303,10 +303,11 @@ class StudyExactAsyncStepSession(
             attempts,
             candidate_equal=self.candidate_equal,
         )
-        records = attempts.records
+        feedback_attempts = materialize_attempt_batch_records(attempts)
+        records = materialize_success_records(feedback_attempts.successes)
         next_state = self.study.run_method.tell_attempts(
             self.post_ask_state,
-            attempts,
+            feedback_attempts,
         )
         self._final_records = records
         self._final_state = next_state

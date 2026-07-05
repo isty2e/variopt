@@ -8,15 +8,19 @@ from typing_extensions import override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ....artifacts import Observation, Proposal, ProposalEvaluationSpec
-from ....kernel import (
-    Kernel,
+from ....artifacts import (
+    EvaluationAttemptBatch,
     KernelDiagnostics,
     KernelStatus,
+    ObservationPayload,
+    Proposal,
+    ProposalEvaluationSpec,
+)
+from ....kernel import (
+    Kernel,
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from ....outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from .neighborhood import (
     BoundaryT,
     DiscreteLeafSpace,
@@ -37,11 +41,11 @@ class StructuredHillClimbKernel(
         ProposalBatchQuery[
             BoundaryT,
             StructuredCandidateT,
-            Observation[StructuredCandidateT],
+            ObservationPayload,
         ],
         EvaluationAttemptBatch[
             StructuredCandidateT,
-            Observation[StructuredCandidateT],
+            ObservationPayload,
         ],
     ],
     Generic[BoundaryT, StructuredCandidateT],
@@ -75,7 +79,7 @@ class StructuredHillClimbKernel(
         candidate: StructuredCandidateT,
         proposal: Proposal[StructuredCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Evaluate one candidate through the supplied evaluator runner."""
         return runtime.evaluate_candidate_attempt(
             candidate=candidate,
@@ -89,7 +93,7 @@ class StructuredHillClimbKernel(
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal: Proposal[StructuredCandidateT],
         proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Evaluate one original proposal once without local search."""
         return runtime.evaluate_original_proposal(
             proposal=proposal,
@@ -134,11 +138,13 @@ class StructuredHillClimbKernel(
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
         reserved_count: int,
-    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Run one local hill-climb episode for one original proposal."""
         space = runtime.neighborhood.space
         space.validate(proposal.candidate)
-        failed_attempts: list[EvaluationAttemptBatch[StructuredCandidateT]] = []
+        failed_attempts: list[
+            EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
+        ] = []
         context = self._proposal_context(runtime=runtime, proposal_index=proposal_index)
         proposal_evaluation_spec = runtime.proposal_evaluation_spec(
             proposal_index=proposal_index,
@@ -156,19 +162,18 @@ class StructuredHillClimbKernel(
             proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
-        current_outcome = current_attempt.single_outcome_or_none()
-        if current_outcome is None:
+        current_success = current_attempt.single_success_or_none()
+        if current_success is None:
             failed_attempts.append(current_attempt)
             return structured_episode_attempt_batch(
-                outcome=None,
+                success=None,
                 failed_attempts=failed_attempts,
             )
 
-        current_record = current_outcome.record
-        current_candidate = current_record.candidate
-        current_value = current_record.value
-        current_score = current_record.score
-        evaluation_count = current_outcome.evaluation_count
+        current_candidate = current_success.candidate
+        current_value = current_success.payload.value
+        current_score = current_success.payload.score
+        evaluation_count = current_success.evaluation_count
         completed_steps = 0
         converged = False
         episode_max_steps = self._episode_max_steps(runtime=runtime, context=context)
@@ -203,15 +208,14 @@ class StructuredHillClimbKernel(
                         proposal_evaluation_spec=proposal_evaluation_spec,
                     )
                     evaluation_count += proposed_attempt.evaluation_count
-                    proposed_outcome = proposed_attempt.single_outcome_or_none()
-                    if proposed_outcome is None:
+                    proposed_success = proposed_attempt.single_success_or_none()
+                    if proposed_success is None:
                         failed_attempts.append(proposed_attempt)
                         continue
-                    proposed_record = proposed_outcome.record
-                    proposed_score = proposed_record.score
+                    proposed_score = proposed_success.payload.score
                     if proposed_score < current_score:
-                        current_candidate = proposed_record.candidate
-                        current_value = proposed_record.value
+                        current_candidate = proposed_success.candidate
+                        current_value = proposed_success.payload.value
                         current_score = proposed_score
                         completed_steps += 1
                         improved = True
@@ -240,14 +244,11 @@ class StructuredHillClimbKernel(
                 refined_candidate=current_candidate,
             )
 
-        outcome = EvaluationOutcome(
-            record=Observation.from_objective_value(
-                proposal=proposal,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                candidate=current_candidate,
-                value=current_value,
-                direction=runtime.query.problem.direction,
-            ),
+        success = runtime.scalar_success(
+            proposal=proposal,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            candidate=current_candidate,
+            value=current_value,
             evaluation_count=evaluation_count,
             kernel_diagnostics=KernelDiagnostics(
                 backend="structured.local_search",
@@ -256,34 +257,33 @@ class StructuredHillClimbKernel(
                 message=message,
             ),
             refinement=refinement,
-            candidate_equal=runtime.query.problem.space.candidates_equal,
         )
         return structured_episode_attempt_batch(
-            outcome=outcome,
+            success=success,
             failed_attempts=failed_attempts,
         )
 
     @override
     def run(
         self,
-        query: ProposalBatchQuery[BoundaryT, StructuredCandidateT],
+        query: ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload],
         runner: Callable[
-            [ProposalBatchQuery[BoundaryT, StructuredCandidateT]],
-            EvaluationAttemptBatch[StructuredCandidateT],
+            [ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]],
+            EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload],
         ],
-    ) -> EvaluationAttemptBatch[StructuredCandidateT]:
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Run deterministic hill climbing for each proposal in a batch.
 
         Parameters
         ----------
-        query : ProposalBatchQuery[BoundaryT, StructuredCandidateT]
+        query : ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]
             Proposal batch and evaluation context to optimize.
-        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT]], EvaluationAttemptBatch[StructuredCandidateT]]
+        runner : Callable[[ProposalBatchQuery[BoundaryT, StructuredCandidateT, ObservationPayload]], EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]]
             Evaluator runner used to score candidate neighbors.
 
         Returns
         -------
-        EvaluationAttemptBatch[StructuredCandidateT]
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]
             Locally improved attempts and recorded failed local-search trials.
         """
         runtime: PreparedStructuredLocalSearchRuntime[
@@ -293,7 +293,10 @@ class StructuredHillClimbKernel(
             query=query,
             runner=runner,
         )
-        return EvaluationAttemptBatch[StructuredCandidateT].concatenate(
+        return EvaluationAttemptBatch[
+            StructuredCandidateT,
+            ObservationPayload,
+        ].concatenate(
             tuple(
                 self._optimize_proposal(
                     runtime=runtime,

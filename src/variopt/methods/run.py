@@ -6,7 +6,11 @@ from typing import Generic, TypeVar
 
 from typing_extensions import override
 
-from ..artifacts import ProposalEvaluationSpec
+from ..artifacts import (
+    EvaluationAttemptBatch,
+    ProposalEvaluationSpec,
+    materialize_success_records,
+)
 from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..execution import (
     SEQUENTIAL_EXECUTION_MODEL,
@@ -14,12 +18,14 @@ from ..execution import (
     ExecutionModel,
 )
 from ..kernel import ProposalKernelHint
-from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..typevars import ProposalT, RunMethodStateT
 from .base import SearchMethod
 
 OutcomeCandidateT = TypeVar("OutcomeCandidateT")
-RunMethodRecordT = TypeVar("RunMethodRecordT", bound=RequestAlignedEvaluationRecord)
+RunMethodRecordT = TypeVar(
+    "RunMethodRecordT",
+    bound=RequestAlignedEvaluationRecord,
+)
 
 
 class UnsupportedEvaluationFailureError(RuntimeError):
@@ -164,34 +170,6 @@ class RunMethod(
             Advanced immutable run-method state.
         """
 
-    def tell_outcomes(
-        self,
-        state: RunMethodStateT,
-        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, RunMethodRecordT]],
-    ) -> RunMethodStateT:
-        """Advance state from full evaluation outcomes.
-
-        Parameters
-        ----------
-        state : RunMethodStateT
-            Current immutable run-method state.
-        outcomes : Sequence[EvaluationOutcome[OutcomeCandidateT, RunMethodRecordT]]
-            Evaluation outcomes aligned to the proposals issued by ``ask``.
-
-        Returns
-        -------
-        RunMethodStateT
-            Advanced immutable run-method state.
-
-        Notes
-        -----
-        The default implementation preserves the canonical record-only
-        ``tell`` contract. Outcome-aware run methods may override this hook
-        when execution-side metadata, such as candidate-refinement provenance,
-        affects adaptive search state.
-        """
-        return self.tell(state, tuple(outcome.record for outcome in outcomes))
-
     def tell_attempts(
         self,
         state: RunMethodStateT,
@@ -221,8 +199,9 @@ class RunMethod(
         Notes
         -----
         The default implementation delegates success-only batches to
-        :meth:`tell_outcomes`. It never drops failures before delegation because
-        failed attempts may own pending proposal lifecycle in stateful optimizers.
+        :meth:`tell` using each success payload. It never drops failures before
+        delegation because failed attempts may own pending proposal lifecycle in
+        stateful optimizers.
         """
         if attempts.has_failures:
             raise UnsupportedEvaluationFailureError(
@@ -230,7 +209,7 @@ class RunMethod(
                 attempt_count=attempts.attempt_count,
             )
 
-        return self.tell_outcomes(state, attempts.outcomes)
+        return self.tell(state, materialize_success_records(attempts.successes))
 
     def proposal_kernel_hints(
         self,

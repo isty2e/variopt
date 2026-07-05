@@ -16,7 +16,11 @@ from .attempts import (
     EvaluationExceptionSnapshot,
     EvaluationFailure,
     EvaluationSuccess,
+    materialize_attempt_batch_records,
+    materialize_success_record,
+    materialize_success_records,
 )
+from .diagnostics import KernelDiagnostics, KernelStatus
 from .records import (
     ObjectiveVectorPayload,
     ObjectiveVectorRecord,
@@ -49,6 +53,8 @@ __all__ = [
     "EvaluationSuccess",
     "InteractionEvaluationSpec",
     "InteractionEvaluationUnit",
+    "KernelDiagnostics",
+    "KernelStatus",
     "NondominatedRunSurface",
     "ObjectiveVectorRecord",
     "ObjectiveVectorPayload",
@@ -60,4 +66,7 @@ __all__ = [
     "RunResult",
     "Trace",
     "TraceEvent",
+    "materialize_attempt_batch_records",
+    "materialize_success_record",
+    "materialize_success_records",
 ]

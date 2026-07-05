@@ -27,26 +27,28 @@ from tests.csa_support import (
 from variopt import (
     EvaluationAttemptBatch,
     EvaluationFailure,
-    EvaluationOutcome,
     EvaluationRequest,
     Observation,
     OptimizationDirection,
     Proposal,
 )
+from variopt.artifacts import EvaluationSuccess
 
 
 def _request(proposal: Proposal[int]) -> EvaluationRequest[int]:
     return EvaluationRequest(proposal=proposal)
 
 
-def _outcome(request: EvaluationRequest[int]) -> EvaluationOutcome[int, Observation[int]]:
-    return EvaluationOutcome(
-        observation=Observation.from_objective_value(
-            request=request,
-            candidate=request.candidate,
-            value=float(request.candidate * request.candidate),
-            direction=OptimizationDirection.MINIMIZE,
-        ),
+def _success(request: EvaluationRequest[int]) -> EvaluationSuccess[int, Observation[int]]:
+    observation = Observation.from_objective_value(
+        request=request,
+        candidate=request.candidate,
+        value=float(request.candidate * request.candidate),
+        direction=OptimizationDirection.MINIMIZE,
+    )
+    return EvaluationSuccess(
+        request=request,
+        payload=observation,
     )
 
 
@@ -71,8 +73,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         proposals = optimizer.ask(batch_size=2)
         requests = tuple(_request(proposal) for proposal in proposals)
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=requests,
-            failures=tuple(_failure(request) for request in requests),
+            attempts=tuple(_failure(request) for request in requests),
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -95,14 +96,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
         proposals = optimizer.ask(batch_size=2)
         requests = tuple(_request(proposal) for proposal in proposals)
-        successful_outcome = _outcome(requests[0])
+        successful_success = _success(requests[0])
         failed_proposal_id = proposals[1].proposal_id
         attempts = EvaluationAttemptBatch(
-            requests=requests,
-            outcomes=(successful_outcome,),
-            outcome_indices=(0,),
-            failures=(_failure(requests[1]),),
-            failure_indices=(1,),
+            attempts=(successful_success, _failure(requests[1])),
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -150,8 +147,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         requests = tuple(_request(proposal) for proposal in proposals)
         success_attempt: EvaluationAttemptBatch[int, Observation[int]] = (
             EvaluationAttemptBatch(
-                requests=(requests[0],),
-                outcomes=(_outcome(requests[0]),),
+                attempts=(_success(requests[0]),),
             )
         )
 
@@ -166,8 +162,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         failure_attempt: EvaluationAttemptBatch[int, Observation[int]] = (
             EvaluationAttemptBatch(
-                requests=(requests[1],),
-                failures=(_failure(requests[1]),),
+                attempts=(_failure(requests[1]),),
             )
         )
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -215,11 +210,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         requests = tuple(_request(proposal) for proposal in proposals)
         failed_proposal_id = proposals[1].proposal_id
         attempts = EvaluationAttemptBatch(
-            requests=requests,
-            outcomes=(_outcome(requests[0]),),
-            outcome_indices=(0,),
-            failures=(_failure(requests[1]),),
-            failure_indices=(1,),
+            attempts=(_success(requests[0]), _failure(requests[1])),
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -265,8 +256,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         proposals = optimizer.ask(batch_size=1)
         request = _request(proposals[0])
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(request,),
-            failures=(_failure(request),),
+            attempts=(_failure(request),),
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -318,8 +308,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         assert optimizer.state.refresh_in_progress
         failed_request = _request(refresh_batch[2])
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(failed_request,),
-            failures=(_failure(failed_request),),
+            attempts=(_failure(failed_request),),
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -343,8 +332,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         proposals = optimizer.ask(batch_size=1)
         failure_request = _request(Proposal(candidate=99))
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(failure_request,),
-            failures=(_failure(failure_request),),
+            attempts=(_failure(failure_request),),
         )
 
         with pytest.raises(ValueError, match="must reference proposal ids"):
@@ -363,8 +351,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         proposals = optimizer.ask(batch_size=1)
         failure_request = _request(Proposal(candidate=99, proposal_id="csa-missing"))
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(failure_request,),
-            failures=(_failure(failure_request),),
+            attempts=(_failure(failure_request),),
         )
 
         with pytest.raises(ValueError, match="does not correspond"):
@@ -385,8 +372,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             Proposal(candidate=99, proposal_id=proposals[0].proposal_id),
         )
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(failure_request,),
-            failures=(_failure(failure_request),),
+            attempts=(_failure(failure_request),),
         )
 
         with pytest.raises(ValueError, match="does not match"):
@@ -413,8 +399,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             ),
         )
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=requests,
-            failures=tuple(_failure(request) for request in requests),
+            attempts=tuple(_failure(request) for request in requests),
         )
 
         with pytest.raises(ValueError, match="distinct proposal ids"):
@@ -439,11 +424,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             ),
         )
         attempts = EvaluationAttemptBatch(
-            requests=(success_request, failure_request),
-            outcomes=(_outcome(success_request),),
-            outcome_indices=(0,),
-            failures=(_failure(failure_request),),
-            failure_indices=(1,),
+            attempts=(_success(success_request), _failure(failure_request)),
         )
 
         with pytest.raises(ValueError, match="distinct proposal ids"):

@@ -504,7 +504,7 @@ class StudyExactAsyncTests:
         resume_handle = session.suspend()
         stored_attempt = resume_handle.ordered_attempts[1]
         assert stored_attempt is not None
-        stored_outcome = stored_attempt.single_outcome_or_none()
+        stored_outcome = stored_attempt.single_success_or_none()
 
         assert len(first_completion_groups) == 1
         assert stored_outcome is not None
@@ -518,8 +518,8 @@ class StudyExactAsyncTests:
         second_resumed_attempt = resumed_session.ordered_attempts[1]
         assert first_resumed_attempt is not None
         assert second_resumed_attempt is not None
-        first_resumed_outcome = first_resumed_attempt.single_outcome_or_none()
-        second_resumed_outcome = second_resumed_attempt.single_outcome_or_none()
+        first_resumed_outcome = first_resumed_attempt.single_success_or_none()
+        second_resumed_outcome = second_resumed_attempt.single_success_or_none()
 
         assert tuple(observation.candidate for observation in observations) == (4, 2)
         assert first_resumed_outcome is not None

@@ -54,6 +54,9 @@ format. Stability guarantees for the public surface are documented in the
 - Direct and built-in local-search kernels now use `EvaluationAttemptBatch`
   runner/result contracts so failed local-search trials remain visible instead
   of being collapsed into successful optimized outcomes.
+- Outcome-aware `EvaluationAttemptBatch` now stores ordered attempt slots as its
+  authoritative state and exposes request/outcome/failure index views as derived
+  projections.
 
 ### Fixed
 

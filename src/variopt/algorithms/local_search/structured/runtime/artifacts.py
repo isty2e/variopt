@@ -5,9 +5,12 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....artifacts import Observation
-from .....kernel import KernelStatus
-from .....outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from .....artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationSuccess,
+    KernelStatus,
+    ObservationPayload,
+)
 from ..neighborhood import StructuredCandidateT
 
 
@@ -20,19 +23,21 @@ class StructuredImprovementScanResult(
 
     Parameters
     ----------
-    improved_outcome : EvaluationOutcome[StructuredCandidateT] | None
-        First improving outcome found during the scan, if any.
+    improved_success : EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
+        First improving success found during the scan, if any.
     evaluation_count : int
         Logical evaluation cost consumed by the scan.
-    failed_attempts : tuple[EvaluationAttemptBatch[StructuredCandidateT], ...], default=()
+    failed_attempts : tuple[EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload], ...], default=()
         Failed one-request evaluator attempts encountered during the scan.
     budget_exhausted : bool, default=False
         Whether the scan stopped because no evaluation budget remained.
     """
 
-    improved_outcome: EvaluationOutcome[StructuredCandidateT] | None
+    improved_success: EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
     evaluation_count: int
-    failed_attempts: tuple[EvaluationAttemptBatch[StructuredCandidateT], ...] = ()
+    failed_attempts: tuple[
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload], ...
+    ] = ()
     budget_exhausted: bool = False
 
 
@@ -45,25 +50,27 @@ class StructuredVariableNeighborhoodStageAttempt(
 
     Parameters
     ----------
-    improved_outcome : EvaluationOutcome[StructuredCandidateT] | None
-        Improved outcome found during the stage, if any.
+    improved_success : EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
+        Improved success found during the stage, if any.
     evaluation_count : int
         Number of evaluations consumed by the stage.
     terminal_status : KernelStatus
         Terminal kernel status after the stage.
     terminal_message : str
         Human-readable terminal status message.
-    failed_attempts : tuple[EvaluationAttemptBatch[StructuredCandidateT], ...], default=()
+    failed_attempts : tuple[EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload], ...], default=()
         Failed one-request evaluator attempts encountered during the stage.
     budget_exhausted : bool, default=False
         Whether the stage stopped because no evaluation budget remained.
     """
 
-    improved_outcome: EvaluationOutcome[StructuredCandidateT] | None
+    improved_success: EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
     evaluation_count: int
     terminal_status: KernelStatus
     terminal_message: str
-    failed_attempts: tuple[EvaluationAttemptBatch[StructuredCandidateT], ...] = ()
+    failed_attempts: tuple[
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload], ...
+    ] = ()
     budget_exhausted: bool = False
 
 
@@ -75,8 +82,8 @@ class StructuredLocalImprovementResult(
 
     Parameters
     ----------
-    record : Observation[StructuredCandidateT] | None
-        Final observation returned by the local-improvement episode, or
+    success : EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
+        Final success returned by the local-improvement episode, or
         ``None`` when the episode produced no successful evaluation.
     evaluation_count : int
         Total evaluations consumed by the episode.
@@ -84,15 +91,17 @@ class StructuredLocalImprovementResult(
         Number of completed neighborhood steps.
     converged : bool
         Whether the episode converged without finding further improvements.
-    failed_attempts : tuple[EvaluationAttemptBatch[StructuredCandidateT], ...], default=()
+    failed_attempts : tuple[EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload], ...], default=()
         Failed one-request evaluator attempts encountered during the episode.
     budget_exhausted : bool, default=False
         Whether the episode stopped because no evaluation budget remained.
     """
 
-    record: Observation[StructuredCandidateT] | None
+    success: EvaluationSuccess[StructuredCandidateT, ObservationPayload] | None
     evaluation_count: int
     completed_steps: int
     converged: bool
-    failed_attempts: tuple[EvaluationAttemptBatch[StructuredCandidateT], ...] = ()
+    failed_attempts: tuple[
+        EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload], ...
+    ] = ()
     budget_exhausted: bool = False

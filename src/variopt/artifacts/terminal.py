@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import InitVar, dataclass, field, fields, replace
-from typing import Generic, TypeVar, cast
+from typing import Generic, TypeVar
 
 from typing_extensions import Self
 
@@ -10,7 +10,12 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT
-from .attempts import EvaluationFailure, EvaluationSuccess
+from .attempts import (
+    EvaluationFailure,
+    EvaluationSuccess,
+    MaterializableEvaluationPayload,
+    materialize_success_record,
+)
 from .records import (
     ObjectiveVectorPayload,
     ObjectiveVectorRecord,
@@ -21,36 +26,33 @@ from .records import (
 from .refinement import CandidateRefinement
 from .requests import EvaluationRequest, Proposal
 
-RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
-RunPayloadT = TypeVar("RunPayloadT")
+RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord[object])
+RunPayloadT = TypeVar("RunPayloadT", bound=MaterializableEvaluationPayload[object])
+TerminalRecordCandidateT = TypeVar("TerminalRecordCandidateT")
 
 
 def _record_candidate_request(
-    record: RequestAlignedEvaluationRecord,
-) -> EvaluationRequest[CandidateT]:
+    record: RequestAlignedEvaluationRecord[TerminalRecordCandidateT],
+) -> EvaluationRequest[TerminalRecordCandidateT]:
     source_request = record.request
-    record_candidate = cast(CandidateT, record.candidate)
-    if type(source_request) is EvaluationRequest:
-        request = cast(EvaluationRequest[CandidateT], source_request)
-        if request.candidate is record_candidate:
-            return request
-        return EvaluationRequest(
-            proposal=Proposal(
-                candidate=record_candidate,
-                proposal_id=request.proposal_id,
-            ),
-            proposal_evaluation_spec=request.proposal_evaluation_spec,
-        )
-
-    return EvaluationRequest(proposal=Proposal(candidate=record_candidate))
+    record_candidate = record.candidate
+    if source_request.candidate is record_candidate:
+        return source_request
+    return EvaluationRequest(
+        proposal=Proposal(
+            candidate=record_candidate,
+            proposal_id=source_request.proposal_id,
+        ),
+        proposal_evaluation_spec=source_request.proposal_evaluation_spec,
+    )
 
 
 def _successes_from_records(
     *,
-    records: Sequence[RunRecordT],
+    records: Sequence[RequestAlignedEvaluationRecord[CandidateT]],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
     candidate_equal: CandidateEquality[CandidateT] | None,
-) -> tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]:
+) -> tuple[EvaluationSuccess[CandidateT, RequestAlignedEvaluationRecord[CandidateT]], ...]:
     record_tuple = tuple(records)
     refinement_tuple = tuple(refinements)
     if refinement_tuple and len(refinement_tuple) != len(record_tuple):
@@ -155,6 +157,7 @@ def _normalize_successes(
             payload=success.payload,
             evaluation_count=success.evaluation_count,
             refinement=success.refinement,
+            kernel_diagnostics=success.kernel_diagnostics,
             candidate_equal=candidate_equal,
         )
         for success in success_tuple
@@ -374,12 +377,12 @@ class Trace:
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
+class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunPayloadT]):
     """Terminal report for one completed study run.
 
     Parameters
     ----------
-    successes : tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
+    successes : tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]
         Full ordered successful attempt history produced by the run.
     evaluation_count : int
         Total logical evaluation cost accrued during the run.
@@ -390,7 +393,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         ``successes`` only.
     """
 
-    successes: tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
+    successes: tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
@@ -399,23 +402,18 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     def __init__(
         self,
         *,
-        successes: Sequence[EvaluationSuccess[CandidateT, RunRecordT]] | None = None,
+        successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]] | None = None,
         evaluation_count: int,
         trace: Trace | None = None,
         failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
-        records: Sequence[RunRecordT] | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
     ) -> None:
-        """Create one terminal report, normalizing legacy records to successes."""
-        normalized_successes: tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
-        if records is not None:
-            normalized_successes = _successes_from_records(
-                records=records,
-                refinements=_optional_refinement_tuple(refinements),
-                candidate_equal=candidate_equal,
-            )
-        elif successes is not None:
+        """Create one terminal report from request-owned successes."""
+        normalized_successes: tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]
+        if successes is None:
+            normalized_successes = ()
+        else:
             normalized_successes = tuple(successes)
             if refinements is not None:
                 normalized_successes = _successes_with_refinements(
@@ -423,8 +421,6 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
                     refinements=refinements,
                     candidate_equal=candidate_equal,
                 )
-        else:
-            normalized_successes = ()
 
         object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "successes", normalized_successes)
@@ -462,9 +458,9 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
             raise ValueError(msg)
 
     @property
-    def records(self) -> tuple[RunRecordT, ...]:
-        """Return successful payloads as the legacy record projection."""
-        return tuple(success.payload for success in self.successes)
+    def records(self) -> tuple[RequestAlignedEvaluationRecord, ...]:
+        """Return successful attempts as request-aligned record projections."""
+        return tuple(materialize_success_record(success) for success in self.successes)
 
     @property
     def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
@@ -474,7 +470,7 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     @classmethod
     def from_successes(
         cls,
-        successes: Sequence[EvaluationSuccess[CandidateT, RunRecordT]],
+        successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
@@ -502,19 +498,19 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     @classmethod
     def from_records(
         cls,
-        records: Sequence[RunRecordT],
+        records: Sequence[RequestAlignedEvaluationRecord[CandidateT]],
         evaluation_count: int | None = None,
         trace: Trace | None = None,
         refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
         failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
-    ) -> Self:
+    ) -> "RunReport[CandidateT, RequestAlignedEvaluationRecord[CandidateT]]":
         """Build a terminal report from an arbitrary record sequence.
 
         Parameters
         ----------
-        records : Sequence[RunRecordT]
-            Ordered record history to store in the report.
+        records : Sequence[RequestAlignedEvaluationRecord[CandidateT]]
+            Ordered request-aligned record history to store in the report.
         evaluation_count : int | None, optional
             Optional logical evaluation cost. Defaults to ``len(records)``.
         trace : Trace | None, optional
@@ -549,11 +545,13 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
-        return cls(
+        _ = cls
+        return RunReport[CandidateT, RequestAlignedEvaluationRecord[CandidateT]](
             successes=successes,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             failures=failure_tuple,
+            candidate_equal=candidate_equal,
         )
 
 
@@ -679,6 +677,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 payload=normalized_best_success.payload,
                 evaluation_count=normalized_best_success.evaluation_count,
                 refinement=normalized_best_success.refinement,
+                kernel_diagnostics=normalized_best_success.kernel_diagnostics,
                 candidate_equal=candidate_equal,
             )
             object.__setattr__(self, "best_success", normalized_best_success)
@@ -1261,6 +1260,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
                     ),
                     evaluation_count=success.evaluation_count,
                     refinement=success.refinement,
+                    kernel_diagnostics=success.kernel_diagnostics,
                     candidate_equal=candidate_equal,
                 )
             )

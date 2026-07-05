@@ -2,9 +2,12 @@
 
 from .artifacts import (
     CandidateRefinement,
+    EvaluationAttemptBatch,
     EvaluationExceptionSnapshot,
     EvaluationFailure,
     EvaluationRequest,
+    KernelDiagnostics,
+    KernelStatus,
     NondominatedRunSurface,
     ObjectiveVectorRecord,
     Observation,
@@ -30,8 +33,6 @@ from .execution import (
 )
 from .kernel import (
     Kernel,
-    KernelDiagnostics,
-    KernelStatus,
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
@@ -45,7 +46,7 @@ from .objective import (
     ScalarEvaluationProtocol,
 )
 from .operators import VariationOperator
-from .outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from .outcomes import EvaluationOutcome
 from .problem import InteractionProblem, Problem
 from .spaces import (
     ArraySpace,

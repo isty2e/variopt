@@ -8,15 +8,19 @@ from typing import Generic, Protocol
 from typing_extensions import TypeVar
 
 from ..artifacts import (
-    CandidateRefinement,
+    EvaluationAttemptBatch,
     EvaluationFailure,
     EvaluationRequest,
+    EvaluationSuccess,
     Proposal,
     ProposalEvaluationSpec,
     RunReport,
     Trace,
     TraceEvent,
+    materialize_attempt_batch_records,
+    materialize_success_records,
 )
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.async_evaluator.contracts import AsyncEvaluator
 from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
 from ..evaluators.base import Evaluator
@@ -27,12 +31,11 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .common import (
-    OutcomeToAttemptBatchSession,
     StudyEvaluationRecordT,
     build_evaluation_requests,
     supports_attempt_batch_sessions,
@@ -75,7 +78,7 @@ class _StudyStaleAsyncOwner(
     ) -> Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ]:
         """Return the configured evaluator."""
         ...
@@ -183,7 +186,7 @@ def open_stale_async_batch_session(
     async_evaluator: AsyncEvaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ],
     problem: Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
     run_method_ask: Callable[
@@ -254,18 +257,14 @@ def open_stale_async_batch_session(
     )
     if evaluation_budget is not None:
         evaluation_budget.consume(len(requests))
+    if not supports_attempt_batch_sessions(async_evaluator):
+        msg = "stale_async evaluator must expose attempt-batch sessions"
+        raise TypeError(msg)
+
     return (
         StaleAsyncActiveBatchSession(
             requests=requests,
-            batch_session=(
-                async_evaluator.open_attempt_session(problem, requests)
-                if supports_attempt_batch_sessions(async_evaluator)
-                else OutcomeToAttemptBatchSession(
-                    requests=requests,
-                    outcome_session=async_evaluator.open_session(problem, requests),
-                    candidate_equal=problem.space.candidates_equal,
-                )
-            ),
+            batch_session=async_evaluator.open_attempt_session(problem, requests),
             candidate_equal=problem.space.candidates_equal,
         ),
         next_state,
@@ -368,8 +367,7 @@ def run_stale_async(
     """
     _validate_stale_async_run_request(study, batch_size=batch_size)
 
-    records: list[StudyEvaluationRecordT] = []
-    refinements: list[CandidateRefinement[CandidateT] | None] | None = None
+    successes: list[EvaluationSuccess[CandidateT, StudyEvaluationRecordT]] = []
     failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
@@ -381,14 +379,16 @@ def run_stale_async(
         if initial_state is None
         else initial_state
     )
-    safe_records: tuple[StudyEvaluationRecordT, ...] | None = None
-    safe_refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None = None
+    safe_successes: tuple[
+        EvaluationSuccess[CandidateT, StudyEvaluationRecordT],
+        ...,
+    ] | None = None
     safe_failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     safe_trace = Trace()
     safe_evaluation_count = 0
     safe_state = state
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
-        safe_records = ()
+        safe_successes = ()
     active_sessions: list[
         StaleAsyncActiveBatchSession[CandidateT, StudyEvaluationRecordT]
     ] = []
@@ -431,10 +431,11 @@ def run_stale_async(
                 if len(completed_groups) > 0:
                     completed_any = True
                 for completed_group in completed_groups:
-                    group_records = completed_group.records
-                    group_refinements = tuple(
-                        outcome.refinement for outcome in completed_group.outcomes
+                    feedback_group = materialize_attempt_batch_records(
+                        completed_group
                     )
+                    group_successes = feedback_group.successes
+                    group_records = materialize_success_records(group_successes)
                     group_evaluation_count = completed_group.evaluation_count
                     if evaluation_budget is not None:
                         unmetered_evaluation_count = (
@@ -446,29 +447,18 @@ def run_stale_async(
                         record_budget_remaining -= completed_group.attempt_count
                     next_state = study.run_method.tell_attempts(
                         state,
-                        completed_group,
+                        feedback_group,
                     )
-                    records_before_group = len(records)
-                    records.extend(group_records)
-                    failures.extend(completed_group.failures)
-                    if refinements is not None:
-                        refinements.extend(group_refinements)
-                    elif any(
-                        refinement is not None for refinement in group_refinements
-                    ):
-                        refinement_history: list[
-                            CandidateRefinement[CandidateT] | None
-                        ] = [None for _index in range(records_before_group)]
-                        refinement_history.extend(group_refinements)
-                        refinements = refinement_history
+                    successes.extend(group_successes)
+                    failures.extend(feedback_group.failures)
                     state = next_state
                     trace_events.append(
                         TraceEvent(
                             kind="study.step",
                             message=(
-                                f"completed {completed_group.attempt_count} attempt(s): "
+                                f"completed {feedback_group.attempt_count} attempt(s): "
                                 f"{len(group_records)} succeeded, "
-                                f"{len(completed_group.failures)} failed"
+                                f"{len(feedback_group.failures)} failed"
                             ),
                             value=trace_value_for_records(group_records),
                         ),
@@ -477,10 +467,7 @@ def run_stale_async(
                         stop_at_checkpoint_boundary
                         and study.run_method.is_checkpoint_safe_state(state)
                     ):
-                        safe_records = tuple(records)
-                        safe_refinements = (
-                            None if refinements is None else tuple(refinements)
-                        )
+                        safe_successes = tuple(successes)
                         safe_failures = tuple(failures)
                         safe_trace = Trace(events=tuple(trace_events))
                         safe_evaluation_count = (
@@ -496,7 +483,10 @@ def run_stale_async(
                         else evaluation_budget.remaining
                     )
                     if remaining > 0 and not study.run_method.is_exhausted(state):
-                        refill_batch_size = min(completed_group.attempt_count, remaining)
+                        refill_batch_size = min(
+                            feedback_group.attempt_count,
+                            remaining,
+                        )
                         refill_session, state = (
                             _open_stale_async_batch_session_for_study(
                                 study,
@@ -519,15 +509,17 @@ def run_stale_async(
         raise
     except Exception as exception:
         _cancel_active_stale_async_sessions(active_sessions)
-        partial_report = RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-            records=tuple(records),
+        partial_report = RunReport[
+            CandidateT,
+            StudyEvaluationRecordT,
+        ].from_successes(
+            successes=tuple(successes),
             evaluation_count=(
                 max_evaluations - record_budget_remaining
                 if evaluation_budget is None
                 else max_evaluations - evaluation_budget.remaining
             ),
             trace=Trace(events=tuple(trace_events)),
-            refinements=None if refinements is None else tuple(refinements),
             failures=tuple(failures),
             candidate_equal=study.problem.space.candidates_equal,
         )
@@ -536,15 +528,14 @@ def run_stale_async(
             StudyEvaluationRecordT,
         ] | None = None
         checkpoint_safe_state: RunMethodStateT | None = None
-        if safe_records is not None:
+        if safe_successes is not None:
             checkpoint_safe_report = RunReport[
                 CandidateT,
                 StudyEvaluationRecordT,
-            ].from_records(
-                records=safe_records,
+            ].from_successes(
+                successes=safe_successes,
                 evaluation_count=safe_evaluation_count,
                 trace=safe_trace,
-                refinements=safe_refinements,
                 failures=safe_failures,
                 candidate_equal=study.problem.space.candidates_equal,
             )
@@ -567,17 +558,16 @@ def run_stale_async(
     if stop_at_checkpoint_boundary and not study.run_method.is_checkpoint_safe_state(
         state
     ):
-        if safe_records is None:
+        if safe_successes is None:
             msg = (
                 "run did not reach a checkpoint-safe state within the evaluation budget"
             )
             raise RuntimeError(msg)
         return (
-            RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-                records=safe_records,
+            RunReport[CandidateT, StudyEvaluationRecordT].from_successes(
+                successes=safe_successes,
                 evaluation_count=safe_evaluation_count,
                 trace=safe_trace,
-                refinements=safe_refinements,
                 failures=safe_failures,
                 candidate_equal=study.problem.space.candidates_equal,
             ),
@@ -585,15 +575,14 @@ def run_stale_async(
         )
 
     return (
-        RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-            records=records,
+        RunReport[CandidateT, StudyEvaluationRecordT].from_successes(
+            successes=successes,
             evaluation_count=(
                 max_evaluations - record_budget_remaining
                 if evaluation_budget is None
                 else max_evaluations - evaluation_budget.remaining
             ),
             trace=Trace(events=tuple(trace_events)),
-            refinements=None if refinements is None else tuple(refinements),
             failures=tuple(failures),
             candidate_equal=study.problem.space.candidates_equal,
         ),

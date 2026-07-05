@@ -9,6 +9,7 @@ from typing_extensions import TypeVar as DefaultTypeVar
 from typing_extensions import override
 
 from ..artifacts import (
+    EvaluationAttemptBatch,
     EvaluationRequest,
     ObjectiveVectorPayload,
     ObservationPayload,
@@ -16,7 +17,7 @@ from ..artifacts import (
 from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ..execution import ExecutionResources, NestedParallelismPolicy
-from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT
 from .base import Evaluator
@@ -160,7 +161,7 @@ def _evaluate_indexed_request_attempt(
     index: int,
     problem: Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
     request: EvaluationRequest[CandidateT],
-) -> tuple[int, EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]]:
+) -> tuple[int, EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]]:
     """Execute one request attempt and carry its original logical index."""
     return (
         index,
@@ -313,7 +314,7 @@ class MpiEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
+    ) -> EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]:
         """Execute a request batch through MPI into a dense attempt batch.
 
         Parameters
@@ -325,7 +326,7 @@ class MpiEvaluator(
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+        EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]
             Dense attempt batch aligned to ``requests``.
         """
         executor = self._create_executor()
@@ -349,7 +350,7 @@ class MpiEvaluator(
             )
             return EvaluationAttemptBatch[
                 CandidateT,
-                RequestAlignedEvaluationRecord,
+                MpiEvaluationPayloadT,
             ].from_single_request_attempts(attempts)
         finally:
             executor.shutdown(wait=True)
@@ -386,10 +387,10 @@ class MpiEvaluator(
         self,
         *,
         future: MpiFuture[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]
         ],
         expected_index: int,
-    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
+    ) -> EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]:
         """Return one future attempt and verify logical batch alignment."""
         return self._resolve_ordered_result(
             future=future,

@@ -7,6 +7,7 @@ import pytest
 from typing_extensions import override
 
 from variopt import (
+    EvaluationAttemptBatch,
     EvaluationRequest,
     IntegerSpace,
     Objective,
@@ -29,6 +30,13 @@ def _requests(
 ) -> tuple[EvaluationRequest[int], ...]:
     """Lower proposal fixtures into canonical evaluation requests."""
     return tuple(EvaluationRequest(proposal=proposal) for proposal in proposals)
+
+
+def _successful_observation_values(
+    attempts: EvaluationAttemptBatch[int],
+) -> tuple[float, ...]:
+    """Return scalar objective values from successful attempt slots."""
+    return tuple(success.scalar_observation().value for success in attempts.successes)
 
 
 class SquareObjective(Objective[int]):
@@ -207,12 +215,9 @@ class MpiEvaluatorTests:
             ),
         )
 
-        assert attempts.outcome_indices == (0, 2)
+        assert attempts.success_indices == (0, 2)
         assert attempts.failure_indices == (1,)
-        assert tuple(outcome.observation.value for outcome in attempts.outcomes) == (
-            1.0,
-            4.0,
-        )
+        assert _successful_observation_values(attempts) == (1.0, 4.0)
         assert attempts.failures[0].proposal_id == "p-2"
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
         assert executor.submission_count == 3
@@ -232,7 +237,7 @@ class MpiEvaluatorTests:
         attempts = evaluator.evaluate_attempts(problem, ())
 
         assert attempts.requests == ()
-        assert attempts.outcomes == ()
+        assert attempts.successes == ()
         assert attempts.failures == ()
         assert attempts.evaluation_count == 0
         assert executor.submission_count == 0

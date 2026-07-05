@@ -9,7 +9,12 @@ from typing_extensions import override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ....artifacts import Observation, Proposal
+from ....artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationSuccess,
+    Observation,
+    Proposal,
+)
 from ....distance import require_valid_distance
 from ....diversity import DiversityMetric
 from ....execution import (
@@ -21,7 +26,7 @@ from ....execution import (
 from ....json_types import JSONDict, JSONValue
 from ....kernel import ProposalLocalSearchContext
 from ....methods import RunMethod
-from ....outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ....outcomes import EvaluationOutcome
 from ....randomness import (
     RandomSeed,
     RandomStateSnapshot,
@@ -613,7 +618,6 @@ class CSAOptimizer(
             observations,
         )
 
-    @override
     def tell_outcomes(
         self,
         state: CSAEngineState[CandidateT],
@@ -658,6 +662,35 @@ class CSAOptimizer(
             explicit_local_displacement_leaf_paths=tuple(explicit_paths),
         )
 
+    def _tell_successes(
+        self,
+        state: CSAEngineState[CandidateT],
+        successes: Sequence[
+            EvaluationSuccess[OutcomeCandidateT, Observation[CandidateT]]
+        ],
+    ) -> CSAEngineState[CandidateT]:
+        observations: list[Observation[CandidateT]] = []
+        explicit_paths: list[tuple[LeafPath, ...] | None] | None = None
+        for success_index, success in enumerate(successes):
+            observations.append(success.payload)
+            refinement = success.refinement
+            if explicit_paths is not None:
+                explicit_paths.append(
+                    None if refinement is None else refinement.changed_leaf_paths
+                )
+            elif refinement is not None:
+                explicit_paths = [None for _index in range(success_index)]
+                explicit_paths.append(refinement.changed_leaf_paths)
+
+        if explicit_paths is None:
+            return self.tell(state, tuple(observations))
+
+        return self._tell_with_explicit_local_displacements(
+            state,
+            tuple(observations),
+            explicit_local_displacement_leaf_paths=tuple(explicit_paths),
+        )
+
     @override
     def tell_attempts(
         self,
@@ -686,15 +719,15 @@ class CSAOptimizer(
             If failed attempts do not align with distinct pending proposal ids.
         """
         if not attempts.has_failures:
-            return self.tell_outcomes(state, attempts.outcomes)
+            return self._tell_successes(state, attempts.successes)
 
         failed_proposal_ids = self._validate_failed_attempt_proposal_ids(
             state,
             attempts,
         )
         next_state = state.consume_failed_pending_proposals(failed_proposal_ids)
-        if len(attempts.outcomes) > 0:
-            return self.tell_outcomes(next_state, attempts.outcomes)
+        if len(attempts.successes) > 0:
+            return self._tell_successes(next_state, attempts.successes)
 
         if next_state.generation_state.ready_to_commit or (
             next_state.pending_proposals.is_empty
@@ -714,12 +747,12 @@ class CSAOptimizer(
     ) -> frozenset[str]:
         failed_proposal_ids: set[str] = set()
         successful_proposal_ids = {
-            request.proposal.proposal_id
-            for request in attempts.outcome_requests
-            if request.proposal.proposal_id is not None
+            success.proposal_id
+            for success in attempts.successes
+            if success.proposal_id is not None
         }
-        for failure_request in attempts.failure_requests:
-            proposal = failure_request.proposal
+        for failure in attempts.failures:
+            proposal = failure.proposal
             proposal_id = proposal.proposal_id
             if proposal_id is None:
                 msg = (

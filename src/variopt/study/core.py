@@ -10,7 +10,14 @@ from variopt.generic_runtime import (
     install_frozen_generic_slots_pickle,
 )
 
-from ..artifacts import EvaluationRequest, Proposal, RunReport, RunResult
+from ..artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationRequest,
+    Proposal,
+    RunReport,
+    RunResult,
+)
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.base import Evaluator
 from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
@@ -19,7 +26,7 @@ from ..execution import (
 )
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
-from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT, RunMethodStateT
 from .common import StudyEvaluationRecordT
@@ -55,7 +62,7 @@ class Study(
         Problem that defines the search space and evaluation semantics.
     run_method : RunMethod[RunMethodStateT, Proposal[CandidateT], StudyEvaluationRecordT]
         Stateful optimizer that owns cross-step search memory.
-    evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
+    evaluator : Evaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
         Execution backend that turns requests into evaluation outcomes.
     kernel : Kernel[ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]] | None, optional
         Optional within-step refinement kernel. Defaults to
@@ -77,7 +84,7 @@ class Study(
     evaluator: Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ]
     kernel: Kernel[
         ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
@@ -96,7 +103,7 @@ class Study(
         evaluator: Evaluator[
             Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
             EvaluationRequest[CandidateT],
-            EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+            EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
         ],
         kernel: Kernel[
             ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],

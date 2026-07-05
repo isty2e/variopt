@@ -4,20 +4,49 @@ from typing import Protocol
 
 from typing_extensions import TypeVar
 
-from ...artifacts import EvaluationRequest, Proposal
+from ...artifacts import EvaluationAttemptBatch, EvaluationRequest, Proposal
+from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluators.base import Evaluator
 from ...kernel import Kernel, ProposalBatchQuery
 from ...methods import RunMethod
-from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import StudyEvaluationRecordT
 
+AssimilationCandidateT = TypeVar("AssimilationCandidateT")
+AssimilatorRecordT = TypeVar(
+    "AssimilatorRecordT",
+    bound=RequestAlignedEvaluationRecord[object],
+    contravariant=True,
+)
+OwnerRunMethodRecordT = TypeVar(
+    "OwnerRunMethodRecordT",
+    bound=RequestAlignedEvaluationRecord[object],
+    contravariant=True,
+)
 BoundaryT = TypeVar("BoundaryT")
 
 
+class AttemptBatchAssimilator(
+    Protocol[RunMethodStateT, AssimilatorRecordT],
+):
+    """Capability that advances run-method state from materialized attempts."""
+
+    def tell_attempts(
+        self,
+        state: RunMethodStateT,
+        attempts: EvaluationAttemptBatch[
+            AssimilationCandidateT,
+            AssimilatorRecordT,
+        ],
+    ) -> RunMethodStateT:
+        """Assimilate one dense request-aligned attempt batch."""
+        ...
+
+
 class StudyRunMethodOwner(
-    Protocol[CandidateT, RunMethodStateT, StudyEvaluationRecordT]
+    Protocol[RunMethodStateT, OwnerRunMethodRecordT],
 ):
     """Subset of study state required to assimilate exact-async completions.
 
@@ -30,11 +59,7 @@ class StudyRunMethodOwner(
     @property
     def run_method(
         self,
-    ) -> RunMethod[
-        RunMethodStateT,
-        Proposal[CandidateT],
-        StudyEvaluationRecordT,
-    ]:
+    ) -> AttemptBatchAssimilator[RunMethodStateT, OwnerRunMethodRecordT]:
         """Return the run method used to assimilate completed records."""
         ...
 
@@ -74,7 +99,7 @@ class StudyExactAsyncOwner(
     ) -> Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ]:
         """Return the configured evaluator."""
         ...

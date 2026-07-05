@@ -48,7 +48,12 @@ from variopt import (
     RunReport,
     Study,
 )
-from variopt.artifacts import ProposalEvaluationSpec, Trace, TraceEvent
+from variopt.artifacts import (
+    EvaluationSuccess,
+    ProposalEvaluationSpec,
+    Trace,
+    TraceEvent,
+)
 from variopt.evaluators import JoblibEvaluator, SequentialEvaluator
 from variopt.execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -61,7 +66,7 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
-from variopt.study.common import build_evaluation_requests
+from variopt.study.common import build_evaluation_requests, validate_aligned_outcomes
 from variopt.study.execution import evaluate_batch_sync
 
 
@@ -97,7 +102,7 @@ class KeyboardInterruptObjective(Objective[int]):
 class RepeatingSubqueryKernel(
     Kernel[
         ProposalBatchQuery[int, int, Observation[int]],
-        EvaluationAttemptBatch[int],
+        EvaluationAttemptBatch[int, Observation[int]],
     ],
 ):
     """Kernel that intentionally reuses one trial subquery object."""
@@ -108,31 +113,50 @@ class RepeatingSubqueryKernel(
         query: ProposalBatchQuery[int, int, Observation[int]],
         runner: Callable[
             [ProposalBatchQuery[int, int, Observation[int]]],
-            EvaluationAttemptBatch[int],
+            EvaluationAttemptBatch[int, Observation[int]],
         ],
-    ) -> EvaluationAttemptBatch[int]:
+    ) -> EvaluationAttemptBatch[int, Observation[int]]:
         subquery = ProposalBatchQuery(
             problem=query.problem,
             proposals=(Proposal(candidate=max(0, query.proposals[0].candidate - 1)),),
             execution_resources=query.execution_resources,
         )
-        first_outcome = runner(subquery).outcomes[0]
-        second_outcome = runner(subquery).outcomes[0]
-        refined_record = second_outcome.record
-        outcome: EvaluationOutcome[int, Observation[int]] = EvaluationOutcome(
-            record=Observation.from_objective_value(
-                proposal=query.proposals[0],
+        first_success = runner(subquery).successes[0]
+        second_success = runner(subquery).successes[0]
+        refined_record = second_success.scalar_observation()
+        refinement = None
+        if refined_record.candidate != query.proposals[0].candidate:
+            refinement = CandidateRefinement(
+                source_candidate=query.proposals[0].candidate,
+                refined_candidate=refined_record.candidate,
+                changed_leaf_paths=((),),
+            )
+        proposal_evaluation_spec = None
+        if query.proposal_evaluation_specs is not None:
+            proposal_evaluation_spec = query.proposal_evaluation_specs[0]
+        request = EvaluationRequest(
+            proposal=Proposal(
                 candidate=refined_record.candidate,
-                value=refined_record.value,
-                direction=query.problem.direction,
+                proposal_id=query.proposals[0].proposal_id,
             ),
+            proposal_evaluation_spec=proposal_evaluation_spec,
+        )
+        observation = Observation.from_objective_value(
+            request=request,
+            candidate=refined_record.candidate,
+            value=refined_record.value,
+            direction=query.problem.direction,
+        )
+        success = EvaluationSuccess(
+            request=request,
+            payload=observation,
             evaluation_count=(
-                first_outcome.evaluation_count + second_outcome.evaluation_count
+                first_success.evaluation_count + second_success.evaluation_count
             ),
+            refinement=refinement,
         )
         return EvaluationAttemptBatch(
-            requests=(outcome.record.request,),
-            outcomes=(outcome,),
+            attempts=(success,),
         )
 
 
@@ -497,6 +521,36 @@ class StudyTests:
 
         assert outcomes[0].record.candidate == 3
         assert outcomes[0].record.value == 9.0
+
+    def test_validate_aligned_outcomes_uses_candidate_equal_for_request_alignment(
+        self,
+    ) -> None:
+        expected_request = EvaluationRequest(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(3),
+                proposal_id="p-1",
+            ),
+        )
+        outcome_request = EvaluationRequest(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(3),
+                proposal_id="p-1",
+            ),
+        )
+        outcome = EvaluationOutcome(
+            record=Observation(
+                request=outcome_request,
+                candidate=outcome_request.candidate,
+                value=9.0,
+                score=9.0,
+            ),
+        )
+
+        validate_aligned_outcomes(
+            (expected_request,),
+            (outcome,),
+            candidate_equal=SpaceOwnedEqualitySpace().candidates_equal,
+        )
 
     def test_step_uses_problem_evaluation_protocol_basis(self) -> None:
         problem = Problem(
@@ -1525,7 +1579,7 @@ class StudyTests:
         state = optimizer.create_initial_state()
 
         with pytest.raises(
-            ValueError, match="evaluator outcomes must align with input request order"
+            ValueError, match="attempt batch requests must align with input request order"
         ):
             _ = study.step(state, batch_size=2)
 
@@ -1651,5 +1705,5 @@ class StudyTests:
         )
 
         assert len(result.observations) == 2
-        assert result.evaluation_count == 2
+        assert result.evaluation_count == 14
         assert len(final_state.tell_history) == 2

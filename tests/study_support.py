@@ -24,7 +24,15 @@ from variopt import (
     RunMethod,
     SearchSpace,
 )
-from variopt.artifacts import ObservationPayload, ProposalEvaluationSpec
+from variopt.artifacts import (
+    EvaluationFailure,
+    EvaluationSuccess,
+    KernelDiagnostics,
+    KernelStatus,
+    ObservationPayload,
+    ProposalEvaluationSpec,
+    materialize_success_records,
+)
 from variopt.artifacts.records import RequestAlignedEvaluationRecord
 from variopt.evaluation_pipeline import (
     evaluate_request_attempt,
@@ -49,8 +57,6 @@ from variopt.execution import (
     ExecutionResources,
 )
 from variopt.kernel import (
-    KernelDiagnostics,
-    KernelStatus,
     ProposalBatchQuery,
     ProposalLocalSearchContext,
 )
@@ -218,13 +224,24 @@ class SpaceOwnedEqualityRefinementKernel(
         proposal = query.proposals[0]
         record_candidate = SpaceOwnedEqualityCandidate(1)
         refinement_candidate = SpaceOwnedEqualityCandidate(1)
-        outcome = EvaluationOutcome(
-            observation=Observation.from_objective_value(
-                proposal=proposal,
+        request = EvaluationRequest(
+            proposal=Proposal(
                 candidate=record_candidate,
-                value=1.0,
-                direction=query.problem.direction,
+                proposal_id=proposal.proposal_id,
             ),
+        )
+        observation = Observation.from_objective_value(
+            request=request,
+            candidate=record_candidate,
+            value=1.0,
+            direction=query.problem.direction,
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ] = EvaluationSuccess(
+            request=request,
+            payload=observation,
             refinement=CandidateRefinement(
                 source_candidate=proposal.candidate,
                 refined_candidate=refinement_candidate,
@@ -233,8 +250,7 @@ class SpaceOwnedEqualityRefinementKernel(
             candidate_equal=query.problem.space.candidates_equal,
         )
         return EvaluationAttemptBatch(
-            requests=(outcome.observation.request,),
-            outcomes=(outcome,),
+            attempts=(success,),
         )
 
 
@@ -264,10 +280,23 @@ class SpaceOwnedEqualityAsyncEvaluator(
             ...,
         ],
     ]
+    _pending_attempt_groups: dict[
+        str,
+        tuple[
+            CompletionGroup[
+                EvaluationAttemptBatch[
+                    SpaceOwnedEqualityCandidate,
+                    Observation[SpaceOwnedEqualityCandidate],
+                ]
+            ],
+            ...,
+        ],
+    ]
 
     def __init__(self) -> None:
         self._next_batch_id = 0
         self._pending_groups = {}
+        self._pending_attempt_groups = {}
 
     @override
     def submit_batch(
@@ -333,6 +362,72 @@ class SpaceOwnedEqualityAsyncEvaluator(
     def cancel(self, handle: EvaluationBatchHandle) -> None:
         _ = self._pending_groups.pop(handle.batch_id, None)
 
+    def open_attempt_session(
+        self,
+        problem: Problem[
+            int | SpaceOwnedEqualityCandidate,
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ],
+        requests: Sequence[EvaluationRequest[SpaceOwnedEqualityCandidate]],
+    ) -> EvaluationBatchSession[
+        EvaluationAttemptBatch[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ]
+    ]:
+        handle = EvaluationBatchHandle(
+            batch_id=f"space-owned-equality-attempt-{self._next_batch_id}",
+            request_count=len(requests),
+        )
+        self._next_batch_id += 1
+        self._pending_attempt_groups[handle.batch_id] = tuple(
+            CompletionGroup(
+                start_index=index,
+                outcomes=(
+                    _make_space_owned_equality_attempt(
+                        problem=problem,
+                        request=request,
+                    ),
+                ),
+            )
+            for index, request in reversed(tuple(enumerate(requests)))
+        )
+        return _SpaceOwnedEqualityAttemptBatchSession(evaluator=self, _handle=handle)
+
+    def poll_attempts(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[
+        CompletionGroup[
+            EvaluationAttemptBatch[
+                SpaceOwnedEqualityCandidate,
+                Observation[SpaceOwnedEqualityCandidate],
+            ]
+        ]
+    ]:
+        pending_groups = self._pending_attempt_groups.get(handle.batch_id)
+        if pending_groups is None:
+            msg = f"unknown async attempt batch handle: {handle.batch_id}"
+            raise ValueError(msg)
+        if len(pending_groups) == 0:
+            raise BatchExecutionFailed(
+                handle=handle,
+                kind="infrastructure",
+                cause=RuntimeError("async attempt batch exhausted unexpectedly"),
+            )
+
+        completion_group = pending_groups[0]
+        remaining_groups = pending_groups[1:]
+        if len(remaining_groups) == 0:
+            _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+        else:
+            self._pending_attempt_groups[handle.batch_id] = remaining_groups
+        return (completion_group,)
+
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
+        _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+
 
 def _make_space_owned_equality_outcome(
     *,
@@ -359,6 +454,77 @@ def _make_space_owned_equality_outcome(
         ),
         candidate_equal=problem.space.candidates_equal,
     )
+
+
+def _make_space_owned_equality_attempt(
+    *,
+    problem: Problem[
+        int | SpaceOwnedEqualityCandidate,
+        SpaceOwnedEqualityCandidate,
+        Observation[SpaceOwnedEqualityCandidate],
+    ],
+    request: EvaluationRequest[SpaceOwnedEqualityCandidate],
+) -> EvaluationAttemptBatch[
+    SpaceOwnedEqualityCandidate,
+    Observation[SpaceOwnedEqualityCandidate],
+]:
+    outcome = _make_space_owned_equality_outcome(problem=problem, request=request)
+    observation = outcome.observation
+    success_request = EvaluationRequest(
+        proposal=Proposal(
+            candidate=observation.candidate,
+            proposal_id=request.proposal_id,
+        ),
+        proposal_evaluation_spec=request.proposal_evaluation_spec,
+    )
+    return EvaluationAttemptBatch(
+        attempts=(
+            EvaluationSuccess(
+                request=success_request,
+                payload=observation,
+                evaluation_count=outcome.evaluation_count,
+                refinement=outcome.refinement,
+                candidate_equal=problem.space.candidates_equal,
+            ),
+        )
+    )
+
+
+@dataclass(slots=True)
+class _SpaceOwnedEqualityAttemptBatchSession(
+    EvaluationBatchSession[
+        EvaluationAttemptBatch[
+            SpaceOwnedEqualityCandidate,
+            Observation[SpaceOwnedEqualityCandidate],
+        ]
+    ]
+):
+    """Attempt-aware async session for space-owned equality tests."""
+
+    evaluator: SpaceOwnedEqualityAsyncEvaluator
+    _handle: EvaluationBatchHandle
+
+    @property
+    @override
+    def handle(self) -> EvaluationBatchHandle:
+        return self._handle
+
+    @override
+    def poll(
+        self,
+    ) -> Sequence[
+        CompletionGroup[
+            EvaluationAttemptBatch[
+                SpaceOwnedEqualityCandidate,
+                Observation[SpaceOwnedEqualityCandidate],
+            ]
+        ]
+    ]:
+        return self.evaluator.poll_attempts(self.handle)
+
+    @override
+    def cancel(self) -> None:
+        self.evaluator.cancel_attempts(self.handle)
 
 
 class SquareObjective(Objective[int]):
@@ -473,6 +639,44 @@ def _make_async_evaluation_outcome(
     )
 
 
+def _make_async_evaluation_attempt(
+    problem: Problem[int, int],
+    request: EvaluationRequest[int],
+    *,
+    attach_refinement: bool,
+) -> EvaluationAttemptBatch[int, Observation[int]]:
+    attempt = evaluate_request_attempt(problem=problem, request=request)
+    attempt_slots: list[
+        EvaluationSuccess[int, Observation[int]] | EvaluationFailure[int]
+    ] = []
+    for attempt_slot in attempt.attempts:
+        if type(attempt_slot) is EvaluationFailure:
+            attempt_slots.append(attempt_slot)
+            continue
+
+        observation = attempt_slot.scalar_observation()
+        refinement = None
+        if attach_refinement:
+            refinement = CandidateRefinement(
+                source_candidate=request.candidate,
+                refined_candidate=observation.candidate,
+                changed_leaf_paths=((),),
+            )
+        attempt_slots.append(
+            EvaluationSuccess(
+                request=observation.request,
+                payload=observation,
+                evaluation_count=attempt_slot.evaluation_count,
+                refinement=refinement,
+                kernel_diagnostics=attempt_slot.kernel_diagnostics,
+            )
+        )
+
+    return EvaluationAttemptBatch(
+        attempts=tuple(attempt_slots),
+    )
+
+
 def make_observation_outcome(
     *,
     problem: Problem[int, int],
@@ -509,15 +713,26 @@ def make_observation_attempt(
     request: EvaluationRequest[int],
 ) -> EvaluationAttemptBatch[int, Observation[int]]:
     attempt = evaluate_request_attempt(problem=problem, request=request)
+    attempt_slots: list[
+        EvaluationSuccess[int, Observation[int]] | EvaluationFailure[int]
+    ] = []
+    for attempt_slot in attempt.attempts:
+        if type(attempt_slot) is EvaluationFailure:
+            attempt_slots.append(attempt_slot)
+            continue
+
+        observation = attempt_slot.scalar_observation()
+        attempt_slots.append(
+            EvaluationSuccess(
+                request=observation.request,
+                payload=observation,
+                evaluation_count=attempt_slot.evaluation_count,
+                refinement=attempt_slot.refinement,
+                kernel_diagnostics=attempt_slot.kernel_diagnostics,
+            )
+        )
     return EvaluationAttemptBatch(
-        requests=attempt.requests,
-        outcome_indices=attempt.outcome_indices,
-        outcomes=tuple(
-            _require_observation_outcome(outcome)
-            for outcome in attempt.outcomes
-        ),
-        failure_indices=attempt.failure_indices,
-        failures=attempt.failures,
+        attempts=tuple(attempt_slots),
     )
 
 
@@ -538,8 +753,8 @@ class DecrementKernel(
             EvaluationAttemptBatch[int],
         ],
     ) -> EvaluationAttemptBatch[int]:
-        outcomes: list[EvaluationOutcome[int, Observation[int]]] = []
-        for proposal in query.proposals:
+        successes: list[EvaluationSuccess[int, Observation[int]]] = []
+        for proposal_index, proposal in enumerate(query.proposals):
             refined_candidate = max(0, proposal.candidate - 1)
             local_attempts = runner(
                 ProposalBatchQuery(
@@ -548,22 +763,42 @@ class DecrementKernel(
                     execution_resources=query.execution_resources,
                 )
             )
-            local_outcome = local_attempts.outcomes[0]
-            outcomes.append(
-                EvaluationOutcome(
-                    observation=Observation.from_objective_value(
-                        proposal=proposal,
-                        candidate=refined_candidate,
-                        value=local_outcome.observation.value,
-                        direction=query.problem.direction,
-                    ),
-                    evaluation_count=local_outcome.evaluation_count,
+            local_success = local_attempts.successes[0]
+            local_observation = local_success.scalar_observation()
+            refinement = None
+            if refined_candidate != proposal.candidate:
+                refinement = CandidateRefinement(
+                    source_candidate=proposal.candidate,
+                    refined_candidate=refined_candidate,
+                    changed_leaf_paths=((),),
+                )
+            proposal_evaluation_spec = None
+            if query.proposal_evaluation_specs is not None:
+                proposal_evaluation_spec = query.proposal_evaluation_specs[
+                    proposal_index
+                ]
+            request = EvaluationRequest(
+                proposal=Proposal(
+                    candidate=refined_candidate,
+                    proposal_id=proposal.proposal_id,
+                ),
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+            observation = Observation.from_objective_value(
+                request=request,
+                candidate=refined_candidate,
+                value=local_observation.value,
+                direction=query.problem.direction,
+            )
+            successes.append(
+                EvaluationSuccess(
+                    request=request,
+                    payload=observation,
+                    evaluation_count=local_success.evaluation_count,
+                    refinement=refinement,
                 )
             )
-        return EvaluationAttemptBatch(
-            requests=tuple(outcome.observation.request for outcome in outcomes),
-            outcomes=tuple(outcomes),
-        )
+        return EvaluationAttemptBatch(attempts=tuple(successes))
 
 
 class RefinementKernel(
@@ -583,8 +818,8 @@ class RefinementKernel(
             EvaluationAttemptBatch[int],
         ],
     ) -> EvaluationAttemptBatch[int]:
-        outcomes: list[EvaluationOutcome[int, Observation[int]]] = []
-        for proposal in query.proposals:
+        successes: list[EvaluationSuccess[int, Observation[int]]] = []
+        for proposal_index, proposal in enumerate(query.proposals):
             refined_candidate = max(0, proposal.candidate - 1)
             local_attempts = runner(
                 ProposalBatchQuery(
@@ -593,7 +828,8 @@ class RefinementKernel(
                     execution_resources=query.execution_resources,
                 )
             )
-            local_outcome = local_attempts.outcomes[0]
+            local_success = local_attempts.successes[0]
+            local_observation = local_success.scalar_observation()
             refinement = None
             if refined_candidate != proposal.candidate:
                 refinement = CandidateRefinement(
@@ -601,22 +837,33 @@ class RefinementKernel(
                     refined_candidate=refined_candidate,
                     changed_leaf_paths=((),),
                 )
-            outcomes.append(
-                EvaluationOutcome(
-                    observation=Observation.from_objective_value(
-                        proposal=proposal,
-                        candidate=refined_candidate,
-                        value=local_outcome.observation.value,
-                        direction=query.problem.direction,
-                    ),
-                    evaluation_count=local_outcome.evaluation_count,
+            proposal_evaluation_spec = None
+            if query.proposal_evaluation_specs is not None:
+                proposal_evaluation_spec = query.proposal_evaluation_specs[
+                    proposal_index
+                ]
+            request = EvaluationRequest(
+                proposal=Proposal(
+                    candidate=refined_candidate,
+                    proposal_id=proposal.proposal_id,
+                ),
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+            observation = Observation.from_objective_value(
+                request=request,
+                candidate=refined_candidate,
+                value=local_observation.value,
+                direction=query.problem.direction,
+            )
+            successes.append(
+                EvaluationSuccess(
+                    request=request,
+                    payload=observation,
+                    evaluation_count=local_success.evaluation_count,
                     refinement=refinement,
                 )
             )
-        return EvaluationAttemptBatch(
-            requests=tuple(outcome.observation.request for outcome in outcomes),
-            outcomes=tuple(outcomes),
-        )
+        return EvaluationAttemptBatch(attempts=tuple(successes))
 
 
 class ScoringKernel(
@@ -637,8 +884,8 @@ class ScoringKernel(
         ],
     ) -> EvaluationAttemptBatch[int]:
         _ = runner
-        outcomes: list[EvaluationOutcome[int, Observation[int]]] = []
-        for proposal in query.proposals:
+        successes: list[EvaluationSuccess[int, Observation[int]]] = []
+        for proposal_index, proposal in enumerate(query.proposals):
             refined_candidate = max(0, proposal.candidate - 2)
             refinement = None
             if refined_candidate != proposal.candidate:
@@ -647,14 +894,28 @@ class ScoringKernel(
                     refined_candidate=refined_candidate,
                     changed_leaf_paths=((),),
                 )
-            outcomes.append(
-                EvaluationOutcome(
-                    observation=Observation.from_objective_value(
-                        proposal=proposal,
-                        candidate=refined_candidate,
-                        value=float(refined_candidate * refined_candidate),
-                        direction=query.problem.direction,
-                    ),
+            proposal_evaluation_spec = None
+            if query.proposal_evaluation_specs is not None:
+                proposal_evaluation_spec = query.proposal_evaluation_specs[
+                    proposal_index
+                ]
+            request = EvaluationRequest(
+                proposal=Proposal(
+                    candidate=refined_candidate,
+                    proposal_id=proposal.proposal_id,
+                ),
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+            observation = Observation.from_objective_value(
+                request=request,
+                candidate=refined_candidate,
+                value=float(refined_candidate * refined_candidate),
+                direction=query.problem.direction,
+            )
+            successes.append(
+                EvaluationSuccess(
+                    request=request,
+                    payload=observation,
                     evaluation_count=7,
                     kernel_diagnostics=KernelDiagnostics(
                         backend="test",
@@ -665,10 +926,7 @@ class ScoringKernel(
                     refinement=refinement,
                 )
             )
-        return EvaluationAttemptBatch(
-            requests=tuple(outcome.observation.request for outcome in outcomes),
-            outcomes=tuple(outcomes),
-        )
+        return EvaluationAttemptBatch(attempts=tuple(successes))
 
 
 class RecordingExecutionResourcesKernel(
@@ -839,7 +1097,8 @@ class FailureRecordingBatchQueueOptimizer(
     ) -> FailureRecordingBatchQueueOptimizerState:
         return FailureRecordingBatchQueueOptimizerState(
             remaining_batches=state.remaining_batches,
-            tell_history=state.tell_history + (attempts.records,),
+            tell_history=state.tell_history
+            + (materialize_success_records(attempts.successes),),
             failure_history=state.failure_history
             + (tuple(failure.proposal_id for failure in attempts.failures),),
             ask_history=state.ask_history,
@@ -881,20 +1140,23 @@ class OutcomeAwareBatchQueueOptimizer(BatchQueueOptimizer):
         self.seen_changed_leaf_paths = ()
 
     @override
-    def tell_outcomes(
+    def tell_attempts(
         self,
         state: BatchQueueOptimizerState,
-        outcomes: Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[int]]],
+        attempts: EvaluationAttemptBatch[OutcomeCandidateT, Observation[int]],
     ) -> BatchQueueOptimizerState:
+        if attempts.has_failures:
+            return super().tell_attempts(state, attempts)
+
         self.seen_changed_leaf_paths += tuple(
             None
-            if outcome.refinement is None
-            else outcome.refinement.changed_leaf_paths
-            for outcome in outcomes
+            if success.refinement is None
+            else success.refinement.changed_leaf_paths
+            for success in attempts.successes
         )
         return super().tell(
             state,
-            tuple(outcome.record for outcome in outcomes),
+            materialize_success_records(attempts.successes),
         )
 
 
@@ -1063,11 +1325,16 @@ class OutOfOrderAsyncEvaluator(
         str,
         tuple[CompletionGroup[EvaluationOutcome[int, Observation[int]]], ...],
     ]
+    _pending_attempt_groups: dict[
+        str,
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+    ]
     _attach_refinement: bool
 
     def __init__(self, *, attach_refinement: bool = False) -> None:
         self._next_batch_id = 0
         self._pending_groups = {}
+        self._pending_attempt_groups = {}
         self._attach_refinement = attach_refinement
 
     @override
@@ -1125,6 +1392,58 @@ class OutOfOrderAsyncEvaluator(
     def cancel(self, handle: EvaluationBatchHandle) -> None:
         _ = self._pending_groups.pop(handle.batch_id, None)
 
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+        handle = EvaluationBatchHandle(
+            batch_id=f"attempt-batch-{self._next_batch_id}",
+            request_count=len(requests),
+        )
+        self._next_batch_id += 1
+        self._pending_attempt_groups[handle.batch_id] = tuple(
+            CompletionGroup(
+                start_index=index,
+                outcomes=(
+                    _make_async_evaluation_attempt(
+                        problem,
+                        request,
+                        attach_refinement=self._attach_refinement,
+                    ),
+                ),
+            )
+            for index, request in reversed(tuple(enumerate(requests)))
+        )
+        return _AttemptOutOfOrderBatchSession(evaluator=self, _handle=handle)
+
+    def poll_attempts(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+        pending_groups = self._pending_attempt_groups.get(handle.batch_id)
+        if pending_groups is None:
+            msg = f"unknown async attempt batch handle: {handle.batch_id}"
+            raise ValueError(msg)
+
+        if len(pending_groups) == 0:
+            raise BatchExecutionFailed(
+                handle=handle,
+                kind="infrastructure",
+                cause=RuntimeError("async attempt batch exhausted unexpectedly"),
+            )
+
+        completion_group = pending_groups[0]
+        remaining_groups = pending_groups[1:]
+        if len(remaining_groups) == 0:
+            _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+        else:
+            self._pending_attempt_groups[handle.batch_id] = remaining_groups
+        return (completion_group,)
+
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
+        _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+
 
 class SessionRecordingAsyncEvaluator(OutOfOrderAsyncEvaluator):
     """Async evaluator that records exact-async session openings."""
@@ -1142,6 +1461,15 @@ class SessionRecordingAsyncEvaluator(OutOfOrderAsyncEvaluator):
         self.opened_batch_sizes += (len(requests),)
         return super().open_session(problem, requests)
 
+    @override
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+        self.opened_batch_sizes += (len(requests),)
+        return super().open_attempt_session(problem, requests)
+
 
 @dataclass(slots=True)
 class _AttemptOutOfOrderBatchSession(
@@ -1149,7 +1477,7 @@ class _AttemptOutOfOrderBatchSession(
 ):
     """Attempt-aware exact-async session for failure-recording tests."""
 
-    evaluator: "AttemptOutOfOrderAsyncEvaluator"
+    evaluator: "OutOfOrderAsyncEvaluator"
     _handle: EvaluationBatchHandle
 
     @property
@@ -1195,7 +1523,11 @@ class AttemptOutOfOrderAsyncEvaluator(OutOfOrderAsyncEvaluator):
             CompletionGroup(
                 start_index=index,
                 outcomes=(
-                    make_observation_attempt(problem=problem, request=request),
+                    _make_async_evaluation_attempt(
+                        problem,
+                        request,
+                        attach_refinement=self._attach_refinement,
+                    ),
                 ),
             )
             for index, request in reversed(tuple(enumerate(requests)))
@@ -1268,6 +1600,44 @@ class _ResumableOutOfOrderBatchSession(
         )
 
 
+@dataclass(slots=True)
+class _ResumableAttemptOutOfOrderBatchSession(
+    ResumableBatchSession[EvaluationAttemptBatch[int, Observation[int]]]
+):
+    """Resumable attempt-aware async session for study orchestration tests."""
+
+    evaluator: "ResumableOutOfOrderAsyncEvaluator"
+    _handle: EvaluationBatchHandle
+    _completed_count: int = 0
+
+    @property
+    @override
+    def handle(self) -> EvaluationBatchHandle:
+        return self._handle
+
+    @override
+    def poll(
+        self,
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+        completion_groups = tuple(self.evaluator.poll_attempts(self.handle))
+        self._completed_count += sum(
+            len(completion_group.outcomes)
+            for completion_group in completion_groups
+        )
+        return completion_groups
+
+    @override
+    def cancel(self) -> None:
+        self.evaluator.cancel_attempts(self.handle)
+
+    @override
+    def suspend(self) -> EvaluationBatchResumeHandle:
+        return self.evaluator.suspend_attempt_batch(
+            self.handle,
+            completed_count=self._completed_count,
+        )
+
+
 @final
 class ResumableOutOfOrderAsyncEvaluator(
     ResumableAsyncEvaluator[
@@ -1287,11 +1657,21 @@ class ResumableOutOfOrderAsyncEvaluator(
         str,
         tuple[CompletionGroup[EvaluationOutcome[int, Observation[int]]], ...],
     ]
+    _pending_attempt_groups: dict[
+        str,
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+    ]
+    _suspended_attempt_groups: dict[
+        str,
+        tuple[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]], ...],
+    ]
 
     def __init__(self, *, attach_refinement: bool = False) -> None:
         self._next_batch_id = 0
         self._pending_groups = {}
         self._suspended_groups = {}
+        self._pending_attempt_groups = {}
+        self._suspended_attempt_groups = {}
         self._attach_refinement = attach_refinement
 
     @override
@@ -1303,6 +1683,34 @@ class ResumableOutOfOrderAsyncEvaluator(
         return _ResumableOutOfOrderBatchSession(
             evaluator=self,
             _handle=self.submit_batch(problem, requests),
+        )
+
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+        handle = EvaluationBatchHandle(
+            batch_id=f"resumable-attempt-batch-{self._next_batch_id}",
+            request_count=len(requests),
+        )
+        self._next_batch_id += 1
+        self._pending_attempt_groups[handle.batch_id] = tuple(
+            CompletionGroup(
+                start_index=index,
+                outcomes=(
+                    _make_async_evaluation_attempt(
+                        problem,
+                        request,
+                        attach_refinement=self._attach_refinement,
+                    ),
+                ),
+            )
+            for index, request in reversed(tuple(enumerate(requests)))
+        )
+        return _ResumableAttemptOutOfOrderBatchSession(
+            evaluator=self,
+            _handle=handle,
         )
 
     @override
@@ -1399,6 +1807,71 @@ class ResumableOutOfOrderAsyncEvaluator(
             _completed_count=handle.completed_count,
         )
 
+    def poll_attempts(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, Observation[int]]]]:
+        pending_groups = self._pending_attempt_groups.get(handle.batch_id)
+        if pending_groups is None:
+            msg = f"unknown async attempt batch handle: {handle.batch_id}"
+            raise ValueError(msg)
+
+        if len(pending_groups) == 0:
+            raise BatchExecutionFailed(
+                handle=handle,
+                kind="infrastructure",
+                cause=RuntimeError("async attempt batch exhausted unexpectedly"),
+            )
+
+        completion_group = pending_groups[0]
+        remaining_groups = pending_groups[1:]
+        if len(remaining_groups) == 0:
+            _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+        else:
+            self._pending_attempt_groups[handle.batch_id] = remaining_groups
+        return (completion_group,)
+
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
+        _ = self._pending_attempt_groups.pop(handle.batch_id, None)
+        _ = self._suspended_attempt_groups.pop(handle.batch_id, None)
+
+    def suspend_attempt_batch(
+        self,
+        handle: EvaluationBatchHandle,
+        *,
+        completed_count: int,
+    ) -> EvaluationBatchResumeHandle:
+        pending_groups = self._pending_attempt_groups.pop(handle.batch_id, None)
+        if pending_groups is None:
+            msg = f"unknown async attempt batch handle: {handle.batch_id}"
+            raise ValueError(msg)
+
+        self._suspended_attempt_groups[handle.batch_id] = pending_groups
+        return EvaluationBatchResumeHandle(
+            batch_id=handle.batch_id,
+            request_count=handle.request_count,
+            completed_count=completed_count,
+        )
+
+    def resume_attempt_session(
+        self,
+        handle: EvaluationBatchResumeHandle,
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+        pending_groups = self._suspended_attempt_groups.pop(handle.batch_id, None)
+        if pending_groups is None:
+            msg = f"unknown suspended attempt batch handle: {handle.batch_id}"
+            raise ValueError(msg)
+
+        self._pending_attempt_groups[handle.batch_id] = pending_groups
+        return _ResumableAttemptOutOfOrderBatchSession(
+            evaluator=self,
+            _handle=EvaluationBatchHandle(
+                batch_id=handle.batch_id,
+                request_count=handle.request_count,
+            ),
+            _completed_count=handle.completed_count,
+        )
+
 
 @final
 class NonResumableSessionResumableAsyncEvaluator(
@@ -1434,6 +1907,13 @@ class NonResumableSessionResumableAsyncEvaluator(
     def cancel(self, handle: EvaluationBatchHandle) -> None:
         self._delegate.cancel(handle)
 
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]]:
+        return self._delegate.open_attempt_session(problem, requests)
+
     @override
     def resume_session(
         self,
@@ -1462,6 +1942,18 @@ class MisorderedEvaluator(
         return tuple(
             make_observation_outcome(problem=problem, request=request)
             for request in reversed(requests)
+        )
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+        return EvaluationAttemptBatch.concatenate(
+            tuple(
+                make_observation_attempt(problem=problem, request=request)
+                for request in reversed(requests)
+            )
         )
 
 
@@ -1495,6 +1987,22 @@ class HardFailingEvaluator(
         return tuple(
             make_observation_outcome(problem=problem, request=request)
             for request in requests
+        )
+
+    def evaluate_attempts(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationAttemptBatch[int, Observation[int]]:
+        self._call_count += 1
+        if self._call_count == self._fail_on_call:
+            raise RuntimeError(f"hard evaluator failure {self._call_count}")
+
+        return EvaluationAttemptBatch.concatenate(
+            tuple(
+                make_observation_attempt(problem=problem, request=request)
+                for request in requests
+            )
         )
 
 

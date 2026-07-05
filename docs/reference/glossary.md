@@ -14,13 +14,12 @@ structured leaf paths changed by refinement. See
 
 ## EvaluationOutcome
 
-The runtime pairing of one successful request-aligned compatibility payload
-with the evaluation cost it charged against the study budget, optional kernel
-diagnostics, and optional candidate-refinement provenance. Produced by an
-`Evaluator` or kernel path, consumed by `Study`, exposed to outcome-aware
-methods through `RunMethod.tell_outcomes`, and lowered to its contained
-payload before the canonical `RunMethod.tell` path. See
-[`EvaluationOutcome`][variopt.EvaluationOutcome].
+The legacy compatibility pairing of one successful request-aligned payload with
+the evaluation cost it charged against the study budget, optional kernel
+diagnostics, and optional candidate-refinement provenance. New execution
+boundaries prefer `EvaluationSuccess` / `EvaluationFailure` attempt slots;
+`EvaluationOutcome` remains available for compatibility paths that still expose
+successful outcome metadata. See [`EvaluationOutcome`][variopt.EvaluationOutcome].
 
 ## EvaluationFailure
 
@@ -33,9 +32,11 @@ successful payload. See [`EvaluationFailure`][variopt.EvaluationFailure].
 ## EvaluationSuccess
 
 A request-owned successful attempt artifact. It keeps the canonical
-`EvaluationRequest`, a request-free payload such as `ObservationPayload` or
-`ObjectiveVectorPayload`, the logical evaluation cost, and optional
-`CandidateRefinement` provenance aligned against `request.candidate`. See
+`EvaluationRequest`, a payload, the logical evaluation cost, and optional
+`CandidateRefinement` provenance aligned against `request.candidate`. New
+problem protocols normally return request-free payloads such as
+`ObservationPayload` or `ObjectiveVectorPayload`; compatibility paths may carry
+request-aligned record payloads. See
 [`EvaluationSuccess`][variopt.artifacts.EvaluationSuccess].
 
 ## EvaluationAttemptBatch
@@ -45,7 +46,9 @@ At the artifact facade, the ordered aggregate whose slots are exactly
 success/failure projections, successful payload projection, and total
 evaluation-count accounting. The root execution facade also exposes the current
 outcome-aware `EvaluationAttemptBatch` used by `RunMethod.tell_attempts`, where
-successful slots carry `EvaluationOutcome` metadata. See
+successful slots carry `EvaluationOutcome` metadata. In both cases, ordered
+attempt slots are the authoritative model; success and failure index views are
+derived projections, not parallel storage. See
 [`EvaluationAttemptBatch`][variopt.artifacts.EvaluationAttemptBatch].
 
 ## DiversityMetric
@@ -90,7 +93,8 @@ The wrapped `Proposal` that an `Evaluator` receives and forwards to the
 The component that owns execution mechanics — how a batch of
 `EvaluationRequest`s becomes successful `EvaluationOutcome`s or, through
 built-in evaluator `evaluate_attempts` hooks, a dense `EvaluationAttemptBatch`
-that preserves recorded user-code `EvaluationFailure`s. Backends include
+whose ordered attempt slots preserve recorded user-code `EvaluationFailure`s.
+Backends include
 `SequentialEvaluator`, `JoblibEvaluator`, `AsyncJoblibEvaluator`, and
 `MpiEvaluator`. See
 [`Evaluator`][variopt.Evaluator].
@@ -142,8 +146,9 @@ See [`Objective`][variopt.Objective].
 ## ObjectiveVectorRecord
 
 The request-aligned record projection for multi-objective problem results.
-Carries objective values and canonical minimization scores aligned with the
-originating request. See
+Carries objective values and canonical minimization scores for the evaluated
+candidate. Its request may preserve the source proposal when refinement changed
+the evaluated candidate. See
 [`ObjectiveVectorRecord`][variopt.ObjectiveVectorRecord].
 
 ## Observation
@@ -151,7 +156,9 @@ originating request. See
 The scalar request-aligned record projection used by legacy outcome/report
 boundaries and `Study.optimize`. Scalar protocols produce `ObservationPayload`
 first; execution layers attach request identity when projecting to
-`Observation`. See [`Observation`][variopt.Observation].
+`Observation`. Its `candidate` is the evaluated candidate; its request may
+preserve the source proposal when refinement changed the evaluated candidate.
+See [`Observation`][variopt.Observation].
 
 ## OptimizationDirection
 
@@ -197,9 +204,9 @@ and prioritized structured leaf paths. See
 ## RunMethod
 
 The search-state owner. Proposes candidates via `ask`, consumes successful
-payload projections via `tell`, may opt into full outcome metadata through
-`tell_outcomes`, consumes dense attempt batches through `tell_attempts`, and owns the persistent
-search-state object. Population optimizers
+payload projections via `tell`, may opt into legacy successful-outcome metadata
+through `tell_outcomes`, consumes dense attempt batches through `tell_attempts`,
+and owns the persistent search-state object. Population optimizers
 (`CSAOptimizer`, `DifferentialEvolutionOptimizer`,
 `GeneticAlgorithmOptimizer`) are `RunMethod` implementations. See
 [`RunMethod`][variopt.RunMethod].

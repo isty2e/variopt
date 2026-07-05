@@ -5,6 +5,7 @@ from typing import Protocol
 from typing_extensions import TypeVar
 
 from ..artifacts import EvaluationRequest, Proposal
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.async_evaluator.contracts import (
     AsyncEvaluator,
     ResumableAsyncEvaluator,
@@ -53,7 +54,7 @@ class StudyValidationOwner(
     ) -> Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ]:
         """Return the configured evaluator."""
         ...
@@ -137,7 +138,7 @@ def require_async_evaluator(
 ) -> AsyncEvaluator[
     Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
     EvaluationRequest[CandidateT],
-    EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+    EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
 ]:
     """Return the configured async evaluator after prior capability checks.
 
@@ -148,7 +149,7 @@ def require_async_evaluator(
 
     Returns
     -------
-    AsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
+    AsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
         Async evaluator configured on ``study``.
 
     Raises
@@ -172,7 +173,7 @@ def require_resumable_async_evaluator(
 ) -> ResumableAsyncEvaluator[
     Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
     EvaluationRequest[CandidateT],
-    EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+    EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
 ]:
     """Return the configured resumable async evaluator after prior checks.
 
@@ -183,7 +184,7 @@ def require_resumable_async_evaluator(
 
     Returns
     -------
-    ResumableAsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, StudyEvaluationRecordT]]
+    ResumableAsyncEvaluator[Problem[BoundaryT, CandidateT, StudyEvaluationRecordT], EvaluationRequest[CandidateT], EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]
         Resumable async evaluator configured on ``study``.
 
     Raises

@@ -226,14 +226,12 @@ class ClearingGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=1)
         request = EvaluationRequest(proposal=proposals[0])
+        failure = EvaluationFailure[int].from_exception(
+            request=request,
+            exception=ValueError("failed"),
+        )
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(request,),
-            failures=(
-                EvaluationFailure[int].from_exception(
-                    request=request,
-                    exception=ValueError("failed"),
-                ),
-            ),
+            attempts=(failure,),
         )
 
         with pytest.raises(UnsupportedEvaluationFailureError):

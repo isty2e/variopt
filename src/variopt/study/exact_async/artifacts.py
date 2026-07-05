@@ -5,9 +5,8 @@ from typing import Generic, Literal
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from ...artifacts import EvaluationRequest
+from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...evaluators.async_evaluator.artifacts import EvaluationBatchResumeHandle
-from ...outcomes import EvaluationAttemptBatch
 from ...typevars import CandidateT, RunMethodStateT
 from ..common import StudyEvaluationRecordT
 

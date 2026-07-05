@@ -1,6 +1,6 @@
 """Canonical request-local evaluation pipeline."""
 
-from typing import TypeAlias, TypeGuard, TypeVar, overload
+from typing import Protocol, TypeAlias, TypeGuard, TypeVar, overload, runtime_checkable
 
 from .artifacts import (
     EvaluationAttemptBatch as PayloadEvaluationAttemptBatch,
@@ -17,7 +17,6 @@ from .artifacts import (
     ProposalEvaluationSpec,
 )
 from .artifacts.records import RequestAlignedEvaluationRecord
-from .outcomes import EvaluationAttemptBatch as OutcomeEvaluationAttemptBatch
 from .outcomes import EvaluationOutcome
 from .problem import Problem
 from .typevars import CandidateT
@@ -35,6 +34,21 @@ ProposalEvaluationRecordT = TypeVar(
     "ProposalEvaluationRecordT",
     bound=RequestAlignedEvaluationRecord,
 )
+
+
+@runtime_checkable
+class _RequestAlignedCompatibilityShape(Protocol):
+    """Runtime shape for legacy request-aligned compatibility payloads."""
+
+    @property
+    def request(self) -> object:
+        """Return the payload's request-like slot."""
+        ...
+
+    @property
+    def candidate(self) -> object:
+        """Return the payload's candidate-like slot."""
+        ...
 
 
 def evaluate_request_payload(
@@ -190,11 +204,14 @@ def _compatibility_record_from_payload(
 
 
 def _is_request_aligned_compatibility_payload(
-    payload: CompatibilityEvaluationPayload,
-) -> TypeGuard[RequestAlignedEvaluationRecord]:
+    payload: object,
+) -> TypeGuard[RequestAlignedEvaluationRecord[object]]:
     if isinstance(payload, (ObservationPayload, ObjectiveVectorPayload)):
         return False
-    return hasattr(payload, "request") and hasattr(payload, "candidate")
+    if not isinstance(payload, _RequestAlignedCompatibilityShape):
+        return False
+
+    return type(payload.request) is EvaluationRequest
 
 
 def _validate_compatibility_record_alignment(
@@ -278,23 +295,23 @@ def evaluate_request_outcome(
 
 def evaluate_request_attempt(
     *,
-    problem: Problem[BoundaryT, CandidateT, CompatibilityEvaluationPayloadT],
+    problem: Problem[BoundaryT, CandidateT, PayloadT],
     request: EvaluationRequest[CandidateT],
-) -> OutcomeEvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
+) -> PayloadEvaluationAttemptBatch[CandidateT, PayloadT]:
     """Execute one canonical request into a success-or-failure attempt batch.
 
     Parameters
     ----------
-    problem : Problem[BoundaryT, CandidateT, CompatibilityEvaluationPayloadT]
+    problem : Problem[BoundaryT, CandidateT, PayloadT]
         Problem that validates candidates and evaluates requests.
     request : EvaluationRequest[CandidateT]
         Request to execute.
 
     Returns
     -------
-    EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
-        One-slot attempt batch containing either a successful outcome or a
-        recorded user-code evaluation failure.
+    EvaluationAttemptBatch[CandidateT, PayloadT]
+        One-slot attempt batch containing either a request-owned success with the
+        request-free payload or a recorded user-code evaluation failure.
 
     Notes
     -----
@@ -308,31 +325,20 @@ def evaluate_request_attempt(
     try:
         payload = problem.evaluation_protocol.evaluate_request(request)
     except Exception as exception:
-        return OutcomeEvaluationAttemptBatch(
-            requests=(request,),
-            failures=(
+        return PayloadEvaluationAttemptBatch(
+            attempts=(
                 EvaluationFailure[CandidateT].from_exception(
                     request=request,
                     exception=exception,
                 ),
             ),
         )
-    if isinstance(payload, ObservationPayload):
-        record = _compatibility_record_from_payload(request=request, payload=payload)
-    elif isinstance(payload, ObjectiveVectorPayload):
-        record = _compatibility_record_from_payload(request=request, payload=payload)
-    elif _is_request_aligned_compatibility_payload(payload):
-        record = payload
-    else:
-        msg = "compatibility payload could not be projected to a request-aligned record"
-        raise TypeError(msg)
-    _validate_compatibility_record_alignment(request=request, record=record)
 
-    return OutcomeEvaluationAttemptBatch(
-        requests=(request,),
-        outcomes=(
-            EvaluationOutcome(
-                record=record,
+    return PayloadEvaluationAttemptBatch(
+        attempts=(
+            EvaluationSuccess(
+                request=request,
+                payload=payload,
                 evaluation_count=1,
             ),
         ),

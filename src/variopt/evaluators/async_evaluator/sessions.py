@@ -14,7 +14,7 @@ from .artifacts import (
     EvaluationBatchSessionState,
 )
 
-EvaluationT = TypeVar("EvaluationT")
+EvaluationT = TypeVar("EvaluationT", covariant=True)
 _DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 0.001
 
 

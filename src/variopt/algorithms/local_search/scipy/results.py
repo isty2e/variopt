@@ -5,7 +5,7 @@ from math import isfinite
 
 from typing_extensions import Self
 
-from ....kernel import KernelDiagnostics, KernelStatus
+from ....artifacts import KernelDiagnostics, KernelStatus
 from .contracts import ScipyOptimizeResult
 
 

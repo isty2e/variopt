@@ -21,10 +21,10 @@ run. They are the bounded episode layer that a run method or higher-level
 workflow can invoke explicitly.
 
 Kernels return `EvaluationAttemptBatch` values. Successful
-`EvaluationOutcome` entries may carry `CandidateRefinement` provenance when the
-kernel changes a candidate before evaluation. Recorded local-search trial
+`EvaluationSuccess` attempts may carry `CandidateRefinement` provenance when
+the kernel changes a candidate before evaluation. Recorded local-search trial
 failures remain `EvaluationFailure` attempts; kernel diagnostics and refinement
-metadata attach only to successful outcomes. Acceptance into an optimizer
+metadata attach only to successful attempts. Acceptance into an optimizer
 archive is still decided later by the run method.
 
 For the current detailed method note, see

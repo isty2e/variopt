@@ -21,7 +21,7 @@ from tests.study_support import (
     SpaceOwnedEqualityOptimizer,
     SpaceOwnedEqualitySpace,
     SquareObjective,
-    make_observation_outcome,
+    make_observation_attempt,
 )
 from variopt import (
     EvaluationOutcome,
@@ -33,7 +33,7 @@ from variopt import (
     RunReport,
     Study,
 )
-from variopt.artifacts import Trace, TraceEvent
+from variopt.artifacts import EvaluationAttemptBatch, Trace, TraceEvent
 from variopt.evaluators import (
     AsyncEvaluator,
     BatchExecutionFailed,
@@ -45,6 +45,8 @@ from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
 
 StaleAsyncOutcome: TypeAlias = EvaluationOutcome[int, Observation[int]]
 StaleAsyncCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncOutcome]
+StaleAsyncAttemptBatch: TypeAlias = EvaluationAttemptBatch[int, Observation[int]]
+StaleAsyncAttemptCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncAttemptBatch]
 
 
 @runtime_checkable
@@ -84,6 +86,25 @@ class FailingSecondBatchAsyncEvaluator(OutOfOrderAsyncEvaluator):
         self.cancelled_batch_ids += (handle.batch_id,)
         super().cancel(handle)
 
+    @override
+    def poll_attempts(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[StaleAsyncAttemptCompletionGroup]:
+        if handle.batch_id == "attempt-batch-1":
+            raise BatchExecutionFailed(
+                handle=handle,
+                kind="infrastructure",
+                cause=RuntimeError("forced mid-sweep failure"),
+            )
+
+        return super().poll_attempts(handle)
+
+    @override
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
+        self.cancelled_batch_ids += (handle.batch_id,)
+        super().cancel_attempts(handle)
+
 
 @final
 class CancelFailingSecondBatchAsyncEvaluator(FailingSecondBatchAsyncEvaluator):
@@ -97,21 +118,29 @@ class CancelFailingSecondBatchAsyncEvaluator(FailingSecondBatchAsyncEvaluator):
 
         OutOfOrderAsyncEvaluator.cancel(self, handle)
 
+    @override
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
+        self.cancelled_batch_ids += (handle.batch_id,)
+        if handle.batch_id == "attempt-batch-0":
+            raise RuntimeError("forced cancellation failure")
+
+        OutOfOrderAsyncEvaluator.cancel_attempts(self, handle)
+
 
 @final
-class ScriptedNonBlockingBatchSession(
-    EvaluationBatchSession[StaleAsyncOutcome],
+class ScriptedNonBlockingAttemptBatchSession(
+    EvaluationBatchSession[StaleAsyncAttemptBatch],
 ):
     """Batch session whose poll results follow a deterministic script."""
 
     _handle: EvaluationBatchHandle
-    _poll_results: list[tuple[StaleAsyncCompletionGroup, ...]]
+    _poll_results: list[tuple[StaleAsyncAttemptCompletionGroup, ...]]
 
     def __init__(
         self,
         *,
         handle: EvaluationBatchHandle,
-        poll_results: Sequence[tuple[StaleAsyncCompletionGroup, ...]],
+        poll_results: Sequence[tuple[StaleAsyncAttemptCompletionGroup, ...]],
     ) -> None:
         self._handle = handle
         self._poll_results = list(poll_results)
@@ -124,7 +153,7 @@ class ScriptedNonBlockingBatchSession(
     @override
     def poll(
         self,
-    ) -> tuple[StaleAsyncCompletionGroup, ...]:
+    ) -> tuple[StaleAsyncAttemptCompletionGroup, ...]:
         if len(self._poll_results) == 0:
             return ()
         return self._poll_results.pop(0)
@@ -145,7 +174,7 @@ class HolAvoidanceAsyncEvaluator(
     """Async evaluator with one empty earlier poll before a ready later batch."""
 
     _next_batch_id: int
-    _sessions: dict[str, ScriptedNonBlockingBatchSession]
+    _sessions: dict[str, ScriptedNonBlockingAttemptBatchSession]
 
     def __init__(self) -> None:
         self._next_batch_id = 0
@@ -157,27 +186,36 @@ class HolAvoidanceAsyncEvaluator(
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
     ) -> EvaluationBatchSession[StaleAsyncOutcome]:
+        _ = problem, requests
+        msg = "HOL avoidance test double only supports attempt-batch sessions"
+        raise NotImplementedError(msg)
+
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[StaleAsyncAttemptBatch]:
         handle = EvaluationBatchHandle(
-            batch_id=f"batch-{self._next_batch_id}",
+            batch_id=f"attempt-batch-{self._next_batch_id}",
             request_count=len(requests),
         )
         self._next_batch_id += 1
-        outcomes: tuple[StaleAsyncOutcome, ...] = tuple(
-            make_observation_outcome(problem=problem, request=request)
+        attempts: tuple[StaleAsyncAttemptBatch, ...] = tuple(
+            make_observation_attempt(problem=problem, request=request)
             for request in requests
         )
-        poll_results: tuple[tuple[StaleAsyncCompletionGroup, ...], ...]
-        if handle.batch_id == "batch-0":
+        poll_results: tuple[tuple[StaleAsyncAttemptCompletionGroup, ...], ...]
+        if handle.batch_id == "attempt-batch-0":
             poll_results = (
-                (CompletionGroup(start_index=1, outcomes=(outcomes[1],)),),
+                (CompletionGroup(start_index=1, outcomes=(attempts[1],)),),
                 (),
-                (CompletionGroup(start_index=0, outcomes=(outcomes[0],)),),
+                (CompletionGroup(start_index=0, outcomes=(attempts[0],)),),
             )
         else:
             poll_results = (
-                (CompletionGroup(start_index=0, outcomes=(outcomes[0],)),),
+                (CompletionGroup(start_index=0, outcomes=(attempts[0],)),),
             )
-        session = ScriptedNonBlockingBatchSession(
+        session = ScriptedNonBlockingAttemptBatchSession(
             handle=handle,
             poll_results=poll_results,
         )
@@ -190,17 +228,30 @@ class HolAvoidanceAsyncEvaluator(
         problem: Problem[int, int],
         requests: Sequence[EvaluationRequest[int]],
     ) -> EvaluationBatchHandle:
-        return self.open_session(problem, requests).handle
+        return self.open_attempt_session(problem, requests).handle
 
     @override
     def poll(
         self,
         handle: EvaluationBatchHandle,
     ) -> Sequence[StaleAsyncCompletionGroup]:
-        return self._sessions[handle.batch_id].poll()
+        _ = handle
+        msg = "HOL avoidance test double only supports attempt-batch polling"
+        raise NotImplementedError(msg)
 
     @override
     def cancel(self, handle: EvaluationBatchHandle) -> None:
+        _ = handle
+        msg = "HOL avoidance test double only supports attempt-batch cancellation"
+        raise NotImplementedError(msg)
+
+    def poll_attempts(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[StaleAsyncAttemptCompletionGroup]:
+        return self._sessions[handle.batch_id].poll()
+
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
         self._sessions[handle.batch_id].cancel()
 
 
@@ -422,12 +473,12 @@ class StudyStaleAsyncTests:
             )
         except RuntimeError as exception:
             assert exception.__class__.__name__ == "RunExecutionFailed"
-            assert "batch-1" in str(exception)
+            assert "attempt-batch-1" in str(exception)
             assert isinstance(exception.__cause__, BatchExecutionFailed)
         else:
             pytest.fail("expected stale-async run failure")
 
-        assert "batch-2" in evaluator.cancelled_batch_ids
+        assert "attempt-batch-2" in evaluator.cancelled_batch_ids
 
     def test_run_stale_async_cancels_remaining_sessions_after_cancel_failure(
         self,
@@ -453,12 +504,16 @@ class StudyStaleAsyncTests:
             )
         except RuntimeError as exception:
             assert exception.__class__.__name__ == "RunExecutionFailed"
-            assert "batch-1" in str(exception)
+            assert "attempt-batch-1" in str(exception)
             assert isinstance(exception.__cause__, BatchExecutionFailed)
         else:
             pytest.fail("expected stale-async run failure")
 
-        assert evaluator.cancelled_batch_ids == ("batch-0", "batch-1", "batch-2")
+        assert evaluator.cancelled_batch_ids == (
+            "attempt-batch-0",
+            "attempt-batch-1",
+            "attempt-batch-2",
+        )
 
     def test_run_stale_async_buffers_trace_events_without_trace_append(
         self,

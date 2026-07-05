@@ -8,6 +8,7 @@ from typing_extensions import TypeVar as DefaultTypeVar
 from typing_extensions import override
 
 from ..artifacts import (
+    EvaluationAttemptBatch,
     EvaluationRequest,
     ObservationPayload,
 )
@@ -18,7 +19,7 @@ from ..evaluation_pipeline import (
     evaluate_request_outcome,
 )
 from ..execution import ExecutionResources, NestedParallelismPolicy
-from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT
 from .base import Evaluator
@@ -96,7 +97,7 @@ class SequentialEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
+    ) -> EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]:
         """Execute a request batch into a dense success/failure attempt batch.
 
         Parameters
@@ -108,12 +109,12 @@ class SequentialEvaluator(
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
-            Dense attempt batch aligned to ``requests``.
+        EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]
+            Ordered request-owned attempt batch aligned to ``requests``.
         """
         return EvaluationAttemptBatch[
             CandidateT,
-            RequestAlignedEvaluationRecord,
+            SequentialEvaluationRecordT,
         ].from_single_request_attempts(
             tuple(
                 evaluate_request_attempt(

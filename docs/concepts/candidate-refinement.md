@@ -7,13 +7,14 @@ It sits between a run method's proposal and the evaluation record:
 
 ```text
 RunMethod.ask -> Proposal -> Kernel or evaluator execution
-    -> EvaluationAttemptBatch(successful EvaluationOutcome, failures)
+    -> EvaluationAttemptBatch(EvaluationSuccess or EvaluationFailure slots)
     -> Study -> RunMethod feedback
 ```
 
 The successful attempt remains the semantic result: it owns the evaluated
-request, the request-free payload, and optional refinement metadata. Legacy
-records and observations are compatibility projections from that success.
+request, the payload, and optional refinement metadata. New problem protocols
+normally return request-free payloads; legacy records and observations are
+compatibility projections from that success.
 
 ## Candidate Vocabulary
 
@@ -31,8 +32,8 @@ The important invariant is:
 EvaluationSuccess.refinement.refined_candidate == EvaluationSuccess.request.candidate
 ```
 
-`EvaluationOutcome` and terminal successes validate that invariant when
-refinement metadata is present.
+`EvaluationSuccess`, legacy `EvaluationOutcome` compatibility records, and
+terminal successes validate that invariant when refinement metadata is present.
 
 ## Ownership Boundary
 
@@ -48,7 +49,7 @@ Refinement is not owned by `EvaluationProtocol`.
   accounting, and preserves aligned successful-outcome refinement metadata in
   terminal reports.
 - `RunMethod.tell(...)` remains record-based. A run method that needs
-  execution-side metadata can override `RunMethod.tell_outcomes(...)`.
+  execution-side metadata can override `RunMethod.tell_attempts(...)`.
 
 This split keeps local search and repair-style execution behavior out of the
 problem's semantic evaluation rule.
@@ -56,7 +57,7 @@ problem's semantic evaluation rule.
 ## Accounting
 
 Refinement metadata does not count evaluations by itself. Logical evaluation cost
-is carried by `EvaluationOutcome.evaluation_count`.
+is carried by successful and failed attempt slots.
 
 By default, `Study.optimize(...)` charges the reported `evaluation_count` instead
 of only counting returned records. This matters when a local-search kernel
@@ -67,7 +68,8 @@ counting.
 Terminal surfaces preserve provenance as success-aligned metadata:
 
 - `RunReport.refinements` aligns with `RunReport.successes`; `records` is the
-  legacy payload projection.
+  legacy payload projection. A projected record's request may preserve the
+  source proposal while its `candidate` is the evaluated candidate.
 - `RunResult.refinements` aligns with `RunResult.successes`; `observations` is
   the scalar compatibility projection.
 - `NondominatedRunSurface.refinements` aligns with
@@ -81,7 +83,7 @@ represented by `None`.
 ## Local Search Behavior
 
 Built-in local-search kernels attach `CandidateRefinement` to successful
-`EvaluationOutcome` values when the episode returns a candidate with changed
+`EvaluationSuccess` values when the episode returns a candidate with changed
 canonical leaf values. Recorded `EvaluationFailure` attempts never receive
 kernel refinement metadata.
 

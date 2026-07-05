@@ -14,13 +14,13 @@ from variopt import (
     CandidateRefinement,
     EvaluationAttemptBatch,
     EvaluationFailure,
-    EvaluationOutcome,
     EvaluationRequest,
     Observation,
     OptimizationDirection,
     Proposal,
     UnsupportedEvaluationFailureError,
 )
+from variopt.artifacts import EvaluationSuccess
 
 OutcomeCandidateT = TypeVar("OutcomeCandidateT")
 
@@ -31,13 +31,22 @@ def _request(candidate: int, proposal_id: str) -> EvaluationRequest[int]:
     )
 
 
-def _outcome(
+def _success(
     request: EvaluationRequest[int],
     *,
     candidate: int | None = None,
     changed: bool = False,
-) -> EvaluationOutcome[int, Observation[int]]:
+) -> EvaluationSuccess[int, Observation[int]]:
     evaluated_candidate = request.candidate if candidate is None else candidate
+    success_request = request
+    if evaluated_candidate != request.candidate:
+        success_request = EvaluationRequest(
+            proposal=Proposal(
+                candidate=evaluated_candidate,
+                proposal_id=request.proposal_id,
+            ),
+            proposal_evaluation_spec=request.proposal_evaluation_spec,
+        )
     refinement = None
     if changed:
         refinement = CandidateRefinement(
@@ -45,13 +54,15 @@ def _outcome(
             refined_candidate=evaluated_candidate,
             changed_leaf_paths=((),),
         )
-    return EvaluationOutcome(
-        observation=Observation.from_objective_value(
-            request=request,
-            candidate=evaluated_candidate,
-            value=float(evaluated_candidate),
-            direction=OptimizationDirection.MINIMIZE,
-        ),
+    observation = Observation.from_objective_value(
+        request=success_request,
+        candidate=evaluated_candidate,
+        value=float(evaluated_candidate),
+        direction=OptimizationDirection.MINIMIZE,
+    )
+    return EvaluationSuccess(
+        request=success_request,
+        payload=observation,
         refinement=refinement,
     )
 
@@ -86,7 +97,11 @@ class AttemptAwareBatchQueueOptimizer(OutcomeAwareBatchQueueOptimizer):
         self.failure_history += (
             tuple(failure.proposal_id for failure in attempts.failures),
         )
-        return self.tell_outcomes(state, attempts.outcomes)
+        success_attempts: EvaluationAttemptBatch[
+            OutcomeCandidateT,
+            Observation[int],
+        ] = EvaluationAttemptBatch(attempts=attempts.successes)
+        return super().tell_attempts(state, success_attempts)
 
 
 class RunMethodAttemptAssimilationTests:
@@ -95,25 +110,27 @@ class RunMethodAttemptAssimilationTests:
     def test_success_only_attempts_delegate_to_outcome_aware_hook(self) -> None:
         request_one = _request(4, "p-1")
         request_two = _request(2, "p-2")
-        outcome_one = _outcome(request_one, candidate=3, changed=True)
-        outcome_two = _outcome(request_two)
+        success_one = _success(request_one, candidate=3, changed=True)
+        success_two = _success(request_two)
         optimizer = OutcomeAwareBatchQueueOptimizer(proposal_batches=[])
         state = optimizer.create_initial_state()
         attempts = EvaluationAttemptBatch(
-            requests=(request_one, request_two),
-            outcomes=(outcome_one, outcome_two),
+            attempts=(success_one, success_two),
         )
 
         next_state = optimizer.tell_attempts(state, attempts)
 
-        assert next_state.tell_history == ((outcome_one.record, outcome_two.record),)
+        observed_one, observed_two = next_state.tell_history[0]
+        assert observed_one.proposal.candidate == 4
+        assert observed_one.candidate == 3
+        assert observed_two == success_two.payload
         assert optimizer.seen_changed_leaf_paths == (((),), None)
 
     def test_empty_success_only_attempts_keep_default_compatibility(self) -> None:
         optimizer = BatchQueueOptimizer(proposal_batches=[])
         state = optimizer.create_initial_state()
         attempts: EvaluationAttemptBatch[int, Observation[int]] = (
-            EvaluationAttemptBatch(requests=())
+            EvaluationAttemptBatch(attempts=())
         )
 
         next_state = optimizer.tell_attempts(state, attempts)
@@ -125,11 +142,11 @@ class RunMethodAttemptAssimilationTests:
         request_two = _request(2, "p-2")
         request_three = _request(3, "p-3")
         attempts = EvaluationAttemptBatch(
-            requests=(request_one, request_two, request_three),
-            outcomes=(_outcome(request_one), _outcome(request_three)),
-            outcome_indices=(0, 2),
-            failures=(_failure(request_two),),
-            failure_indices=(1,),
+            attempts=(
+                _success(request_one),
+                _failure(request_two),
+                _success(request_three),
+            ),
         )
         optimizer = BatchQueueOptimizer(proposal_batches=[])
         state = optimizer.create_initial_state()
@@ -149,8 +166,7 @@ class RunMethodAttemptAssimilationTests:
         request_one = _request(1, "p-1")
         request_two = _request(2, "p-2")
         attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            requests=(request_one, request_two),
-            failures=(_failure(request_one), _failure(request_two)),
+            attempts=(_failure(request_one), _failure(request_two)),
         )
         optimizer = BatchQueueOptimizer(proposal_batches=[])
 
@@ -164,14 +180,10 @@ class RunMethodAttemptAssimilationTests:
         request_one = _request(1, "p-1")
         request_two = _request(2, "p-2")
         request_three = _request(3, "p-3")
-        outcome_one = _outcome(request_one)
-        outcome_three = _outcome(request_three)
+        success_one = _success(request_one)
+        success_three = _success(request_three)
         attempts = EvaluationAttemptBatch(
-            requests=(request_one, request_two, request_three),
-            outcomes=(outcome_one, outcome_three),
-            outcome_indices=(0, 2),
-            failures=(_failure(request_two),),
-            failure_indices=(1,),
+            attempts=(success_one, _failure(request_two), success_three),
         )
         optimizer = AttemptAwareBatchQueueOptimizer(proposal_batches=[])
 
@@ -181,18 +193,14 @@ class RunMethodAttemptAssimilationTests:
         )
 
         assert optimizer.failure_history == (("p-2",),)
-        assert next_state.tell_history == ((outcome_one.record, outcome_three.record),)
+        assert next_state.tell_history == ((success_one.payload, success_three.payload),)
 
     def test_override_can_consume_zero_cost_failure(self) -> None:
         request_one = _request(1, "p-1")
         request_two = _request(2, "p-2")
-        outcome_two = _outcome(request_two)
+        success_two = _success(request_two)
         attempts = EvaluationAttemptBatch(
-            requests=(request_one, request_two),
-            outcomes=(outcome_two,),
-            outcome_indices=(1,),
-            failures=(_failure(request_one, evaluation_count=0),),
-            failure_indices=(0,),
+            attempts=(_failure(request_one, evaluation_count=0), success_two),
         )
         optimizer = AttemptAwareBatchQueueOptimizer(proposal_batches=[])
 
@@ -202,7 +210,7 @@ class RunMethodAttemptAssimilationTests:
         )
 
         assert optimizer.failure_history == (("p-1",),)
-        assert next_state.tell_history == ((outcome_two.record,),)
+        assert next_state.tell_history == ((success_two.payload,),)
 
     @pytest.mark.parametrize(
         ("failure_count", "attempt_count", "error_type", "match"),

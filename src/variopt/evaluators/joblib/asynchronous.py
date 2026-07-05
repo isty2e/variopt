@@ -11,11 +11,11 @@ from typing import Generic, Literal, TypeVar, cast
 import joblib  # pyright: ignore[reportMissingTypeStubs]
 from typing_extensions import override
 
-from ...artifacts import EvaluationRequest
+from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
-from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
 from ..async_evaluator.artifacts import (
@@ -71,7 +71,7 @@ def _evaluate_indexed_request_attempt(
     request: EvaluationRequest[CandidateT],
 ) -> tuple[
     int,
-    EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord],
+    EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
 ]:
     """Execute one request attempt and carry its original logical index."""
     return (
@@ -238,7 +238,7 @@ class AsyncJoblibEvaluator(
         ActiveAsyncJoblibBatch[
             BoundaryT,
             CandidateT,
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord],
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
             JoblibEvaluationPayloadT,
         ],
     ] = field(
@@ -326,7 +326,7 @@ class AsyncJoblibEvaluator(
         problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
     ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
     ]:
         """Open a native request-owned attempt-batch session.
 
@@ -339,7 +339,7 @@ class AsyncJoblibEvaluator(
 
         Returns
         -------
-        EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]]
+        EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]]
             Session that streams one-slot attempt batches in completion order.
         """
         return ResumablePendingAwareAsyncJoblibBatchSession(
@@ -351,7 +351,7 @@ class AsyncJoblibEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
+    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]:
         """Execute a request batch through joblib into a dense attempt batch.
 
         Parameters
@@ -363,7 +363,7 @@ class AsyncJoblibEvaluator(
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             Dense attempt batch aligned to ``requests``.
 
         Notes
@@ -374,7 +374,7 @@ class AsyncJoblibEvaluator(
         """
         parallel_factory = cast(
             JoblibListParallelFactory[
-                EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             ],
             getattr(joblib, "Parallel"),
         )
@@ -394,7 +394,7 @@ class AsyncJoblibEvaluator(
         )
         return EvaluationAttemptBatch[
             CandidateT,
-            RequestAlignedEvaluationRecord,
+            JoblibEvaluationPayloadT,
         ].from_single_request_attempts(tuple(attempts))
 
     @override
@@ -452,7 +452,7 @@ class AsyncJoblibEvaluator(
         self,
         handle: EvaluationBatchResumeHandle,
     ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
     ]:
         """Resume a suspended native attempt-batch session.
 
@@ -463,7 +463,7 @@ class AsyncJoblibEvaluator(
 
         Returns
         -------
-        EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]]
+        EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]]
             Resumed attempt batch session.
         """
         suspended_batch = self._suspended_attempt_batches.pop(handle.batch_id, None)
@@ -686,7 +686,7 @@ class AsyncJoblibEvaluator(
     ) -> ActiveAsyncJoblibBatch[
         BoundaryT,
         CandidateT,
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord],
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
         JoblibEvaluationPayloadT,
     ]:
         """Start one active native attempt-batch stream."""
@@ -701,7 +701,7 @@ class AsyncJoblibEvaluator(
         )
         result_queue: Queue[
             AsyncJoblibCompletedResult[
-                EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             ]
             | AsyncJoblibFailedResult
             | AsyncJoblibExhaustedResult
@@ -728,7 +728,7 @@ class AsyncJoblibEvaluator(
         active_batch: ActiveAsyncJoblibBatch[
             BoundaryT,
             CandidateT,
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord],
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
             JoblibEvaluationPayloadT,
         ],
         request_inputs: Sequence[AsyncJoblibRequestInput[CandidateT]],
@@ -742,7 +742,7 @@ class AsyncJoblibEvaluator(
         )
         result_queue: Queue[
             AsyncJoblibCompletedResult[
-                EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             ]
             | AsyncJoblibFailedResult
             | AsyncJoblibExhaustedResult
@@ -827,7 +827,7 @@ class AsyncJoblibEvaluator(
         active_batch: ActiveAsyncJoblibBatch[
             BoundaryT,
             CandidateT,
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord],
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
             JoblibEvaluationPayloadT,
         ],
         cause: BaseException,
@@ -1022,7 +1022,7 @@ class AsyncJoblibEvaluator(
         handle: EvaluationBatchHandle,
     ) -> tuple[
         CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
         ...,
     ]:
@@ -1040,7 +1040,7 @@ class AsyncJoblibEvaluator(
         timeout: float | None = None,
     ) -> tuple[
         CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
         ...,
     ]:
@@ -1141,7 +1141,7 @@ class AsyncJoblibEvaluator(
         timeout: float | None,
     ) -> tuple[
         CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
         ...,
     ]:
@@ -1262,15 +1262,15 @@ class AsyncJoblibEvaluator(
         active_batch: ActiveAsyncJoblibBatch[
             BoundaryT,
             CandidateT,
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord],
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT],
             JoblibEvaluationPayloadT,
         ],
         result_event: AsyncJoblibCompletedResult[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
     ) -> tuple[
         CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
         ...,
     ]:
@@ -1408,7 +1408,7 @@ class _AsyncJoblibAttemptSessionEvaluator(
         handle: EvaluationBatchHandle,
     ) -> tuple[
         CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
         ...,
     ]:
@@ -1422,7 +1422,7 @@ class _AsyncJoblibAttemptSessionEvaluator(
         timeout: float | None = None,
     ) -> tuple[
         CompletionGroup[
-            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+            EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
         ],
         ...,
     ]:

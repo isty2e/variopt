@@ -1,13 +1,17 @@
 """Shared helpers for study orchestration."""
 
 from collections.abc import Sequence
-from typing import Generic, Protocol, TypeGuard, runtime_checkable
+from typing import Generic, Protocol, TypeGuard, cast, runtime_checkable
 
 from typing_extensions import TypeVar, override
 
 from ..artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationFailure,
     EvaluationRequest,
+    EvaluationSuccess,
     Observation,
+    ObservationPayload,
     Proposal,
     ProposalEvaluationSpec,
 )
@@ -23,21 +27,27 @@ from ..evaluators.async_evaluator.sessions import (
     ResumableBatchSession,
 )
 from ..evaluators.base import Evaluator
-from ..outcomes import (
-    EvaluationAttemptBatch,
-    EvaluationOutcome,
-    validate_outcome_refinement_alignment,
-)
+from ..outcomes import EvaluationOutcome, validate_outcome_refinement_alignment
 from ..problem import Problem
 from ..spaces import CandidateEquality
+from ..spaces.equality import scalar_candidate_equality
 from ..typevars import CandidateT
 
 BoundaryT = TypeVar("BoundaryT")
 CompletionT = TypeVar("CompletionT")
 EvaluationT = TypeVar("EvaluationT")
+LegacyOutcomeRecordT = TypeVar(
+    "LegacyOutcomeRecordT",
+    bound=RequestAlignedEvaluationRecord,
+)
 StudyEvaluationRecordT = TypeVar(
     "StudyEvaluationRecordT",
     bound=RequestAlignedEvaluationRecord,
+)
+ResumableStudyEvaluationRecordT = TypeVar(
+    "ResumableStudyEvaluationRecordT",
+    bound=RequestAlignedEvaluationRecord,
+    covariant=True,
 )
 
 
@@ -73,7 +83,7 @@ class AttemptBatchSessionEvaluator(
 
 @runtime_checkable
 class ResumableAttemptBatchSessionEvaluator(
-    Protocol[CandidateT, StudyEvaluationRecordT]
+    Protocol[CandidateT, ResumableStudyEvaluationRecordT]
 ):
     """Async evaluator capability that resumes native attempt-batch sessions."""
 
@@ -81,7 +91,7 @@ class ResumableAttemptBatchSessionEvaluator(
         self,
         handle: EvaluationBatchResumeHandle,
     ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, ResumableStudyEvaluationRecordT]
     ]:
         """Resume a session that emits one-slot attempt batches."""
         ...
@@ -91,7 +101,7 @@ def supports_attempt_batches(
     evaluator: Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationT,
     ],
 ) -> TypeGuard[AttemptBatchEvaluator[BoundaryT, CandidateT, StudyEvaluationRecordT]]:
     """Return whether ``evaluator`` exposes dense attempt-batch evaluation."""
@@ -102,7 +112,7 @@ def supports_attempt_batch_sessions(
     evaluator: AsyncEvaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationT,
     ],
 ) -> TypeGuard[
     AttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyEvaluationRecordT]
@@ -115,7 +125,7 @@ def supports_resumable_attempt_batch_sessions(
     evaluator: AsyncEvaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationT,
     ],
 ) -> TypeGuard[
     ResumableAttemptBatchSessionEvaluator[CandidateT, StudyEvaluationRecordT]
@@ -125,30 +135,30 @@ def supports_resumable_attempt_batch_sessions(
 
 
 class OutcomeToAttemptBatchSession(
-    EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]],
-    Generic[CandidateT, StudyEvaluationRecordT],
+    EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]],
+    Generic[CandidateT, LegacyOutcomeRecordT],
 ):
     """Adapt an outcome-only async session into a success-only attempt session."""
 
     requests: tuple[EvaluationRequest[CandidateT], ...]
     outcome_session: EvaluationBatchSession[
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+        EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
     ]
-    candidate_equal: CandidateEquality[CandidateT]
+    candidate_equal_fn: CandidateEquality[CandidateT]
 
     def __init__(
         self,
         *,
         requests: tuple[EvaluationRequest[CandidateT], ...],
         outcome_session: EvaluationBatchSession[
-            EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+            EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
         ],
         candidate_equal: CandidateEquality[CandidateT],
     ) -> None:
         """Create one outcome-session adapter."""
         self.requests = requests
         self.outcome_session = outcome_session
-        self.candidate_equal = candidate_equal
+        self.candidate_equal_fn = candidate_equal
 
     @property
     @override
@@ -160,7 +170,7 @@ class OutcomeToAttemptBatchSession(
     def poll(
         self,
     ) -> Sequence[
-        CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]]
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]]
     ]:
         """Return newly completed success-only attempt groups."""
         return tuple(
@@ -174,7 +184,7 @@ class OutcomeToAttemptBatchSession(
         *,
         timeout: float | None = None,
     ) -> Sequence[
-        CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]]
+        CompletionGroup[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]]
     ]:
         """Wait for newly completed success-only attempt groups."""
         return tuple(
@@ -190,9 +200,9 @@ class OutcomeToAttemptBatchSession(
     def _attempt_completion_group(
         self,
         completion_group: CompletionGroup[
-            EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+            EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
         ],
-    ) -> CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]]:
+    ) -> CompletionGroup[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]]:
         end_index = completion_group.start_index + len(completion_group.outcomes)
         if end_index > len(self.requests):
             msg = "completion group exceeds logical batch bounds"
@@ -202,14 +212,22 @@ class OutcomeToAttemptBatchSession(
         validate_aligned_outcomes(
             group_requests,
             completion_group.outcomes,
-            candidate_equal=self.candidate_equal,
+            candidate_equal=self.candidate_equal_fn,
         )
         return CompletionGroup(
             start_index=completion_group.start_index,
             outcomes=tuple(
                 EvaluationAttemptBatch(
-                    requests=(request,),
-                    outcomes=(outcome,),
+                    attempts=(
+                        EvaluationSuccess(
+                            request=request,
+                            payload=outcome.record,
+                            evaluation_count=outcome.evaluation_count,
+                            refinement=outcome.refinement,
+                            kernel_diagnostics=outcome.kernel_diagnostics,
+                            candidate_equal=self.candidate_equal_fn,
+                        ),
+                    ),
                 )
                 for request, outcome in zip(
                     group_requests,
@@ -221,9 +239,9 @@ class OutcomeToAttemptBatchSession(
 
 
 class ResumableOutcomeToAttemptBatchSession(
-    OutcomeToAttemptBatchSession[CandidateT, StudyEvaluationRecordT],
-    ResumableBatchSession[EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]],
-    Generic[CandidateT, StudyEvaluationRecordT],
+    OutcomeToAttemptBatchSession[CandidateT, LegacyOutcomeRecordT],
+    ResumableBatchSession[EvaluationAttemptBatch[CandidateT, LegacyOutcomeRecordT]],
+    Generic[CandidateT, LegacyOutcomeRecordT],
 ):
     """Adapt a resumable outcome-only session into a resumable attempt session."""
 
@@ -232,7 +250,7 @@ class ResumableOutcomeToAttemptBatchSession(
         *,
         requests: tuple[EvaluationRequest[CandidateT], ...],
         outcome_session: ResumableBatchSession[
-            EvaluationOutcome[CandidateT, StudyEvaluationRecordT]
+            EvaluationOutcome[CandidateT, LegacyOutcomeRecordT]
         ],
         candidate_equal: CandidateEquality[CandidateT],
     ) -> None:
@@ -342,8 +360,8 @@ def store_completion_group(
 
 
 def finalize_ordered_outcomes(
-    ordered_outcomes: list[EvaluationOutcome[CandidateT, StudyEvaluationRecordT] | None],
-) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+    ordered_outcomes: list[EvaluationOutcome[CandidateT, LegacyOutcomeRecordT] | None],
+) -> tuple[EvaluationOutcome[CandidateT, LegacyOutcomeRecordT], ...]:
     """Return one fully populated ordered outcome tuple.
 
     Parameters
@@ -404,7 +422,7 @@ def finalize_ordered_attempts(
 
 def validate_aligned_outcomes(
     requests: tuple[EvaluationRequest[CandidateT], ...],
-    outcomes: tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...],
+    outcomes: tuple[EvaluationOutcome[CandidateT, LegacyOutcomeRecordT], ...],
     *,
     candidate_equal: CandidateEquality[CandidateT] | None = None,
 ) -> None:
@@ -437,7 +455,15 @@ def validate_aligned_outcomes(
         raise ValueError(msg)
 
     for request, outcome in zip(requests, outcomes, strict=True):
-        if outcome.record.request != request:
+        # Legacy outcome records erase the candidate parameter at the protocol
+        # bound; EvaluationOutcome still binds this compatibility edge to
+        # CandidateT.
+        record_request = cast(EvaluationRequest[CandidateT], outcome.record.request)
+        if not _requests_match(
+            request,
+            record_request,
+            candidate_equal=candidate_equal,
+        ):
             msg = "evaluator outcomes must align with input request order"
             raise ValueError(msg)
         validate_outcome_refinement_alignment(
@@ -474,22 +500,43 @@ def validate_aligned_attempts(
         msg = "attempt batch must contain exactly one slot per request"
         raise ValueError(msg)
 
-    for expected_request, actual_request in zip(
+    for expected_request, attempt_request, attempt in zip(
         requests,
         attempts.requests,
+        attempts.attempts,
         strict=True,
     ):
-        if not _requests_match(
-            actual_request,
-            expected_request,
-            candidate_equal=candidate_equal,
-        ):
-            msg = "attempt batch requests must align with input request order"
-            raise ValueError(msg)
+        if type(attempt) is EvaluationFailure:
+            attempts_match = _requests_match(
+                attempt_request,
+                expected_request,
+                candidate_equal=candidate_equal,
+            )
+        elif type(attempt) is EvaluationSuccess:
+            attempts_match = _success_matches_expected_request(
+                attempt,
+                expected_request,
+                candidate_equal=candidate_equal,
+            )
+        else:
+            attempts_match = False
 
-    for outcome in attempts.outcomes:
-        validate_outcome_refinement_alignment(
-            outcome,
+        if attempts_match:
+            continue
+
+        msg = "attempt batch requests must align with input request order"
+        raise ValueError(msg)
+
+    if candidate_equal is None:
+        return
+
+    for success in attempts.successes:
+        _ = EvaluationSuccess(
+            request=success.request,
+            payload=success.payload,
+            evaluation_count=success.evaluation_count,
+            refinement=success.refinement,
+            kernel_diagnostics=success.kernel_diagnostics,
             candidate_equal=candidate_equal,
         )
 
@@ -513,6 +560,43 @@ def _requests_match(
     )
 
 
+def _success_matches_expected_request(
+    success: EvaluationSuccess[CandidateT, StudyEvaluationRecordT],
+    expected_request: EvaluationRequest[CandidateT],
+    *,
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> bool:
+    if _requests_match(
+        success.request,
+        expected_request,
+        candidate_equal=candidate_equal,
+    ):
+        return True
+
+    refinement = success.refinement
+    if refinement is None:
+        return False
+
+    if success.request.proposal_id != expected_request.proposal_id:
+        return False
+
+    if success.request.proposal_evaluation_spec != expected_request.proposal_evaluation_spec:
+        return False
+
+    if not _candidates_match(
+        refinement.source_candidate,
+        expected_request.candidate,
+        candidate_equal=candidate_equal,
+    ):
+        return False
+
+    return _candidates_match(
+        success.request.candidate,
+        refinement.refined_candidate,
+        candidate_equal=candidate_equal,
+    )
+
+
 def _candidates_match(
     left_candidate: CandidateT,
     right_candidate: CandidateT,
@@ -520,10 +604,13 @@ def _candidates_match(
     candidate_equal: CandidateEquality[CandidateT] | None,
 ) -> bool:
     if candidate_equal is None:
-        candidates_match = left_candidate == right_candidate
-    else:
-        candidates_match = candidate_equal(left_candidate, right_candidate)
+        return scalar_candidate_equality(left_candidate, right_candidate)
 
+    return _require_bool_candidate_match(candidate_equal(left_candidate, right_candidate))
+
+
+def _require_bool_candidate_match(candidates_match: object) -> bool:
+    """Return a candidate equality result after strict bool validation."""
     if type(candidates_match) is not bool:
         msg = "candidate equality must return bool"
         raise TypeError(msg)
@@ -553,10 +640,16 @@ def trace_value_for_records(
     best_batch_value: float | None = None
     best_batch_score: float | None = None
     for record in records:
-        if not isinstance(record, Observation):
+        if isinstance(record, ObservationPayload):
+            score = record.score
+            value = record.value
+        elif isinstance(record, Observation):
+            score = record.score
+            value = record.value
+        else:
             return None
-        if best_batch_score is None or record.score < best_batch_score:
-            best_batch_score = record.score
-            best_batch_value = record.value
+        if best_batch_score is None or score < best_batch_score:
+            best_batch_score = score
+            best_batch_value = value
 
     return best_batch_value

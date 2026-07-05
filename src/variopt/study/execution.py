@@ -1,23 +1,28 @@
 """Generic study step and run orchestration."""
 
 from dataclasses import dataclass, replace
-from typing import Generic, NoReturn, Protocol, TypeGuard, cast
+from typing import Generic, NoReturn, Protocol, TypeGuard
 
 from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..artifacts import (
-    CandidateRefinement,
+    EvaluationAttemptBatch,
     EvaluationFailure,
     EvaluationRequest,
+    EvaluationSuccess,
     Observation,
+    ObservationPayload,
     Proposal,
     RunReport,
     RunResult,
     Trace,
     TraceEvent,
+    materialize_attempt_batch_records,
+    materialize_success_records,
 )
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.base import Evaluator
 from ..evaluators.sequential import SequentialEvaluator
 from ..execution import (
@@ -33,7 +38,7 @@ from ..execution import (
 from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
 from ..methods import RunMethod
 from ..objective import Objective, ScalarEvaluationProtocol
-from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
@@ -43,7 +48,6 @@ from .common import (
     supports_attempt_batches,
     trace_value_for_records,
     validate_aligned_attempts,
-    validate_aligned_outcomes,
 )
 from .exact_async.orchestration import evaluate_batch_exact_async
 from .failures import RunExecutionFailed
@@ -80,8 +84,7 @@ class _CheckpointSafeRunSnapshot(
 ):
     """Last known checkpoint-safe run projection."""
 
-    records: tuple[StudyEvaluationRecordT, ...]
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None
+    successes: tuple[EvaluationSuccess[CandidateT, StudyEvaluationRecordT], ...]
     failures: tuple[EvaluationFailure[CandidateT], ...]
     trace: Trace
     evaluation_count: int
@@ -124,7 +127,7 @@ class StudyExecutionOwner(
     ) -> Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ]:
         """Return the configured evaluator."""
         ...
@@ -265,19 +268,17 @@ def _current_evaluation_count(
 
 def _build_run_report(
     *,
-    records: tuple[StudyEvaluationRecordT, ...],
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None,
+    successes: tuple[EvaluationSuccess[CandidateT, StudyEvaluationRecordT], ...],
     failures: tuple[EvaluationFailure[CandidateT], ...],
     trace_events: tuple[TraceEvent, ...],
     evaluation_count: int,
     candidate_equal: CandidateEquality[CandidateT],
 ) -> RunReport[CandidateT, StudyEvaluationRecordT]:
     """Build one report projection from the current run-history state."""
-    return RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-        records=records,
+    return RunReport[CandidateT, StudyEvaluationRecordT].from_successes(
+        successes=successes,
         evaluation_count=evaluation_count,
         trace=Trace(events=trace_events),
-        refinements=refinements,
         failures=failures,
         candidate_equal=candidate_equal,
     )
@@ -293,11 +294,10 @@ def _run_report_from_snapshot(
     candidate_equal: CandidateEquality[CandidateT],
 ) -> RunReport[CandidateT, StudyEvaluationRecordT]:
     """Build one report projection from a checkpoint-safe snapshot."""
-    return RunReport[CandidateT, StudyEvaluationRecordT].from_records(
-        records=snapshot.records,
+    return RunReport[CandidateT, StudyEvaluationRecordT].from_successes(
+        successes=snapshot.successes,
         evaluation_count=snapshot.evaluation_count,
         trace=snapshot.trace,
-        refinements=snapshot.refinements,
         failures=snapshot.failures,
         candidate_equal=candidate_equal,
     )
@@ -306,8 +306,7 @@ def _run_report_from_snapshot(
 def _raise_run_execution_failed(
     *,
     cause: Exception,
-    records: tuple[StudyEvaluationRecordT, ...],
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] | None,
+    successes: tuple[EvaluationSuccess[CandidateT, StudyEvaluationRecordT], ...],
     failures: tuple[EvaluationFailure[CandidateT], ...],
     trace_events: tuple[TraceEvent, ...],
     evaluation_count: int,
@@ -336,8 +335,7 @@ def _raise_run_execution_failed(
         StudyEvaluationRecordT,
     ](
         partial_report=_build_run_report(
-            records=records,
-            refinements=refinements,
+            successes=successes,
             failures=failures,
             trace_events=trace_events,
             evaluation_count=evaluation_count,
@@ -379,6 +377,7 @@ def _optimize_direct_scalar_sequential(
         raise RuntimeError(msg)
 
     observations: list[Observation[CandidateT]] = []
+    successes: list[EvaluationSuccess[CandidateT, Observation[CandidateT]]] = []
     failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
@@ -436,13 +435,15 @@ def _optimize_direct_scalar_sequential(
                 raise ValueError(msg)
 
             batch_observations: list[Observation[CandidateT]] = []
-            batch_outcomes: list[
-                EvaluationOutcome[CandidateT, Observation[CandidateT]]
+            batch_successes: list[
+                EvaluationSuccess[CandidateT, Observation[CandidateT]]
             ] = []
             batch_requests: list[EvaluationRequest[CandidateT]] = []
-            batch_outcome_indices: list[int] = []
             batch_failures: list[EvaluationFailure[CandidateT]] = []
-            batch_failure_indices: list[int] = []
+            batch_attempt_slots: list[
+                EvaluationSuccess[CandidateT, Observation[CandidateT]]
+                | EvaluationFailure[CandidateT]
+            ] = []
             for index, proposal in enumerate(proposals):
                 candidate = proposal.candidate
                 study.problem.space.validate(candidate)
@@ -467,7 +468,7 @@ def _optimize_direct_scalar_sequential(
                             exception=exception,
                         ),
                     )
-                    batch_failure_indices.append(index)
+                    batch_attempt_slots.append(batch_failures[-1])
                     continue
 
                 observation = Observation.from_objective_value(
@@ -477,25 +478,21 @@ def _optimize_direct_scalar_sequential(
                     direction=study.problem.direction,
                 )
                 batch_observations.append(observation)
-                batch_outcome_indices.append(index)
-                batch_outcomes.append(
-                    EvaluationOutcome(
-                        record=observation,
+                batch_successes.append(
+                    EvaluationSuccess(
+                        request=request,
+                        payload=observation,
                         evaluation_count=1,
                     ),
                 )
+                batch_attempt_slots.append(batch_successes[-1])
 
             batch_observation_tuple = tuple(batch_observations)
-            batch_outcome_tuple = tuple(batch_outcomes)
             batch_attempts: EvaluationAttemptBatch[
                 CandidateT,
                 Observation[CandidateT],
             ] = EvaluationAttemptBatch(
-                requests=tuple(batch_requests),
-                outcomes=batch_outcome_tuple,
-                outcome_indices=tuple(batch_outcome_indices),
-                failures=tuple(batch_failures),
-                failure_indices=tuple(batch_failure_indices),
+                attempts=tuple(batch_attempt_slots),
             )
             next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
         except EvaluationBudgetExhausted:
@@ -503,8 +500,7 @@ def _optimize_direct_scalar_sequential(
         except Exception as exception:
             _raise_run_execution_failed(
                 cause=exception,
-                records=tuple(observations),
-                refinements=None,
+                successes=tuple(successes),
                 failures=tuple(failures),
                 trace_events=tuple(trace_events),
                 evaluation_count=_current_evaluation_count(
@@ -518,6 +514,7 @@ def _optimize_direct_scalar_sequential(
             )
         state = next_run_state
         observations.extend(batch_observation_tuple)
+        successes.extend(batch_successes)
         failures.extend(batch_failures)
         if evaluation_budget is None:
             record_budget_remaining -= batch_attempts.attempt_count
@@ -560,7 +557,7 @@ def evaluate_batch_sync(
     query: ProposalBatchQuery[BoundaryT, CandidateT, StudyEvaluationRecordT],
     *,
     requests: tuple[EvaluationRequest[CandidateT], ...] | None = None,
-) -> tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]:
+) -> tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]:
     """Execute one request batch through the synchronous evaluator path.
 
     Parameters
@@ -574,7 +571,7 @@ def evaluate_batch_sync(
 
     Returns
     -------
-    tuple[EvaluationOutcome[CandidateT, StudyEvaluationRecordT], ...]
+    tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]
         Outcomes returned by the synchronous evaluator in request order.
     """
     resolved_requests = (
@@ -628,21 +625,13 @@ def evaluate_attempts_sync(
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(resolved_requests))
 
-    if supports_attempt_batches(study.evaluator):
-        return study.evaluator.evaluate_attempts(
-            query.problem,
-            resolved_requests,
-        )
+    if not supports_attempt_batches(study.evaluator):
+        msg = "study evaluator must expose evaluate_attempts"
+        raise TypeError(msg)
 
-    outcomes = tuple(study.evaluator.evaluate(query.problem, resolved_requests))
-    validate_aligned_outcomes(
+    return study.evaluator.evaluate_attempts(
+        query.problem,
         resolved_requests,
-        outcomes,
-        candidate_equal=study.problem.space.candidates_equal,
-    )
-    return EvaluationAttemptBatch(
-        requests=resolved_requests,
-        outcomes=outcomes,
     )
 
 
@@ -806,9 +795,10 @@ def evaluate_step(
         remaining_before=remaining_before,
         reported_evaluation_count=reported_evaluation_count,
     )
-    next_state = study.run_method.tell_attempts(next_state, kernel_attempts)
+    feedback_attempts = materialize_attempt_batch_records(kernel_attempts)
+    next_state = study.run_method.tell_attempts(next_state, feedback_attempts)
     return StudyStepResult(
-        attempts=kernel_attempts,
+        attempts=feedback_attempts,
         state=next_state,
         evaluation_count=step_evaluation_count,
     )
@@ -868,7 +858,8 @@ def step(
         batch_size,
         execution_model=execution_model,
     )
-    return step_result.attempts.records, step_result.state
+    records = materialize_success_records(step_result.attempts.successes)
+    return records, step_result.state
 
 
 def run(
@@ -934,14 +925,14 @@ def run(
         execution_model=execution_model,
     )
 
-    records: list[StudyEvaluationRecordT] = []
-    refinements: list[CandidateRefinement[CandidateT] | None] | None = None
+    successes: list[EvaluationSuccess[CandidateT, StudyEvaluationRecordT]] = []
     failures: list[EvaluationFailure[CandidateT]] = []
     trace_events: list[TraceEvent] = []
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
     )
     record_budget_remaining = max_evaluations
+    reported_evaluation_count_total = 0
     state = (
         study.run_method.create_initial_state()
         if initial_state is None
@@ -958,8 +949,7 @@ def run(
     unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
         safe_snapshot = _CheckpointSafeRunSnapshot(
-            records=(),
-            refinements=None,
+            successes=(),
             failures=(),
             trace=Trace(),
             evaluation_count=0,
@@ -988,8 +978,7 @@ def run(
         except Exception as exception:
             _raise_run_execution_failed(
                 cause=exception,
-                records=tuple(records),
-                refinements=None if refinements is None else tuple(refinements),
+                successes=tuple(successes),
                 failures=tuple(failures),
                 trace_events=tuple(trace_events),
                 evaluation_count=_current_evaluation_count(
@@ -1001,22 +990,12 @@ def run(
                 safe_snapshot=safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             )
-        batch_records = step_result.attempts.records
-        batch_refinements = tuple(
-            outcome.refinement for outcome in step_result.attempts.outcomes
-        )
+        batch_successes = step_result.attempts.successes
+        batch_records = materialize_success_records(step_result.attempts.successes)
         state = step_result.state
-        records_before_batch = len(records)
-        records.extend(batch_records)
+        reported_evaluation_count_total += step_result.evaluation_count
+        successes.extend(batch_successes)
         failures.extend(step_result.attempts.failures)
-        if refinements is not None:
-            refinements.extend(batch_refinements)
-        elif any(refinement is not None for refinement in batch_refinements):
-            refinement_history: list[CandidateRefinement[CandidateT] | None] = [
-                None for _index in range(records_before_batch)
-            ]
-            refinement_history.extend(batch_refinements)
-            refinements = refinement_history
         if evaluation_budget is None:
             remaining -= step_result.attempts.attempt_count
             record_budget_remaining = remaining
@@ -1032,18 +1011,12 @@ def run(
             ),
         )
         if stop_at_checkpoint_boundary:
-            evaluation_count = _current_evaluation_count(
-                max_evaluations=max_evaluations,
-                evaluation_budget=evaluation_budget,
-                record_budget_remaining=record_budget_remaining,
-            )
             if study.run_method.is_checkpoint_safe_state(state):
                 safe_snapshot = _CheckpointSafeRunSnapshot(
-                    records=tuple(records),
-                    refinements=None if refinements is None else tuple(refinements),
+                    successes=tuple(successes),
                     failures=tuple(failures),
                     trace=Trace(events=tuple(trace_events)),
-                    evaluation_count=evaluation_count,
+                    evaluation_count=reported_evaluation_count_total,
                     state=state,
                 )
                 if unsafe_since_safe_snapshot:
@@ -1070,15 +1043,10 @@ def run(
 
     return (
         _build_run_report(
-            records=tuple(records),
-            refinements=None if refinements is None else tuple(refinements),
+            successes=tuple(successes),
             failures=tuple(failures),
             trace_events=tuple(trace_events),
-            evaluation_count=_current_evaluation_count(
-                max_evaluations=max_evaluations,
-                evaluation_budget=evaluation_budget,
-                record_budget_remaining=record_budget_remaining,
-            ),
+            evaluation_count=reported_evaluation_count_total,
             candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
@@ -1109,23 +1077,39 @@ def materialize_scalar_run_result(
     Raises
     ------
     TypeError
-        If the report does not contain scalar :class:`Observation` records.
+        If the report does not contain scalar
+        :class:`~variopt.artifacts.ObservationPayload` successes.
     """
-    observations: list[Observation[CandidateT]] = []
-    for record in run_report.records:
-        if not isinstance(record, Observation):
+    successes: list[EvaluationSuccess[CandidateT, ObservationPayload]] = []
+    for success in run_report.successes:
+        payload = success.payload
+        if isinstance(payload, Observation):
+            scalar_payload = ObservationPayload(
+                value=payload.value,
+                score=payload.score,
+                elapsed_seconds=payload.elapsed_seconds,
+            )
+        else:
             msg = (
-                "Study.optimize currently requires scalar Observation records; "
+                "Study.optimize currently requires scalar ObservationPayload records; "
                 "use Study.run for non-scalar evaluation protocols"
             )
             raise TypeError(msg)
-        observations.append(cast(Observation[CandidateT], record))
+        successes.append(
+            EvaluationSuccess(
+                request=success.request,
+                payload=scalar_payload,
+                evaluation_count=success.evaluation_count,
+                refinement=success.refinement,
+                kernel_diagnostics=success.kernel_diagnostics,
+                candidate_equal=candidate_equal,
+            ),
+        )
 
-    return RunResult[CandidateT].from_observations(
-        observations=tuple(observations),
+    return RunResult[CandidateT].from_successes(
+        successes=tuple(successes),
         evaluation_count=run_report.evaluation_count,
         trace=run_report.trace,
-        refinements=run_report.refinements,
         failures=run_report.failures,
         candidate_equal=candidate_equal,
     )

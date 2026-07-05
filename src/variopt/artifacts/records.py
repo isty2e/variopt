@@ -2,14 +2,14 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Protocol
 
 import numpy as np
+from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..direction import OptimizationDirection
-from ..typevars import CandidateT
 from .requests import (
     EvaluationRequest,
     InteractionEvaluationSpec,
@@ -19,7 +19,18 @@ from .requests import (
     normalize_evaluation_request,
 )
 
+EvaluationRecordCandidateT = TypeVar("EvaluationRecordCandidateT")
+RequestAlignedEvaluationRecordCandidateT = TypeVar(
+    "RequestAlignedEvaluationRecordCandidateT",
+    default=object,
+    covariant=True,
+)
+InteractionEvaluationRecordCandidateT = TypeVar(
+    "InteractionEvaluationRecordCandidateT"
+)
+ObservationRecordCandidateT = TypeVar("ObservationRecordCandidateT")
 ObservationCandidateT = TypeVar("ObservationCandidateT")
+ObjectiveVectorRecordCandidateT = TypeVar("ObjectiveVectorRecordCandidateT")
 ObjectiveVectorCandidateT = TypeVar("ObjectiveVectorCandidateT")
 
 
@@ -222,51 +233,59 @@ class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
         )
 
 
-class RequestAlignedEvaluationRecord(Protocol):
+class RequestAlignedEvaluationRecord(
+    Protocol[RequestAlignedEvaluationRecordCandidateT]
+):
     """Minimal request-aligned evaluation record contract.
 
     Notes
     -----
     This protocol captures the semantic boundary shared by
     :class:`EvaluationRecord` and its concrete subclasses: the record must own
-    exactly one canonical request and the candidate evaluated for that request.
-    The core request-local execution stack depends on this alignment contract
-    even when it does not care about the concrete record subclass.
+    exactly one canonical request slot and the candidate evaluated for that
+    slot. The request's proposal candidate and the evaluated candidate may differ
+    when execution-side refinement occurred, so consumers that need the evaluated
+    candidate must read :attr:`candidate`.
     """
 
     @property
-    def request(self) -> object:
+    def request(
+        self,
+    ) -> EvaluationRequest[RequestAlignedEvaluationRecordCandidateT]:
         """Return the canonical request that produced the record."""
         ...
 
     @property
-    def candidate(self) -> object:
+    def candidate(self) -> RequestAlignedEvaluationRecordCandidateT:
         """Return the candidate evaluated for the request."""
         ...
 
 
 @dataclass(frozen=True, slots=True)
-class EvaluationRecord(FrozenGenericSlotsCompat, Generic[CandidateT]):
+class EvaluationRecord(
+    FrozenGenericSlotsCompat,
+    Generic[EvaluationRecordCandidateT],
+):
     """Immutable semantic record over one canonical request.
 
     Parameters
     ----------
-    request : EvaluationRequest[CandidateT]
+    request : EvaluationRequest[EvaluationRecordCandidateT]
         Canonical request that produced the record.
-    candidate : CandidateT
+    candidate : EvaluationRecordCandidateT
         Candidate evaluated for ``request``.
     """
 
-    request: EvaluationRequest[CandidateT]
-    candidate: CandidateT
+    request: EvaluationRequest[EvaluationRecordCandidateT]
+    candidate: EvaluationRecordCandidateT
 
     @property
-    def proposal(self) -> Proposal[CandidateT]:
+    def proposal(self) -> Proposal[EvaluationRecordCandidateT]:
         """Return the proposal compatibility view.
 
         Returns
         -------
-        Proposal[CandidateT]
+        Proposal[EvaluationRecordCandidateT]
             Proposal owned by :attr:`request`.
         """
         return self.request.proposal
@@ -284,46 +303,53 @@ class EvaluationRecord(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
 
 @dataclass(frozen=True, slots=True)
-class InteractionEvaluationRecord(FrozenGenericSlotsCompat, Generic[CandidateT]):
+class InteractionEvaluationRecord(
+    FrozenGenericSlotsCompat,
+    Generic[InteractionEvaluationRecordCandidateT],
+):
     """Immutable semantic record over one interaction unit.
 
     Parameters
     ----------
-    interaction_unit : InteractionEvaluationUnit[CandidateT]
+    interaction_unit : InteractionEvaluationUnit[InteractionEvaluationRecordCandidateT]
         Canonical interaction unit that produced the record.
     """
 
-    interaction_unit: InteractionEvaluationUnit[CandidateT]
+    interaction_unit: InteractionEvaluationUnit[InteractionEvaluationRecordCandidateT]
 
     @property
-    def requests(self) -> tuple[EvaluationRequest[CandidateT], ...]:
+    def requests(
+        self,
+    ) -> tuple[EvaluationRequest[InteractionEvaluationRecordCandidateT], ...]:
         """Return the request participants.
 
         Returns
         -------
-        tuple[EvaluationRequest[CandidateT], ...]
+        tuple[EvaluationRequest[InteractionEvaluationRecordCandidateT], ...]
             Requests contained in the interaction unit.
         """
         return self.interaction_unit.requests
 
     @property
-    def proposals(self) -> tuple[Proposal[CandidateT], ...]:
+    def proposals(
+        self,
+    ) -> tuple[Proposal[InteractionEvaluationRecordCandidateT], ...]:
         """Return the proposal compatibility view.
 
         Returns
         -------
-        tuple[Proposal[CandidateT], ...]
+        tuple[Proposal[InteractionEvaluationRecordCandidateT], ...]
             Proposals carried by the interaction unit.
         """
         return self.interaction_unit.proposals
 
     @property
-    def candidates(self) -> tuple[CandidateT, ...]:
+    def candidates(self) -> tuple[InteractionEvaluationRecordCandidateT, ...]:
         """Return the participating candidates.
 
         Returns
         -------
-        tuple[CandidateT, ...]
+        tuple[InteractionEvaluationRecordCandidateT, ...]
             Candidates carried by the interaction unit.
         """
         return self.interaction_unit.candidates
@@ -341,18 +367,21 @@ class InteractionEvaluationRecord(FrozenGenericSlotsCompat, Generic[CandidateT])
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class Observation(EvaluationRecord[CandidateT]):
+class Observation(
+    EvaluationRecord[ObservationRecordCandidateT],
+    Generic[ObservationRecordCandidateT],
+):
     """Immutable scalar evaluation result.
 
     Parameters
     ----------
-    request : EvaluationRequest[CandidateT] | None, optional
+    request : EvaluationRequest[ObservationRecordCandidateT] | None, optional
         Existing canonical request.
-    proposal : Proposal[CandidateT] | None, optional
+    proposal : Proposal[ObservationRecordCandidateT] | None, optional
         Proposal to lower into a canonical request.
     proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
         Optional request metadata used when lowering ``proposal``.
-    candidate : CandidateT
+    candidate : ObservationRecordCandidateT
         Candidate evaluated by the request.
     value : float
         Raw scalar objective value.
@@ -363,6 +392,8 @@ class Observation(EvaluationRecord[CandidateT]):
         Optional wall-clock runtime for the evaluation.
     """
 
+    request: EvaluationRequest[ObservationRecordCandidateT]
+    candidate: ObservationRecordCandidateT
     value: float
     score: float
     elapsed_seconds: float | None = None
@@ -370,10 +401,10 @@ class Observation(EvaluationRecord[CandidateT]):
     def __init__(
         self,
         *,
-        request: EvaluationRequest[CandidateT] | None = None,
-        proposal: Proposal[CandidateT] | None = None,
+        request: EvaluationRequest[ObservationRecordCandidateT] | None = None,
+        proposal: Proposal[ObservationRecordCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
-        candidate: CandidateT,
+        candidate: ObservationRecordCandidateT,
         value: float,
         score: float,
         elapsed_seconds: float | None = None,
@@ -382,13 +413,13 @@ class Observation(EvaluationRecord[CandidateT]):
 
         Parameters
         ----------
-        request : EvaluationRequest[CandidateT] | None, optional
+        request : EvaluationRequest[ObservationRecordCandidateT] | None, optional
             Existing canonical request.
-        proposal : Proposal[CandidateT] | None, optional
+        proposal : Proposal[ObservationRecordCandidateT] | None, optional
             Proposal to lower into a canonical request.
         proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
             Optional request metadata used when lowering ``proposal``.
-        candidate : CandidateT
+        candidate : ObservationRecordCandidateT
             Candidate evaluated by the request.
         value : float
             Raw scalar objective value.
@@ -517,18 +548,21 @@ def normalize_objective_vector(
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class ObjectiveVectorRecord(EvaluationRecord[CandidateT]):
+class ObjectiveVectorRecord(
+    EvaluationRecord[ObjectiveVectorRecordCandidateT],
+    Generic[ObjectiveVectorRecordCandidateT],
+):
     """Immutable multi-objective evaluation record.
 
     Parameters
     ----------
-    request : EvaluationRequest[CandidateT] | None, optional
+    request : EvaluationRequest[ObjectiveVectorRecordCandidateT] | None, optional
         Existing canonical request.
-    proposal : Proposal[CandidateT] | None, optional
+    proposal : Proposal[ObjectiveVectorRecordCandidateT] | None, optional
         Proposal to lower into a canonical request.
     proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
         Optional request metadata used when lowering ``proposal``.
-    candidate : CandidateT
+    candidate : ObjectiveVectorRecordCandidateT
         Candidate evaluated by the request.
     objective_values : Sequence[float]
         Raw objective values.
@@ -538,6 +572,8 @@ class ObjectiveVectorRecord(EvaluationRecord[CandidateT]):
         Optional wall-clock runtime for the evaluation.
     """
 
+    request: EvaluationRequest[ObjectiveVectorRecordCandidateT]
+    candidate: ObjectiveVectorRecordCandidateT
     objective_values: tuple[float, ...]
     objective_scores: tuple[float, ...]
     elapsed_seconds: float | None = None
@@ -545,10 +581,10 @@ class ObjectiveVectorRecord(EvaluationRecord[CandidateT]):
     def __init__(
         self,
         *,
-        request: EvaluationRequest[CandidateT] | None = None,
-        proposal: Proposal[CandidateT] | None = None,
+        request: EvaluationRequest[ObjectiveVectorRecordCandidateT] | None = None,
+        proposal: Proposal[ObjectiveVectorRecordCandidateT] | None = None,
         proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
-        candidate: CandidateT,
+        candidate: ObjectiveVectorRecordCandidateT,
         objective_values: Sequence[float],
         objective_scores: Sequence[float],
         elapsed_seconds: float | None = None,
@@ -557,13 +593,13 @@ class ObjectiveVectorRecord(EvaluationRecord[CandidateT]):
 
         Parameters
         ----------
-        request : EvaluationRequest[CandidateT] | None, optional
+        request : EvaluationRequest[ObjectiveVectorRecordCandidateT] | None, optional
             Existing canonical request.
-        proposal : Proposal[CandidateT] | None, optional
+        proposal : Proposal[ObjectiveVectorRecordCandidateT] | None, optional
             Proposal to lower into a canonical request.
         proposal_evaluation_spec : ProposalEvaluationSpec | None, optional
             Optional request metadata used when lowering ``proposal``.
-        candidate : CandidateT
+        candidate : ObjectiveVectorRecordCandidateT
             Candidate evaluated by the request.
         objective_values : Sequence[float]
             Raw objective values.

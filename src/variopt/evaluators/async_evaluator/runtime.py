@@ -11,7 +11,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .artifacts import CompletionGroup, EvaluationBatchHandle
 from .sessions import EvaluationBatchSession
 
-EvaluationT = TypeVar("EvaluationT")
+EvaluationT = TypeVar("EvaluationT", covariant=True)
 
 
 class AsyncBatchHooks(Protocol[EvaluationT]):

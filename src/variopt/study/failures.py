@@ -5,12 +5,12 @@ from typing import Generic
 from typing_extensions import TypeVar
 
 from ..artifacts import RunReport
-from ..artifacts.records import RequestAlignedEvaluationRecord
+from ..artifacts.attempts import MaterializableEvaluationPayload
 from ..typevars import CandidateT, RunMethodStateT
 
 RunFailureRecordT = TypeVar(
     "RunFailureRecordT",
-    bound=RequestAlignedEvaluationRecord,
+    bound=MaterializableEvaluationPayload[object],
 )
 
 

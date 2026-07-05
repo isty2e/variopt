@@ -7,11 +7,11 @@ from typing import Generic, Literal, cast
 import joblib  # pyright: ignore[reportMissingTypeStubs]
 from typing_extensions import override
 
-from ...artifacts import EvaluationRequest
+from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
-from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
+from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
 from ..base import Evaluator
@@ -114,7 +114,7 @@ class JoblibEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
+    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]:
         """Execute a request batch through joblib into a dense attempt batch.
 
         Parameters
@@ -126,12 +126,12 @@ class JoblibEvaluator(
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             Dense attempt batch aligned to ``requests``.
         """
         parallel_factory = cast(
             JoblibListParallelFactory[
-                EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+                EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             ],
             getattr(joblib, "Parallel"),
         )
@@ -151,5 +151,5 @@ class JoblibEvaluator(
         )
         return EvaluationAttemptBatch[
             CandidateT,
-            RequestAlignedEvaluationRecord,
+            JoblibEvaluationPayloadT,
         ].from_single_request_attempts(tuple(attempts))
