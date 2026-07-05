@@ -381,6 +381,10 @@ def run_stale_async(
     tuple[RunReport[CandidateT, StudyRecordT], RunMethodStateT]
         Run report and terminal run-method state.
     """
+    if max_evaluations < 0:
+        msg = "max_evaluations must be non-negative"
+        raise ValueError(msg)
+
     _validate_stale_async_run_request(study, batch_size=batch_size)
 
     successes: list[EvaluationSuccess[CandidateT, StudyRecordT]] = []
@@ -403,6 +407,7 @@ def run_stale_async(
     safe_trace = Trace()
     safe_evaluation_count = 0
     safe_state = state
+    unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
         safe_successes = ()
     active_sessions: list[
@@ -436,6 +441,11 @@ def run_stale_async(
                     batch_size=current_batch_size,
                     evaluation_budget=evaluation_budget,
                 )
+                if (
+                    stop_at_checkpoint_boundary
+                    and not study.run_method.is_checkpoint_safe_state(state)
+                ):
+                    unsafe_since_safe_snapshot = True
                 active_sessions.append(active_session)
 
             if len(active_sessions) == 0:
@@ -466,13 +476,8 @@ def run_stale_async(
                             evaluation_budget.consume(unmetered_evaluation_count)
                     else:
                         record_budget_remaining -= completed_group.attempt_count
-                    next_state = study.run_method.tell_attempts(
-                        state,
-                        feedback_group,
-                    )
                     successes.extend(group_successes)
                     failures.extend(feedback_group.failures)
-                    state = next_state
                     trace_events.append(
                         TraceEvent(
                             kind="study.step",
@@ -484,6 +489,11 @@ def run_stale_async(
                             value=trace_value_for_records(group_records),
                         ),
                     )
+                    next_state = study.run_method.tell_attempts(
+                        state,
+                        feedback_group,
+                    )
+                    state = next_state
                     if (
                         stop_at_checkpoint_boundary
                         and study.run_method.is_checkpoint_safe_state(state)
@@ -497,6 +507,23 @@ def run_stale_async(
                             else max_evaluations - evaluation_budget.remaining
                         )
                         safe_state = state
+                        if unsafe_since_safe_snapshot:
+                            _cancel_active_stale_async_sessions(active_sessions)
+                            return (
+                                RunReport[CandidateT, StudyRecordT].from_successes(
+                                    successes=safe_successes,
+                                    evaluation_count=safe_evaluation_count,
+                                    trace=safe_trace,
+                                    failures=safe_failures,
+                                    candidate_equal=(
+                                        study.problem.space.candidates_equal
+                                    ),
+                                ),
+                                safe_state,
+                            )
+                        unsafe_since_safe_snapshot = False
+                    elif stop_at_checkpoint_boundary:
+                        unsafe_since_safe_snapshot = True
 
                     remaining = (
                         record_budget_remaining
@@ -516,6 +543,11 @@ def run_stale_async(
                                 evaluation_budget=evaluation_budget,
                             )
                         )
+                        if (
+                            stop_at_checkpoint_boundary
+                            and not study.run_method.is_checkpoint_safe_state(state)
+                        ):
+                            unsafe_since_safe_snapshot = True
                         active_sessions.append(refill_session)
 
             active_sessions = [
@@ -527,6 +559,17 @@ def run_stale_async(
                 sleep(_STALE_ASYNC_IDLE_SLEEP_SECONDS)
     except EvaluationBudgetExhausted:
         _cancel_active_stale_async_sessions(active_sessions)
+        if stop_at_checkpoint_boundary and safe_successes is not None:
+            return (
+                RunReport[CandidateT, StudyRecordT].from_successes(
+                    successes=safe_successes,
+                    evaluation_count=safe_evaluation_count,
+                    trace=safe_trace,
+                    failures=safe_failures,
+                    candidate_equal=study.problem.space.candidates_equal,
+                ),
+                safe_state,
+            )
         raise
     except Exception as exception:
         _cancel_active_stale_async_sessions(active_sessions)

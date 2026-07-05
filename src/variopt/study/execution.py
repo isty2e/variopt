@@ -959,6 +959,14 @@ def run(
                 evaluation_budget=evaluation_budget,
             )
         except EvaluationBudgetExhausted:
+            if stop_at_checkpoint_boundary and safe_snapshot is not None:
+                return (
+                    _run_report_from_snapshot(
+                        snapshot=safe_snapshot,
+                        candidate_equal=study.problem.space.candidates_equal,
+                    ),
+                    safe_snapshot.state,
+                )
             raise
         except Exception as exception:
             _raise_run_execution_failed(

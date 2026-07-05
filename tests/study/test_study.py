@@ -127,6 +127,62 @@ class UnsafeCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
         return False
 
 
+class SequencedEvaluationCountKernel(
+    Kernel[
+        ProposalBatchQuery[int, int, ObservationPayload],
+        EvaluationAttemptBatch[int, ObservationPayload],
+    ],
+):
+    """Kernel that reports one configured logical cost per run call."""
+
+    _evaluation_counts: tuple[int, ...]
+    _call_count: int
+
+    def __init__(self, evaluation_counts: Sequence[int]) -> None:
+        self._evaluation_counts = tuple(evaluation_counts)
+        self._call_count = 0
+
+    @override
+    def run(
+        self,
+        query: ProposalBatchQuery[int, int, ObservationPayload],
+        runner: Callable[
+            [ProposalBatchQuery[int, int, ObservationPayload]],
+            EvaluationAttemptBatch[int, ObservationPayload],
+        ],
+    ) -> EvaluationAttemptBatch[int, ObservationPayload]:
+        _ = runner
+        if self._call_count >= len(self._evaluation_counts):
+            raise AssertionError("sequenced kernel called too many times")
+
+        evaluation_count = self._evaluation_counts[self._call_count]
+        self._call_count += 1
+        successes: list[EvaluationSuccess[int, ObservationPayload]] = []
+        for proposal_index, proposal in enumerate(query.proposals):
+            proposal_evaluation_spec = None
+            if query.proposal_evaluation_specs is not None:
+                proposal_evaluation_spec = query.proposal_evaluation_specs[
+                    proposal_index
+                ]
+            request = EvaluationRequest(
+                proposal=proposal,
+                proposal_evaluation_spec=proposal_evaluation_spec,
+            )
+            payload = ObservationPayload.from_objective_value(
+                value=float(proposal.candidate * proposal.candidate),
+                direction=query.problem.direction,
+            )
+            successes.append(
+                EvaluationSuccess(
+                    request=request,
+                    payload=payload,
+                    evaluation_count=evaluation_count,
+                )
+            )
+
+        return EvaluationAttemptBatch(attempts=tuple(successes))
+
+
 class KeyboardInterruptObjective(Objective[int]):
     """Objective that raises KeyboardInterrupt for propagation tests."""
 
@@ -1572,6 +1628,153 @@ class StudyTests:
             _ = study.run(
                 max_evaluations=3,
                 count_evaluation_cost=True,
+            )
+
+    def test_run_returns_checkpoint_snapshot_when_evaluation_cost_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert report.records == ()
+        assert report.failures == ()
+        assert report.evaluation_count == 0
+        assert final_state == optimizer.create_initial_state()
+
+    def test_optimize_returns_checkpoint_snapshot_when_evaluation_cost_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        result, final_state = study.optimize(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert result.observations == ()
+        assert result.failures == ()
+        assert result.best_observation is None
+        assert result.evaluation_count == 0
+        assert final_state == optimizer.create_initial_state()
+
+    def test_run_returns_latest_checkpoint_snapshot_when_later_step_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-1"),),
+                (Proposal(candidate=4, proposal_id="p-2"),),
+            ],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=SequencedEvaluationCountKernel((1, 7)),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            count_evaluation_cost=True,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+        )
+        assert report.evaluation_count == 1
+        assert final_state.tell_history == ((report.records[0],),)
+
+    def test_run_does_not_checkpoint_rollback_when_inner_cost_counting_is_disabled(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=1,
+            count_evaluation_cost=False,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-1",
+        )
+        assert report.evaluation_count == 7
+        assert len(final_state.tell_history) == 1
+
+    def test_run_keeps_budget_exhaustion_when_no_checkpoint_snapshot_exists(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = UnsafeCheckpointBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        with pytest.raises(EvaluationBudgetExhausted):
+            _ = study.run(
+                max_evaluations=3,
+                count_evaluation_cost=True,
+                stop_at_checkpoint_boundary=True,
             )
 
     def test_run_uses_space_candidate_equality_for_report_refinements(self) -> None:

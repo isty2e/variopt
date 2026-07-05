@@ -28,6 +28,7 @@ from tests.study_support import (
     make_observation_payload_attempt,
 )
 from variopt import (
+    EvaluationBudgetExhausted,
     EvaluationOutcome,
     EvaluationRequest,
     IntegerSpace,
@@ -35,12 +36,14 @@ from variopt import (
     Problem,
     Proposal,
     RunExecutionFailed,
+    RunMethod,
     RunReport,
     Study,
     UnsupportedEvaluationFailureError,
 )
 from variopt.artifacts import (
     EvaluationAttemptBatch,
+    EvaluationSuccess,
     ObservationPayload,
     Trace,
     TraceEvent,
@@ -52,7 +55,7 @@ from variopt.evaluators import (
     EvaluationBatchHandle,
     EvaluationBatchSession,
 )
-from variopt.execution import STALE_ASYNC_EXECUTION_MODEL
+from variopt.execution import STALE_ASYNC_EXECUTION_MODEL, ExecutionModel
 
 StaleAsyncOutcome: TypeAlias = EvaluationOutcome[int, Observation[int]]
 StaleAsyncCompletionGroup: TypeAlias = CompletionGroup[StaleAsyncOutcome]
@@ -160,6 +163,143 @@ class CancelFailingSecondBatchAsyncEvaluator(FailingSecondBatchAsyncEvaluator):
 
 
 @final
+class CancellationRecordingSessionAsyncEvaluator(SessionRecordingAsyncEvaluator):
+    """Session-recording evaluator that also records attempt cancellations."""
+
+    cancelled_batch_ids: tuple[str, ...]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled_batch_ids = ()
+
+    @override
+    def cancel_attempts(self, handle: EvaluationBatchHandle) -> None:
+        self.cancelled_batch_ids += (handle.batch_id,)
+        super().cancel_attempts(handle)
+
+
+@final
+class PendingAskUnsafeRollingStaleAsyncOptimizer(
+    RunMethod[RollingStaleAsyncOptimizerState, Proposal[int], Observation[int]],
+):
+    """Rolling optimizer whose post-ask state is not checkpoint-safe."""
+
+    _initial_proposals: tuple[Proposal[int], ...]
+
+    def __init__(self, proposals: Sequence[Proposal[int]]) -> None:
+        self._initial_proposals = tuple(proposals)
+
+    @override
+    def create_initial_state(self) -> RollingStaleAsyncOptimizerState:
+        return RollingStaleAsyncOptimizerState(
+            queued_proposals=self._initial_proposals,
+        )
+
+    @override
+    def is_exhausted(self, state: RollingStaleAsyncOptimizerState) -> bool:
+        return len(state.queued_proposals) == 0
+
+    @override
+    def ask(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+        batch_size: int = 1,
+    ) -> tuple[tuple[Proposal[int], ...], RollingStaleAsyncOptimizerState]:
+        proposal_batch = state.queued_proposals[:batch_size]
+        return (
+            proposal_batch,
+            RollingStaleAsyncOptimizerState(
+                queued_proposals=state.queued_proposals[len(proposal_batch) :],
+                ask_history=state.ask_history + (batch_size,),
+                tell_history=state.tell_history,
+            ),
+        )
+
+    @override
+    def tell(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+        observations: Sequence[Observation[int]],
+    ) -> RollingStaleAsyncOptimizerState:
+        spawned_proposals = tuple(
+            Proposal(
+                candidate=observation.candidate + 10,
+                proposal_id=f"spawn-{observation.proposal.proposal_id}",
+            )
+            for observation in observations
+            if observation.candidate < 10
+        )
+        return RollingStaleAsyncOptimizerState(
+            queued_proposals=state.queued_proposals + spawned_proposals,
+            ask_history=state.ask_history,
+            tell_history=state.tell_history + (tuple(observations),),
+        )
+
+    @override
+    def is_checkpoint_safe_state(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+    ) -> bool:
+        return len(state.ask_history) == len(state.tell_history)
+
+    @override
+    def supported_execution_models(self) -> frozenset[ExecutionModel]:
+        return frozenset({STALE_ASYNC_EXECUTION_MODEL})
+
+
+@final
+class TellFailingStaleAsyncOptimizer(
+    RunMethod[RollingStaleAsyncOptimizerState, Proposal[int], Observation[int]],
+):
+    """Stale-async optimizer that fails when assimilating completed records."""
+
+    _initial_proposals: tuple[Proposal[int], ...]
+
+    def __init__(self, proposals: Sequence[Proposal[int]]) -> None:
+        self._initial_proposals = tuple(proposals)
+
+    @override
+    def create_initial_state(self) -> RollingStaleAsyncOptimizerState:
+        return RollingStaleAsyncOptimizerState(
+            queued_proposals=self._initial_proposals,
+        )
+
+    @override
+    def is_exhausted(self, state: RollingStaleAsyncOptimizerState) -> bool:
+        return len(state.queued_proposals) == 0
+
+    @override
+    def ask(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+        batch_size: int = 1,
+    ) -> tuple[tuple[Proposal[int], ...], RollingStaleAsyncOptimizerState]:
+        proposal_batch = state.queued_proposals[:batch_size]
+        return (
+            proposal_batch,
+            RollingStaleAsyncOptimizerState(
+                queued_proposals=state.queued_proposals[len(proposal_batch) :],
+                ask_history=state.ask_history + (batch_size,),
+                tell_history=state.tell_history,
+            ),
+        )
+
+    @override
+    def tell(
+        self,
+        state: RollingStaleAsyncOptimizerState,
+        observations: Sequence[Observation[int]],
+    ) -> RollingStaleAsyncOptimizerState:
+        _ = state, observations
+        msg = "forced stale tell failure"
+        raise RuntimeError(msg)
+
+    @override
+    def supported_execution_models(self) -> frozenset[ExecutionModel]:
+        return frozenset({STALE_ASYNC_EXECUTION_MODEL})
+
+
+@final
 class ScriptedNonBlockingAttemptBatchSession(
     EvaluationBatchSession[StaleAsyncAttemptBatch],
 ):
@@ -167,15 +307,18 @@ class ScriptedNonBlockingAttemptBatchSession(
 
     _handle: EvaluationBatchHandle
     _poll_results: list[tuple[StaleAsyncAttemptCompletionGroup, ...]]
+    _cancelled_handles: list[EvaluationBatchHandle] | None
 
     def __init__(
         self,
         *,
         handle: EvaluationBatchHandle,
         poll_results: Sequence[tuple[StaleAsyncAttemptCompletionGroup, ...]],
+        cancelled_handles: list[EvaluationBatchHandle] | None = None,
     ) -> None:
         self._handle = handle
         self._poll_results = list(poll_results)
+        self._cancelled_handles = cancelled_handles
 
     @property
     @override
@@ -192,7 +335,119 @@ class ScriptedNonBlockingAttemptBatchSession(
 
     @override
     def cancel(self) -> None:
+        if self._cancelled_handles is not None:
+            self._cancelled_handles.append(self.handle)
         self._poll_results.clear()
+
+
+@final
+class BudgetExhaustingAttemptAsyncEvaluator(
+    AsyncEvaluator[
+        Problem[int, int],
+        EvaluationRequest[int],
+        StaleAsyncOutcome,
+    ],
+):
+    """Attempt-session evaluator whose completions overrun logical budget."""
+
+    _next_batch_id: int
+    _evaluation_count: int
+    _cancelled_handles: list[EvaluationBatchHandle]
+
+    def __init__(self, *, evaluation_count: int) -> None:
+        self._next_batch_id = 0
+        self._evaluation_count = evaluation_count
+        self._cancelled_handles = []
+
+    @property
+    def cancelled_batch_ids(self) -> tuple[str, ...]:
+        """Return batch ids cancelled through active-session cleanup."""
+        return tuple(handle.batch_id for handle in self._cancelled_handles)
+
+    @override
+    def open_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[StaleAsyncOutcome]:
+        _ = problem, requests
+        msg = "budget-exhaustion test double only supports attempt sessions"
+        raise NotImplementedError(msg)
+
+    def open_attempt_session(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchSession[StaleAsyncAttemptBatch]:
+        handle = EvaluationBatchHandle(
+            batch_id=f"budget-attempt-batch-{self._next_batch_id}",
+            request_count=len(requests),
+        )
+        self._next_batch_id += 1
+        completion_groups = tuple(
+            CompletionGroup(
+                start_index=index,
+                outcomes=(
+                    self._with_reported_evaluation_count(
+                        make_observation_payload_attempt(
+                            problem=problem,
+                            request=request,
+                        ),
+                    ),
+                ),
+            )
+            for index, request in reversed(tuple(enumerate(requests)))
+        )
+        return ScriptedNonBlockingAttemptBatchSession(
+            handle=handle,
+            poll_results=tuple((group,) for group in completion_groups),
+            cancelled_handles=self._cancelled_handles,
+        )
+
+    def _with_reported_evaluation_count(
+        self,
+        attempt: StaleAsyncAttemptBatch,
+    ) -> StaleAsyncAttemptBatch:
+        success = attempt.single_success_or_none()
+        if success is None:
+            return attempt
+
+        return EvaluationAttemptBatch(
+            attempts=(
+                EvaluationSuccess(
+                    request=success.request,
+                    payload=success.payload,
+                    evaluation_count=self._evaluation_count,
+                    refinement=success.refinement,
+                    kernel_diagnostics=success.kernel_diagnostics,
+                ),
+            ),
+        )
+
+    @override
+    def submit_batch(
+        self,
+        problem: Problem[int, int],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> EvaluationBatchHandle:
+        _ = problem, requests
+        msg = "budget-exhaustion test double only supports attempt sessions"
+        raise NotImplementedError(msg)
+
+    @override
+    def poll(
+        self,
+        handle: EvaluationBatchHandle,
+    ) -> Sequence[StaleAsyncCompletionGroup]:
+        _ = handle
+        msg = "budget-exhaustion test double only supports attempt polling"
+        raise NotImplementedError(msg)
+
+    @override
+    def cancel(self, handle: EvaluationBatchHandle) -> None:
+        _ = handle
+        msg = "budget-exhaustion test double only supports attempt cancellation"
+        raise NotImplementedError(msg)
 
 
 @final
@@ -385,6 +640,226 @@ class StudyStaleAsyncTests:
             "spawn-p-2",
         )
 
+    @pytest.mark.parametrize("count_evaluation_cost", [True, False])
+    def test_run_stale_async_rejects_negative_budget_before_opening_session(
+        self,
+        *,
+        count_evaluation_cost: bool,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(Proposal(candidate=4, proposal_id="p-1"),),
+        )
+        evaluator = SessionRecordingAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        with pytest.raises(ValueError, match="max_evaluations must be non-negative"):
+            _ = study.run(
+                max_evaluations=-1,
+                batch_size=1,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+                count_evaluation_cost=count_evaluation_cost,
+            )
+
+        assert evaluator.opened_batch_sizes == ()
+
+    def test_optimize_stale_async_rejects_negative_budget_before_opening_session(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(Proposal(candidate=4, proposal_id="p-1"),),
+        )
+        evaluator = SessionRecordingAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        with pytest.raises(ValueError, match="max_evaluations must be non-negative"):
+            _ = study.optimize(
+                max_evaluations=-1,
+                batch_size=1,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            )
+
+        assert evaluator.opened_batch_sizes == ()
+
+    def test_run_stale_async_stops_refill_after_checkpoint_safe_boundary(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = PendingAskUnsafeRollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = CancellationRecordingSessionAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        report, final_state = study.run(
+            max_evaluations=4,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert evaluator.opened_batch_sizes == (2,)
+        assert evaluator.cancelled_batch_ids == ("attempt-batch-0",)
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+        )
+        assert final_state.tell_history == ((report.records[0],),)
+
+    def test_run_stale_async_keeps_refilling_without_unsafe_checkpoint_segment(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = RollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = SessionRecordingAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert evaluator.opened_batch_sizes == (2, 1)
+        assert final_state.ask_history == (2, 1)
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+            "p-1",
+            "spawn-p-2",
+        )
+
+    def test_run_stale_async_safe_boundary_return_survives_cancel_failure(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = PendingAskUnsafeRollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = CancelFailingSecondBatchAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        report, final_state = study.run(
+            max_evaluations=4,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert evaluator.cancelled_batch_ids == ("attempt-batch-0",)
+        assert tuple(record.proposal.proposal_id for record in report.records) == (
+            "p-2",
+        )
+        assert final_state.tell_history == ((report.records[0],),)
+
+    def test_run_stale_async_returns_checkpoint_snapshot_after_budget_exhaustion(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = PendingAskUnsafeRollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = BudgetExhaustingAttemptAsyncEvaluator(evaluation_count=7)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        report, final_state = study.run(
+            max_evaluations=2,
+            batch_size=2,
+            execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert report.records == ()
+        assert report.failures == ()
+        assert report.evaluation_count == 0
+        assert final_state == optimizer.create_initial_state()
+        assert evaluator.cancelled_batch_ids == ("budget-attempt-batch-0",)
+
+    def test_run_stale_async_keeps_budget_exhaustion_without_checkpoint_boundary(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        optimizer = PendingAskUnsafeRollingStaleAsyncOptimizer(
+            proposals=(
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=2, proposal_id="p-2"),
+            ),
+        )
+        evaluator = BudgetExhaustingAttemptAsyncEvaluator(evaluation_count=7)
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        with pytest.raises(EvaluationBudgetExhausted):
+            _ = study.run(
+                max_evaluations=2,
+                batch_size=2,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            )
+
+        assert evaluator.cancelled_batch_ids == ("budget-attempt-batch-0",)
+
     def test_run_stale_async_materializes_payload_groups_before_feedback(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=20),
@@ -506,7 +981,7 @@ class StudyStaleAsyncTests:
             for record in record_batch
         ) == ("p-3", "p-1")
 
-    def test_run_stale_async_tell_failure_excludes_unassimilated_attempts(
+    def test_run_stale_async_tell_failure_preserves_completed_attempts(
         self,
     ) -> None:
         problem = Problem(
@@ -541,8 +1016,48 @@ class StudyStaleAsyncTests:
 
         assert isinstance(exception.cause, UnsupportedEvaluationFailureError)
         assert exception.partial_report.records == ()
-        assert exception.partial_report.failures == ()
+        assert tuple(
+            failure.proposal_id for failure in exception.partial_report.failures
+        ) == ("p-2",)
         assert exception.partial_report.evaluation_count == 2
+        assert exception.partial_state.tell_history == ()
+
+    def test_run_stale_async_tell_failure_preserves_successful_completed_group(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = TellFailingStaleAsyncOptimizer(
+            proposals=(Proposal(candidate=2, proposal_id="p-1"),),
+        )
+        evaluator = OutOfOrderAsyncEvaluator()
+        study: StaleAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+        )
+
+        try:
+            _ = study.run(
+                max_evaluations=1,
+                batch_size=1,
+                execution_model=STALE_ASYNC_EXECUTION_MODEL,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, StaleAsyncRunFailure)
+            exception: StaleAsyncRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected stale-async tell failure")
+
+        assert isinstance(exception.cause, RuntimeError)
+        assert tuple(
+            record.proposal.proposal_id for record in exception.partial_report.records
+        ) == ("p-1",)
+        assert exception.partial_report.failures == ()
+        assert exception.partial_report.evaluation_count == 1
         assert exception.partial_state.tell_history == ()
 
     def test_run_stale_async_cancels_refill_opened_before_mid_sweep_failure(

@@ -23,7 +23,9 @@ format. Stability guarantees for the public surface are documented in the
   counting must pass `count_evaluation_cost=False`.
 - Study execution now raises `EvaluationBudgetExhausted` instead of silently
   assimilating a step whose reported evaluation cost exceeds the remaining hard
-  budget.
+  budget. When `stop_at_checkpoint_boundary=True` and a checkpoint-safe snapshot
+  has already been reached, that snapshot is returned instead of assimilating
+  the over-budget step.
 - Structured spaces now enforce canonical candidate form consistently.
   Composite validation no longer coerces integer real leaves, categorical
   normalization returns the declared choice object, categorical validation
@@ -51,7 +53,7 @@ format. Stability guarantees for the public surface are documented in the
 
 - Added `stop_at_checkpoint_boundary=True` for `Study.run(...)` and
   `Study.optimize(...)` so CSA runs can return the latest checkpoint-safe state
-  when the budget ends inside an unsafe generation segment.
+  when the budget ends or is exhausted inside an unsafe generation segment.
 - Structured spaces now expose validated-candidate leaf traversal hooks used by
   built-in CSA, DE, local-search, geometry, and projection hot loops to avoid
   repeated full-candidate validation after an operation-level validation
@@ -80,6 +82,14 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- Stale-async `Study.run(...)` and `Study.optimize(...)` now reject negative
+  `max_evaluations` before opening evaluator sessions, matching sync execution.
+- Stale-async `RunExecutionFailed.partial_report` now includes completed groups
+  that were materialized before `RunMethod.tell_attempts(...)` failed, while
+  `partial_state` remains at the pre-assimilation state.
+- Stale-async runs with `stop_at_checkpoint_boundary=True` no longer open
+  refill sessions after reaching the requested checkpoint-safe boundary; any
+  already-active sessions are cancelled before returning the safe report/state.
 - `CSAOptimizer` now consumes recorded failed attempts from pending proposal,
   generation, and proposal-attribution lifecycle state without inserting failed
   candidates into CSA banks or adaptive score evidence. GA and DE-family

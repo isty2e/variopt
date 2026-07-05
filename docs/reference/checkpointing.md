@@ -59,6 +59,12 @@ restored_state = optimizer.state_from_dict(loaded)
 result, _ = study.optimize(max_evaluations=20, initial_state=restored_state)
 ```
 
+If a reported logical evaluation cost exhausts the hard budget while the run is
+inside an unsafe segment, `stop_at_checkpoint_boundary=True` returns the latest
+checkpoint-safe report and state instead of assimilating the over-budget
+attempts. If no safe snapshot has been reached, the budget exhaustion is still
+reported as `EvaluationBudgetExhausted`.
+
 For structured spaces the built-in recursive candidate codec handles
 serialization automatically. For non-structured spaces, pass explicit
 `candidate_to_dict` and `candidate_from_dict` callbacks.

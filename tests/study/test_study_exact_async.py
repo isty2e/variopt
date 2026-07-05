@@ -19,6 +19,7 @@ from tests.study_support import (
     RecordingKernel,
     RefinementKernel,
     ResumableOutOfOrderAsyncEvaluator,
+    ScoringKernel,
     SessionRecordingAsyncEvaluator,
     ShiftedObservationProtocol,
     SpaceOwnedEqualityAsyncEvaluator,
@@ -165,6 +166,34 @@ class StudyExactAsyncTests:
         )
 
         assert evaluator.opened_batch_sizes == (2,)
+
+    def test_run_exact_async_returns_checkpoint_snapshot_when_kernel_cost_exhausts_budget(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = ExactAsyncCapableBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = OutOfOrderAsyncEvaluator()
+        study: ExactAsyncScalarStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=evaluator,
+            kernel=ScoringKernel(),
+        )
+
+        report, final_state = study.run(
+            max_evaluations=3,
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert report.records == ()
+        assert report.evaluation_count == 0
+        assert final_state == optimizer.create_initial_state()
 
     def test_step_exact_async_uses_space_candidate_equality_for_refinement(
         self,
