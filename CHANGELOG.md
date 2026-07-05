@@ -10,6 +10,12 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- Removed the obsolete generic request-aligned record API from the root and
+  artifact facades. `EvaluationRecord`, `InteractionEvaluationRecord`, and
+  `RequestAlignedEvaluationRecord` are no longer public entry points; use
+  request-free protocol payloads plus `EvaluationSuccess`/terminal artifacts, or
+  the concrete `Observation` and `ObjectiveVectorRecord` compatibility
+  projections where those concrete views are required.
 - `Study.run(...)` and `Study.optimize(...)` now default
   `count_evaluation_cost=True`. Evaluation budgets are charged against reported
   logical evaluation cost, including inner local-search evaluations, rather than

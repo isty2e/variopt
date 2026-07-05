@@ -513,7 +513,7 @@ class StudyTests:
 
         assert len(observations) == 1
         assert observations[0].proposal.candidate == 4
-        assert observations[0].candidate == 3
+        assert observations[0].candidate == 4
         assert observations[0].value == 9.0
         assert observations[0].score == 9.0
 
@@ -726,7 +726,7 @@ class StudyTests:
 
         assert problem.direct_objective is None
         assert result.observations[0].proposal.proposal_id == "p-1"
-        assert result.observations[0].candidate == 3
+        assert result.observations[0].candidate == 4
 
     def test_optimize_keeps_request_overriding_objective_on_generic_path(self) -> None:
         spec = LocalProposalEvaluationSpec()

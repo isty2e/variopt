@@ -1,10 +1,10 @@
-"""Tests for problem and interaction contract surfaces."""
-
 import dataclasses
 import pickle
+from collections.abc import Sequence
 from typing import TypeVar, cast
 
 import pytest
+from typing_extensions import override
 
 from tests.problem_artifact_support import (
     LabelProtocol,
@@ -15,7 +15,10 @@ from tests.problem_artifact_support import (
     SquareObjective,
 )
 from variopt import (
+    EvaluationOutcome,
+    EvaluationProtocol,
     EvaluationRequest,
+    Evaluator,
     IntegerSpace,
     InteractionProblem,
     Observation,
@@ -25,8 +28,7 @@ from variopt import (
     Study,
 )
 from variopt.algorithms.population import CSAOptimizer
-from variopt.artifacts import InteractionEvaluationUnit
-from variopt.evaluators import SequentialEvaluator
+from variopt.artifacts import InteractionEvaluationUnit, ObservationPayload
 from variopt.kernel import DirectKernel
 
 PickleRoundTripT = TypeVar("PickleRoundTripT")
@@ -35,6 +37,44 @@ PickleRoundTripT = TypeVar("PickleRoundTripT")
 def pickle_round_trip(value: PickleRoundTripT) -> PickleRoundTripT:
     """Return one pickle round-trip result with the input type restored."""
     return cast(PickleRoundTripT, pickle.loads(pickle.dumps(value)))
+
+
+class LegacySquareObservationProtocol(EvaluationProtocol[int, Observation[int]]):
+    """Legacy scalar protocol for record-bound study compatibility tests."""
+
+    @override
+    def evaluate_request(self, request: EvaluationRequest[int]) -> Observation[int]:
+        value = float(request.candidate * request.candidate)
+        return Observation(
+            request=request,
+            candidate=request.candidate,
+            value=value,
+            score=value,
+        )
+
+
+class LegacyObservationEvaluator(
+    Evaluator[
+        Problem[int, int, Observation[int]],
+        EvaluationRequest[int],
+        EvaluationOutcome[int, Observation[int]],
+    ]
+):
+    """Record-bound evaluator for legacy study pickle compatibility tests."""
+
+    @override
+    def evaluate(
+        self,
+        problem: Problem[int, int, Observation[int]],
+        requests: Sequence[EvaluationRequest[int]],
+    ) -> Sequence[EvaluationOutcome[int, Observation[int]]]:
+        return tuple(
+            EvaluationOutcome(
+                record=problem.evaluation_protocol.evaluate_request(request),
+                evaluation_count=1,
+            )
+            for request in requests
+        )
 
 
 class ProblemContractsTests:
@@ -63,7 +103,7 @@ class ProblemContractsTests:
         assert restored.objective.evaluate(4) == 16.0
 
     def test_observation_protocol_problem_pickle_round_trips(self) -> None:
-        problem: Problem[int, int, Observation[int]] = Problem(
+        problem: Problem[int, int, ObservationPayload] = Problem(
             space=IntegerSpace(low=0, high=10),
             evaluation_protocol=ShiftedObservationProtocol(),
             direction=OptimizationDirection.MAXIMIZE,
@@ -106,7 +146,7 @@ class ProblemContractsTests:
         evaluation_record = problem.evaluation_protocol.evaluate_proposal(
             Proposal(candidate=4),
         )
-        assert isinstance(evaluation_record, Observation)
+        assert isinstance(evaluation_record, ObservationPayload)
         assert evaluation_record.value == 9.0
         assert evaluation_record.score == -9.0
         assert problem.objective.evaluate(4) == 9.0
@@ -208,7 +248,10 @@ class ProblemContractsTests:
 
     def test_study_pickle_round_trips_without_runtime_generic_metadata(self) -> None:
         space = IntegerSpace(low=0, high=10)
-        problem = Problem(space=space, objective=SquareObjective())
+        problem: Problem[int, int, Observation[int]] = Problem(
+            space=space,
+            evaluation_protocol=LegacySquareObservationProtocol(),
+        )
         optimizer = CSAOptimizer.from_space_defaults(
             space=space,
             bank_capacity=4,
@@ -217,16 +260,22 @@ class ProblemContractsTests:
         study = Study(
             problem=problem,
             run_method=optimizer,
-            evaluator=SequentialEvaluator[int, int](),
+            evaluator=LegacyObservationEvaluator(),
         )
 
         restored = pickle_round_trip(study)
 
-        assert restored.problem.objective.evaluate(4) == 16.0
+        record = restored.problem.evaluation_protocol.evaluate_proposal(
+            Proposal(candidate=4),
+        )
+        assert record.value == 16.0
 
     def test_study_with_explicit_kernel_pickle_round_trips(self) -> None:
         space = IntegerSpace(low=0, high=10)
-        problem = Problem(space=space, objective=SquareObjective())
+        problem: Problem[int, int, Observation[int]] = Problem(
+            space=space,
+            evaluation_protocol=LegacySquareObservationProtocol(),
+        )
         optimizer = CSAOptimizer.from_space_defaults(
             space=space,
             bank_capacity=4,
@@ -235,14 +284,17 @@ class ProblemContractsTests:
         study = Study(
             problem=problem,
             run_method=optimizer,
-            evaluator=SequentialEvaluator[int, int](),
+            evaluator=LegacyObservationEvaluator(),
             kernel=DirectKernel(),
         )
 
         restored = pickle_round_trip(study)
 
         assert isinstance(restored.kernel, DirectKernel)
-        assert restored.problem.objective.evaluate(4) == 16.0
+        record = restored.problem.evaluation_protocol.evaluate_proposal(
+            Proposal(candidate=4),
+        )
+        assert record.value == 16.0
 
     def test_interaction_problem_rejects_empty_name(self) -> None:
         with pytest.raises(ValueError):
@@ -279,5 +331,8 @@ class ProblemContractsTests:
             _ = Problem(
                 space=IntegerSpace(low=0, high=10),
                 objective=SquareObjective(),
-                direction="maximize",  # pyright: ignore[reportArgumentType]
+                direction=cast(
+                    OptimizationDirection,
+                    cast(object, "maximize"),
+                ),
             )

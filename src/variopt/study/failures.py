@@ -4,7 +4,8 @@ from typing import Generic
 
 from typing_extensions import TypeVar
 
-from ..artifacts import RequestAlignedEvaluationRecord, RunReport
+from ..artifacts import RunReport
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..typevars import CandidateT, RunMethodStateT
 
 RunFailureRecordT = TypeVar(

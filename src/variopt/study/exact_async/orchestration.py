@@ -19,6 +19,7 @@ from ..common import (
     store_completion_group,
     supports_attempt_batch_sessions,
     supports_attempt_batches,
+    supports_resumable_attempt_batch_sessions,
 )
 from ..validation import require_resumable_async_evaluator
 from .artifacts import StudyExactAsyncStepResumeHandle
@@ -65,11 +66,11 @@ def evaluate_batch_exact_async(
         completed_count = 0
         try:
             while completed_count < attempt_session.handle.request_count:
-                completion_groups = tuple(attempt_session.wait())
-                for completion_group in completion_groups:
+                attempt_completion_groups = tuple(attempt_session.wait())
+                for attempt_completion_group in attempt_completion_groups:
                     completed_count += store_completion_group(
                         ordered_attempts,
-                        completion_group,
+                        attempt_completion_group,
                         request_count=attempt_session.handle.request_count,
                     )
         except BaseException:
@@ -85,11 +86,11 @@ def evaluate_batch_exact_async(
     completed_count = 0
     try:
         while completed_count < batch_session.handle.request_count:
-            completion_groups = tuple(batch_session.wait())
-            for completion_group in completion_groups:
+            outcome_completion_groups = tuple(batch_session.wait())
+            for outcome_completion_group in outcome_completion_groups:
                 completed_count += store_completion_group(
                     ordered_outcomes,
-                    completion_group,
+                    outcome_completion_group,
                     request_count=batch_session.handle.request_count,
                 )
     except BaseException:
@@ -240,14 +241,19 @@ def resume_exact_async_step_session(
         )
         raise ValueError(msg)
 
-    outcome_session = require_resumable_batch_session(
-        resumable_evaluator.resume_session(handle.evaluator_handle),
-    )
-    batch_session = ResumableOutcomeToAttemptBatchSession(
-        requests=handle.requests,
-        outcome_session=outcome_session,
-        candidate_equal=study.problem.space.candidates_equal,
-    )
+    if supports_resumable_attempt_batch_sessions(resumable_evaluator):
+        batch_session = resumable_evaluator.resume_attempt_session(
+            handle.evaluator_handle,
+        )
+    else:
+        outcome_session = require_resumable_batch_session(
+            resumable_evaluator.resume_session(handle.evaluator_handle),
+        )
+        batch_session = ResumableOutcomeToAttemptBatchSession(
+            requests=handle.requests,
+            outcome_session=outcome_session,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
     return StudyExactAsyncStepSession(
         study=study,
         requests=handle.requests,

@@ -3,12 +3,17 @@
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Generic, Protocol, TypeVar, cast
+from typing import Generic, Protocol, TypeAlias, TypeVar, cast
 
 from typing_extensions import TypeVar as DefaultTypeVar
 from typing_extensions import override
 
-from ..artifacts import EvaluationRequest, Observation, RequestAlignedEvaluationRecord
+from ..artifacts import (
+    EvaluationRequest,
+    ObjectiveVectorPayload,
+    ObservationPayload,
+)
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ..execution import ExecutionResources, NestedParallelismPolicy
 from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
@@ -25,10 +30,13 @@ MpiExecutorRecordT = TypeVar(
     bound=RequestAlignedEvaluationRecord,
     covariant=True,
 )
-MpiEvaluatorRecordT = DefaultTypeVar(
-    "MpiEvaluatorRecordT",
-    bound=RequestAlignedEvaluationRecord,
-    default=Observation[CandidateT],
+MpiEvaluationPayload: TypeAlias = (
+    RequestAlignedEvaluationRecord | ObservationPayload | ObjectiveVectorPayload
+)
+MpiEvaluationPayloadT = DefaultTypeVar(
+    "MpiEvaluationPayloadT",
+    bound=MpiEvaluationPayload,
+    default=ObservationPayload,
 )
 
 
@@ -134,9 +142,9 @@ class MpiExecutorFactory(Protocol, Generic[CandidateExecutorT, MpiExecutorRecord
 def _evaluate_indexed_proposal_outcome(
     *,
     index: int,
-    problem: Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+    problem: Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
     request: EvaluationRequest[CandidateT],
-) -> tuple[int, EvaluationOutcome[CandidateT, MpiEvaluatorRecordT]]:
+) -> tuple[int, EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]]:
     """Execute one request and carry its original logical index."""
     return (
         index,
@@ -150,9 +158,9 @@ def _evaluate_indexed_proposal_outcome(
 def _evaluate_indexed_request_attempt(
     *,
     index: int,
-    problem: Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+    problem: Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
     request: EvaluationRequest[CandidateT],
-) -> tuple[int, EvaluationAttemptBatch[CandidateT, MpiEvaluatorRecordT]]:
+) -> tuple[int, EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]]:
     """Execute one request attempt and carry its original logical index."""
     return (
         index,
@@ -183,11 +191,11 @@ def _validate_mpi_configuration(*, max_workers: int | None) -> None:
 @dataclass(slots=True)
 class MpiEvaluator(
     Evaluator[
-        Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+        Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, MpiEvaluatorRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ],
-    Generic[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+    Generic[BoundaryT, CandidateT, MpiEvaluationPayloadT],
 ):
     """MPI-backed synchronous batch evaluator.
 
@@ -195,7 +203,7 @@ class MpiEvaluator(
     ----------
     max_workers : int | None, optional
         Optional worker limit for the MPI executor.
-    _executor_factory : MpiExecutorFactory[CandidateT, MpiEvaluatorRecordT] | None, optional
+    _executor_factory : MpiExecutorFactory[CandidateT, RequestAlignedEvaluationRecord] | None, optional
         Optional executor factory used primarily for testing or custom runtime
         integration.
 
@@ -207,7 +215,10 @@ class MpiEvaluator(
     """
 
     max_workers: int | None = None
-    _executor_factory: MpiExecutorFactory[CandidateT, MpiEvaluatorRecordT] | None = field(
+    _executor_factory: MpiExecutorFactory[
+        CandidateT,
+        RequestAlignedEvaluationRecord,
+    ] | None = field(
         default=None,
         repr=False,
     )
@@ -227,7 +238,9 @@ class MpiEvaluator(
         """
         return _build_execution_resources(max_workers=self.max_workers)
 
-    def _create_default_executor(self) -> MpiExecutor[CandidateT, MpiEvaluatorRecordT]:
+    def _create_default_executor(
+        self,
+    ) -> MpiExecutor[CandidateT, RequestAlignedEvaluationRecord]:
         """Create the default mpi4py-backed executor or raise a helpful error."""
         try:
             mpi4py_futures = import_module("mpi4py.futures")
@@ -239,12 +252,15 @@ class MpiEvaluator(
             raise ImportError(msg) from error
 
         executor_class = cast(
-            Callable[..., MpiExecutor[CandidateT, MpiEvaluatorRecordT]],
+            Callable[..., MpiExecutor[CandidateT, RequestAlignedEvaluationRecord]],
             getattr(mpi4py_futures, "MPIPoolExecutor"),
         )
         return executor_class(max_workers=self.max_workers)
 
-    def _create_executor(self) -> MpiExecutor[CandidateT, MpiEvaluatorRecordT]:
+    def _create_executor(self) -> MpiExecutor[
+        CandidateT,
+        RequestAlignedEvaluationRecord,
+    ]:
         """Return one concrete executor for one evaluator batch."""
         if self._executor_factory is None:
             return self._create_default_executor()
@@ -254,21 +270,21 @@ class MpiEvaluator(
     @override
     def evaluate(
         self,
-        problem: Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+        problem: Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> tuple[EvaluationOutcome[CandidateT, MpiEvaluatorRecordT], ...]:
+    ) -> tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]:
         """Execute a request batch through MPI.
 
         Parameters
         ----------
-        problem : Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT]
+        problem : Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT]
             Problem that defines evaluation semantics.
         requests : Sequence[EvaluationRequest[CandidateT]]
             Request batch to execute.
 
         Returns
         -------
-        tuple[EvaluationOutcome[CandidateT, MpiEvaluatorRecordT], ...]
+        tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]
             Ordered outcomes aligned one-to-one with ``requests``.
         """
         executor = self._create_executor()
@@ -295,21 +311,21 @@ class MpiEvaluator(
 
     def evaluate_attempts(
         self,
-        problem: Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT],
+        problem: Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, MpiEvaluatorRecordT]:
+    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
         """Execute a request batch through MPI into a dense attempt batch.
 
         Parameters
         ----------
-        problem : Problem[BoundaryT, CandidateT, MpiEvaluatorRecordT]
+        problem : Problem[BoundaryT, CandidateT, MpiEvaluationPayloadT]
             Problem that defines evaluation semantics.
         requests : Sequence[EvaluationRequest[CandidateT]]
             Request batch to execute.
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, MpiEvaluatorRecordT]
+        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
             Dense attempt batch aligned to ``requests``.
         """
         executor = self._create_executor()
@@ -333,7 +349,7 @@ class MpiEvaluator(
             )
             return EvaluationAttemptBatch[
                 CandidateT,
-                MpiEvaluatorRecordT,
+                RequestAlignedEvaluationRecord,
             ].from_single_request_attempts(attempts)
         finally:
             executor.shutdown(wait=True)
@@ -356,9 +372,9 @@ class MpiEvaluator(
     def _resolve_ordered_outcome(
         self,
         *,
-        future: MpiFuture[EvaluationOutcome[CandidateT, MpiEvaluatorRecordT]],
+        future: MpiFuture[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]],
         expected_index: int,
-    ) -> EvaluationOutcome[CandidateT, MpiEvaluatorRecordT]:
+    ) -> EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]:
         """Return one future result and verify logical batch alignment."""
         return self._resolve_ordered_result(
             future=future,
@@ -369,9 +385,11 @@ class MpiEvaluator(
     def _resolve_ordered_attempt(
         self,
         *,
-        future: MpiFuture[EvaluationAttemptBatch[CandidateT, MpiEvaluatorRecordT]],
+        future: MpiFuture[
+            EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
+        ],
         expected_index: int,
-    ) -> EvaluationAttemptBatch[CandidateT, MpiEvaluatorRecordT]:
+    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
         """Return one future attempt and verify logical batch alignment."""
         return self._resolve_ordered_result(
             future=future,

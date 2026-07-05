@@ -10,8 +10,8 @@ from ..artifacts import (
     Observation,
     Proposal,
     ProposalEvaluationSpec,
-    RequestAlignedEvaluationRecord,
 )
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..evaluators.async_evaluator.artifacts import (
     CompletionGroup,
     EvaluationBatchHandle,
@@ -71,6 +71,22 @@ class AttemptBatchSessionEvaluator(
         ...
 
 
+@runtime_checkable
+class ResumableAttemptBatchSessionEvaluator(
+    Protocol[CandidateT, StudyEvaluationRecordT]
+):
+    """Async evaluator capability that resumes native attempt-batch sessions."""
+
+    def resume_attempt_session(
+        self,
+        handle: EvaluationBatchResumeHandle,
+    ) -> EvaluationBatchSession[
+        EvaluationAttemptBatch[CandidateT, StudyEvaluationRecordT]
+    ]:
+        """Resume a session that emits one-slot attempt batches."""
+        ...
+
+
 def supports_attempt_batches(
     evaluator: Evaluator[
         Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
@@ -93,6 +109,19 @@ def supports_attempt_batch_sessions(
 ]:
     """Return whether ``evaluator`` exposes attempt-aware async sessions."""
     return isinstance(evaluator, AttemptBatchSessionEvaluator)
+
+
+def supports_resumable_attempt_batch_sessions(
+    evaluator: AsyncEvaluator[
+        Problem[BoundaryT, CandidateT, StudyEvaluationRecordT],
+        EvaluationRequest[CandidateT],
+        EvaluationOutcome[CandidateT, StudyEvaluationRecordT],
+    ],
+) -> TypeGuard[
+    ResumableAttemptBatchSessionEvaluator[CandidateT, StudyEvaluationRecordT]
+]:
+    """Return whether ``evaluator`` can resume native attempt-batch sessions."""
+    return isinstance(evaluator, ResumableAttemptBatchSessionEvaluator)
 
 
 class OutcomeToAttemptBatchSession(

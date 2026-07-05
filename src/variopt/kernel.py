@@ -14,8 +14,8 @@ from .artifacts import (
     Observation,
     Proposal,
     ProposalEvaluationSpec,
-    RequestAlignedEvaluationRecord,
 )
+from .artifacts.records import RequestAlignedEvaluationRecord
 from .execution import EvaluationBudget, ExecutionResources
 from .problem import Problem
 from .randomness import RandomStateSnapshot

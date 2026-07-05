@@ -59,13 +59,30 @@ class StudyValidationOwner(
         ...
 
 
+class ExecutionModelRunMethod(Protocol):
+    """Run-method capability needed for execution model validation."""
+
+    def supported_execution_models(self) -> frozenset[ExecutionModel]:
+        """Return execution models supported by this run method."""
+        ...
+
+
+class ExecutionValidationOwner(Protocol):
+    """Study-like owner for execution model validation only."""
+
+    @property
+    def run_method(self) -> ExecutionModelRunMethod:
+        """Return a run-method capability view."""
+        ...
+
+    @property
+    def evaluator(self) -> object:
+        """Return the configured evaluator for runtime capability checks."""
+        ...
+
+
 def validate_execution_request(
-    study: StudyValidationOwner[
-        BoundaryT,
-        CandidateT,
-        RunMethodStateT,
-        StudyEvaluationRecordT,
-    ],
+    study: ExecutionValidationOwner,
     *,
     batch_size: int,
     execution_model: ExecutionModel,
@@ -74,8 +91,8 @@ def validate_execution_request(
 
     Parameters
     ----------
-    study : StudyValidationOwner[BoundaryT, CandidateT, RunMethodStateT, StudyEvaluationRecordT]
-        Study-like owner exposing the run method and evaluator.
+    study : ExecutionValidationOwner
+        Study-like owner exposing execution-model and evaluator capabilities.
     batch_size : int
         Requested batch size.
     execution_model : ExecutionModel

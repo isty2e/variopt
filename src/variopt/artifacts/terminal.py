@@ -1,7 +1,7 @@
 """Terminal-surface artifact definitions."""
 
 from collections.abc import Mapping, Sequence
-from dataclasses import InitVar, dataclass, field, fields
+from dataclasses import InitVar, dataclass, field, fields, replace
 from typing import Generic, TypeVar, cast
 
 from typing_extensions import Self
@@ -10,151 +10,246 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT
-from .attempts import EvaluationFailure
-from .records import ObjectiveVectorRecord, Observation, RequestAlignedEvaluationRecord
-from .refinement import CandidateRefinement, require_matching_refined_candidate
+from .attempts import EvaluationFailure, EvaluationSuccess
+from .records import (
+    ObjectiveVectorPayload,
+    ObjectiveVectorRecord,
+    Observation,
+    ObservationPayload,
+    RequestAlignedEvaluationRecord,
+)
+from .refinement import CandidateRefinement
+from .requests import EvaluationRequest, Proposal
 
 RunRecordT = TypeVar("RunRecordT", bound=RequestAlignedEvaluationRecord)
+RunPayloadT = TypeVar("RunPayloadT")
 
 
-def _refinement_validation_pairs(
-    *,
-    records: Sequence[RequestAlignedEvaluationRecord],
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...],
-) -> tuple[tuple[CandidateT, CandidateT], ...]:
-    validation_pairs: list[tuple[CandidateT, CandidateT]] = []
-    for record, refinement in zip(records, refinements, strict=True):
-        if refinement is None:
-            continue
-
-        validation_pairs.append(
-            (
-                cast(CandidateT, record.candidate),
-                refinement.refined_candidate,
+def _record_candidate_request(
+    record: RequestAlignedEvaluationRecord,
+) -> EvaluationRequest[CandidateT]:
+    source_request = record.request
+    record_candidate = cast(CandidateT, record.candidate)
+    if type(source_request) is EvaluationRequest:
+        request = cast(EvaluationRequest[CandidateT], source_request)
+        if request.candidate is record_candidate:
+            return request
+        return EvaluationRequest(
+            proposal=Proposal(
+                candidate=record_candidate,
+                proposal_id=request.proposal_id,
             ),
+            proposal_evaluation_spec=request.proposal_evaluation_spec,
         )
 
-    return tuple(validation_pairs)
+    return EvaluationRequest(proposal=Proposal(candidate=record_candidate))
 
 
-def _refinement_pairs_are_prevalidated(
+def _successes_from_records(
     *,
-    current_pairs: tuple[tuple[CandidateT, CandidateT], ...],
-    validated_pairs: tuple[tuple[CandidateT, CandidateT], ...],
-) -> bool:
-    if len(current_pairs) != len(validated_pairs):
-        return False
-
-    return all(
-        current_record_candidate is validated_record_candidate
-        and current_refined_candidate is validated_refined_candidate
-        for (
-            current_record_candidate,
-            current_refined_candidate,
-        ), (
-            validated_record_candidate,
-            validated_refined_candidate,
-        ) in zip(current_pairs, validated_pairs, strict=True)
-    )
-
-
-def _normalize_refinements(
-    *,
-    records: Sequence[RequestAlignedEvaluationRecord],
+    records: Sequence[RunRecordT],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
-    record_label: str,
     candidate_equal: CandidateEquality[CandidateT] | None,
-    candidate_equal_required: bool = False,
-    validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = (),
-) -> tuple[
-    tuple[CandidateRefinement[CandidateT] | None, ...],
-    tuple[tuple[CandidateT, CandidateT], ...],
-]:
+) -> tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]:
+    record_tuple = tuple(records)
     refinement_tuple = tuple(refinements)
-    if refinement_tuple == ():
-        return (), ()
-
-    if len(refinement_tuple) != len(records):
-        msg = f"refinements must be empty or align with {record_label}"
+    if refinement_tuple and len(refinement_tuple) != len(record_tuple):
+        msg = "refinements must be empty or align with records"
         raise ValueError(msg)
 
-    if all(refinement is None for refinement in refinement_tuple):
-        return (), ()
+    if refinement_tuple == ():
+        refinement_tuple = tuple(None for _record in record_tuple)
 
-    current_refinement_pairs = _refinement_validation_pairs(
-        records=records,
-        refinements=refinement_tuple,
-    )
-    if _refinement_pairs_are_prevalidated(
-        current_pairs=current_refinement_pairs,
-        validated_pairs=validated_refinement_pairs,
-    ):
-        return refinement_tuple, current_refinement_pairs
-
-    if candidate_equal is None and candidate_equal_required:
-        msg = (
-            "candidate_equal is required to revalidate refinement alignment after "
-            "changing an explicitly compared terminal surface"
-        )
-        raise TypeError(msg)
-
-    for record, refinement in zip(records, refinement_tuple, strict=True):
-        if refinement is None:
-            continue
-
-        require_matching_refined_candidate(
-            record_candidate=cast(CandidateT, record.candidate),
-            refined_candidate=refinement.refined_candidate,
-            mismatch_message=(
-                "refinement refined_candidate must match the aligned "
-                f"{record_label} candidate"
-            ),
+    return tuple(
+        EvaluationSuccess(
+            request=_record_candidate_request(record),
+            payload=record,
+            refinement=refinement,
             candidate_equal=candidate_equal,
         )
+        for record, refinement in zip(record_tuple, refinement_tuple, strict=True)
+    )
 
-    return refinement_tuple, current_refinement_pairs
 
-
-def _normalize_terminal_refinements(
+def _successes_from_observations(
     *,
-    records: Sequence[RequestAlignedEvaluationRecord],
+    observations: Sequence[Observation[CandidateT]],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
-    record_label: str,
     candidate_equal: CandidateEquality[CandidateT] | None,
-    carried_candidate_equal: CandidateEquality[CandidateT] | None,
-    candidate_equal_required: bool,
-    validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...],
-) -> tuple[
-    CandidateEquality[CandidateT] | None,
-    bool,
-    tuple[CandidateRefinement[CandidateT] | None, ...],
-    tuple[tuple[CandidateT, CandidateT], ...],
-]:
-    effective_candidate_equal = candidate_equal
-    if effective_candidate_equal is None:
-        effective_candidate_equal = carried_candidate_equal
+) -> tuple[EvaluationSuccess[CandidateT, ObservationPayload], ...]:
+    observation_tuple = tuple(observations)
+    refinement_tuple = tuple(refinements)
+    if refinement_tuple and len(refinement_tuple) != len(observation_tuple):
+        msg = "refinements must be empty or align with observations"
+        raise ValueError(msg)
 
-    next_candidate_equal_required = (
-        candidate_equal_required or effective_candidate_equal is not None
+    if refinement_tuple == ():
+        refinement_tuple = tuple(None for _observation in observation_tuple)
+
+    return tuple(
+        EvaluationSuccess(
+            request=_record_candidate_request(observation),
+            payload=ObservationPayload(
+                value=observation.value,
+                score=observation.score,
+                elapsed_seconds=observation.elapsed_seconds,
+            ),
+            refinement=refinement,
+            candidate_equal=candidate_equal,
+        )
+        for observation, refinement in zip(
+            observation_tuple,
+            refinement_tuple,
+            strict=True,
+        )
     )
-    effective_validated_pairs = validated_refinement_pairs
-    if candidate_equal is not None:
-        effective_validated_pairs = ()
 
-    normalized_refinements, next_validated_pairs = _normalize_refinements(
-        records=records,
-        refinements=refinements,
-        record_label=record_label,
-        candidate_equal=effective_candidate_equal,
-        candidate_equal_required=next_candidate_equal_required,
-        validated_refinement_pairs=effective_validated_pairs,
+
+def _successes_from_vector_records(
+    *,
+    records: Sequence[ObjectiveVectorRecord[CandidateT]],
+    refinements: Sequence[CandidateRefinement[CandidateT] | None],
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...]:
+    record_tuple = tuple(records)
+    refinement_tuple = tuple(refinements)
+    if refinement_tuple and len(refinement_tuple) != len(record_tuple):
+        msg = "refinements must be empty or align with records"
+        raise ValueError(msg)
+
+    if refinement_tuple == ():
+        refinement_tuple = tuple(None for _record in record_tuple)
+
+    return tuple(
+        EvaluationSuccess(
+            request=_record_candidate_request(record),
+            payload=ObjectiveVectorPayload(
+                objective_values=record.objective_values,
+                objective_scores=record.objective_scores,
+                elapsed_seconds=record.elapsed_seconds,
+            ),
+            refinement=refinement,
+            candidate_equal=candidate_equal,
+        )
+        for record, refinement in zip(record_tuple, refinement_tuple, strict=True)
     )
 
-    return (
-        effective_candidate_equal,
-        next_candidate_equal_required,
-        normalized_refinements,
-        next_validated_pairs,
+
+def _normalize_successes(
+    *,
+    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]:
+    success_tuple = tuple(successes)
+    for success in success_tuple:
+        if type(success) is not EvaluationSuccess:
+            msg = "successes must contain EvaluationSuccess values"
+            raise TypeError(msg)
+
+    if candidate_equal is None:
+        return success_tuple
+
+    return tuple(
+        EvaluationSuccess(
+            request=success.request,
+            payload=success.payload,
+            evaluation_count=success.evaluation_count,
+            refinement=success.refinement,
+            candidate_equal=candidate_equal,
+        )
+        for success in success_tuple
+    )
+
+
+def _success_refinements(
+    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+    refinements = tuple(success.refinement for success in successes)
+    if all(refinement is None for refinement in refinements):
+        return ()
+    return refinements
+
+
+def _successes_with_refinements(
+    *,
+    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+    refinements: Sequence[CandidateRefinement[CandidateT] | None],
+    candidate_equal: CandidateEquality[CandidateT] | None,
+) -> tuple[EvaluationSuccess[CandidateT, RunPayloadT], ...]:
+    success_tuple = tuple(successes)
+    refinement_tuple = tuple(refinements)
+    if len(refinement_tuple) != len(success_tuple):
+        msg = "refinements must align with successes"
+        raise ValueError(msg)
+
+    if candidate_equal is None:
+        return tuple(
+            replace(success, refinement=refinement)
+            for success, refinement in zip(
+                success_tuple,
+                refinement_tuple,
+                strict=True,
+            )
+        )
+
+    return tuple(
+        replace(
+            success,
+            refinement=refinement,
+            candidate_equal=candidate_equal,
+        )
+        for success, refinement in zip(
+            success_tuple,
+            refinement_tuple,
+            strict=True,
+        )
+    )
+
+
+def _success_evaluation_count(
+    successes: Sequence[EvaluationSuccess[CandidateT, RunPayloadT]],
+) -> int:
+    return sum(success.evaluation_count for success in successes)
+
+
+def _projection_proposal_for_success(
+    success: EvaluationSuccess[CandidateT, RunPayloadT],
+) -> Proposal[CandidateT]:
+    refinement = success.refinement
+    if refinement is None:
+        return success.request.proposal
+
+    return Proposal(
+        candidate=refinement.source_candidate,
+        proposal_id=success.proposal_id,
+    )
+
+
+def _observation_from_success(
+    success: EvaluationSuccess[CandidateT, ObservationPayload],
+) -> Observation[CandidateT]:
+    payload = success.payload
+    return Observation(
+        proposal=_projection_proposal_for_success(success),
+        proposal_evaluation_spec=success.request.proposal_evaluation_spec,
+        candidate=success.request.candidate,
+        value=payload.value,
+        score=payload.score,
+        elapsed_seconds=payload.elapsed_seconds,
+    )
+
+
+def _vector_record_from_success(
+    success: EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+) -> ObjectiveVectorRecord[CandidateT]:
+    payload = success.payload
+    return ObjectiveVectorRecord(
+        proposal=_projection_proposal_for_success(success),
+        proposal_evaluation_spec=success.request.proposal_evaluation_spec,
+        candidate=success.request.candidate,
+        objective_values=payload.objective_values,
+        objective_scores=payload.objective_scores,
+        elapsed_seconds=payload.elapsed_seconds,
     )
 
 
@@ -278,50 +373,65 @@ class Trace:
         return type(self)(events=self.events + (event,))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     """Terminal report for one completed study run.
 
     Parameters
     ----------
-    records : tuple[RunRecordT, ...]
-        Full ordered record history produced by the run.
+    successes : tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
+        Full ordered successful attempt history produced by the run.
     evaluation_count : int
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
-    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
-        Optional record-aligned refinement provenance. An empty tuple means no
-        refinement metadata was recorded for the run.
     failures : tuple[EvaluationFailure[CandidateT], ...], default=()
-        Recorded failed evaluation attempts. Successful records remain in
-        ``records`` only.
+        Recorded failed evaluation attempts. Successful payloads remain in
+        ``successes`` only.
     """
 
-    records: tuple[RunRecordT, ...]
+    successes: tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
-    _candidate_equal: CandidateEquality[CandidateT] | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _candidate_equal_required: bool = field(
-        default=False,
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = field(
-        default=(),
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
+
+    def __init__(
+        self,
+        *,
+        successes: Sequence[EvaluationSuccess[CandidateT, RunRecordT]] | None = None,
+        evaluation_count: int,
+        trace: Trace | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+        records: Sequence[RunRecordT] | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+    ) -> None:
+        """Create one terminal report, normalizing legacy records to successes."""
+        normalized_successes: tuple[EvaluationSuccess[CandidateT, RunRecordT], ...]
+        if records is not None:
+            normalized_successes = _successes_from_records(
+                records=records,
+                refinements=_optional_refinement_tuple(refinements),
+                candidate_equal=candidate_equal,
+            )
+        elif successes is not None:
+            normalized_successes = tuple(successes)
+            if refinements is not None:
+                normalized_successes = _successes_with_refinements(
+                    successes=normalized_successes,
+                    refinements=refinements,
+                    candidate_equal=candidate_equal,
+                )
+        else:
+            normalized_successes = ()
+
+        object.__setattr__(self, "__orig_class__", None)
+        object.__setattr__(self, "successes", normalized_successes)
+        object.__setattr__(self, "evaluation_count", evaluation_count)
+        object.__setattr__(self, "trace", Trace() if trace is None else trace)
+        object.__setattr__(self, "failures", _optional_failure_tuple(failures))
+        self.__post_init__(candidate_equal)
 
     def __post_init__(
         self,
@@ -332,43 +442,61 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         Raises
         ------
         ValueError
-            If ``evaluation_count`` is negative, smaller than ``len(records)``,
-            if non-empty refinement metadata is not aligned with records, or
-            if a refinement's evaluated candidate disagrees with the aligned
-            record candidate.
-        TypeError
-            If candidate equality does not produce a scalar truth value.
+            If ``evaluation_count`` is negative or smaller than the reported
+            successful and failed attempt costs.
         """
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
+        normalized_successes = _normalize_successes(
+            successes=self.successes,
+            candidate_equal=candidate_equal,
+        )
+        object.__setattr__(self, "successes", normalized_successes)
+
         failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
-        if self.evaluation_count < len(self.records) + failure_evaluation_count:
-            msg = "evaluation_count must be at least the number of records"
+        success_evaluation_count = _success_evaluation_count(normalized_successes)
+        if self.evaluation_count < success_evaluation_count + failure_evaluation_count:
+            msg = "evaluation_count must be at least the terminal attempt cost"
             raise ValueError(msg)
 
-        (
-            effective_candidate_equal,
-            candidate_equal_required,
-            normalized_refinements,
-            validated_refinement_pairs,
-        ) = _normalize_terminal_refinements(
-            records=self.records,
-            refinements=self.refinements,
-            record_label="records",
-            candidate_equal=candidate_equal,
-            carried_candidate_equal=self._candidate_equal,
-            candidate_equal_required=self._candidate_equal_required,
-            validated_refinement_pairs=self._validated_refinement_pairs,
+    @property
+    def records(self) -> tuple[RunRecordT, ...]:
+        """Return successful payloads as the legacy record projection."""
+        return tuple(success.payload for success in self.successes)
+
+    @property
+    def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+        """Return success-aligned refinement provenance."""
+        return _success_refinements(self.successes)
+
+    @classmethod
+    def from_successes(
+        cls,
+        successes: Sequence[EvaluationSuccess[CandidateT, RunRecordT]],
+        evaluation_count: int | None = None,
+        trace: Trace | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+    ) -> Self:
+        """Build a terminal report from request-owned successes."""
+        success_tuple = tuple(successes)
+        normalized_trace = Trace() if trace is None else trace
+        failure_tuple = _optional_failure_tuple(failures)
+        failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
+        normalized_evaluation_count = (
+            _success_evaluation_count(success_tuple) + failure_evaluation_count
         )
-        object.__setattr__(self, "refinements", normalized_refinements)
-        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
-        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
-        object.__setattr__(
-            self,
-            "_validated_refinement_pairs",
-            validated_refinement_pairs,
+        if evaluation_count is not None:
+            normalized_evaluation_count = evaluation_count
+
+        return cls(
+            successes=success_tuple,
+            evaluation_count=normalized_evaluation_count,
+            trace=normalized_trace,
+            failures=failure_tuple,
+            candidate_equal=candidate_equal,
         )
 
     @classmethod
@@ -404,74 +532,124 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         Returns
         -------
         Self
-            Canonical run report over ``records``.
+            Canonical run report over request-owned successes.
         """
-        record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
         refinement_tuple = _optional_refinement_tuple(refinements)
         failure_tuple = _optional_failure_tuple(failures)
         failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
-        normalized_evaluation_count = len(record_tuple) + failure_evaluation_count
+        successes = _successes_from_records(
+            records=records,
+            refinements=refinement_tuple,
+            candidate_equal=candidate_equal,
+        )
+        normalized_evaluation_count = (
+            _success_evaluation_count(successes) + failure_evaluation_count
+        )
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
         return cls(
-            records=record_tuple,
+            successes=successes,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
-            refinements=refinement_tuple,
             failures=failure_tuple,
-            candidate_equal=candidate_equal,
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     """Terminal scalar summary of a completed study run.
 
     Parameters
     ----------
-    best_observation : Observation[CandidateT] | None
-        Best scalar observation found during the run, if any.
-    observations : tuple[Observation[CandidateT], ...]
-        Full ordered scalar observation history.
+    best_success : EvaluationSuccess[CandidateT, ObservationPayload] | None
+        Best scalar success found during the run, if any.
+    successes : tuple[EvaluationSuccess[CandidateT, ObservationPayload], ...]
+        Full ordered scalar success history.
     evaluation_count : int
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
-    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
-        Optional observation-aligned refinement provenance. An empty tuple
-        means no refinement metadata was recorded for the run.
     failures : tuple[EvaluationFailure[CandidateT], ...], default=()
-        Recorded failed evaluation attempts. Successful scalar observations
-        remain in ``observations`` only.
+        Recorded failed evaluation attempts. Successful scalar payloads remain
+        in ``successes`` only.
     """
 
-    best_observation: Observation[CandidateT] | None
-    observations: tuple[Observation[CandidateT], ...]
+    best_success: EvaluationSuccess[CandidateT, ObservationPayload] | None
+    successes: tuple[EvaluationSuccess[CandidateT, ObservationPayload], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
-    _candidate_equal: CandidateEquality[CandidateT] | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _candidate_equal_required: bool = field(
-        default=False,
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = field(
-        default=(),
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
+
+    def __init__(
+        self,
+        *,
+        best_success: EvaluationSuccess[CandidateT, ObservationPayload] | None = None,
+        successes: Sequence[EvaluationSuccess[CandidateT, ObservationPayload]]
+        | None = None,
+        evaluation_count: int,
+        trace: Trace | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+        best_observation: Observation[CandidateT] | None = None,
+        observations: Sequence[Observation[CandidateT]] | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+    ) -> None:
+        """Create one scalar result, normalizing observations to successes."""
+        if best_success is not None and best_observation is not None:
+            msg = "provide either best_success or best_observation, not both"
+            raise ValueError(msg)
+        normalized_successes: tuple[
+            EvaluationSuccess[CandidateT, ObservationPayload],
+            ...,
+        ]
+        normalized_best_success = best_success
+        if observations is not None:
+            normalized_successes = _successes_from_observations(
+                observations=observations,
+                refinements=_optional_refinement_tuple(refinements),
+                candidate_equal=candidate_equal,
+            )
+            if best_observation is not None:
+                normalized_best_success = _successes_from_observations(
+                    observations=(best_observation,),
+                    refinements=(),
+                    candidate_equal=candidate_equal,
+                )[0]
+            elif normalized_successes:
+                normalized_best_success = min(
+                    normalized_successes,
+                    key=lambda success: success.payload.score,
+                )
+            else:
+                normalized_best_success = None
+        elif successes is not None:
+            normalized_successes = tuple(successes)
+            if refinements is not None:
+                normalized_successes = _successes_with_refinements(
+                    successes=normalized_successes,
+                    refinements=refinements,
+                    candidate_equal=candidate_equal,
+                )
+                if normalized_successes:
+                    normalized_best_success = min(
+                        normalized_successes,
+                        key=lambda success: success.payload.score,
+                    )
+                else:
+                    normalized_best_success = None
+        else:
+            normalized_successes = ()
+
+        object.__setattr__(self, "__orig_class__", None)
+        object.__setattr__(self, "best_success", normalized_best_success)
+        object.__setattr__(self, "successes", normalized_successes)
+        object.__setattr__(self, "evaluation_count", evaluation_count)
+        object.__setattr__(self, "trace", Trace() if trace is None else trace)
+        object.__setattr__(self, "failures", _optional_failure_tuple(failures))
+        self.__post_init__(candidate_equal)
 
     def __post_init__(
         self,
@@ -482,57 +660,101 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Raises
         ------
         ValueError
-            If accounting is inconsistent or if ``best_observation`` does not
-            match the minimum-score element of ``observations``.
+            If accounting is inconsistent or if ``best_success`` does not match
+            the minimum-score element of ``successes``.
         """
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
-        failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
-        if self.evaluation_count < len(self.observations) + failure_evaluation_count:
-            msg = "evaluation_count must be at least the number of observations"
-            raise ValueError(msg)
-
-        if self.best_observation is None and self.observations:
-            msg = "best_observation must be set when observations are present"
-            raise ValueError(msg)
-
-        if (
-            self.best_observation is not None
-            and self.best_observation not in self.observations
-        ):
-            msg = "best_observation must come from observations"
-            raise ValueError(msg)
-
-        if self.best_observation is not None and any(
-            observation.score < self.best_observation.score
-            for observation in self.observations
-        ):
-            msg = "best_observation must have the minimal observation score"
-            raise ValueError(msg)
-
-        (
-            effective_candidate_equal,
-            candidate_equal_required,
-            normalized_refinements,
-            validated_refinement_pairs,
-        ) = _normalize_terminal_refinements(
-            records=self.observations,
-            refinements=self.refinements,
-            record_label="observations",
+        normalized_successes = _normalize_successes(
+            successes=self.successes,
             candidate_equal=candidate_equal,
-            carried_candidate_equal=self._candidate_equal,
-            candidate_equal_required=self._candidate_equal_required,
-            validated_refinement_pairs=self._validated_refinement_pairs,
         )
-        object.__setattr__(self, "refinements", normalized_refinements)
-        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
-        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
-        object.__setattr__(
-            self,
-            "_validated_refinement_pairs",
-            validated_refinement_pairs,
+        object.__setattr__(self, "successes", normalized_successes)
+        normalized_best_success = self.best_success
+        if normalized_best_success is not None and candidate_equal is not None:
+            normalized_best_success = EvaluationSuccess(
+                request=normalized_best_success.request,
+                payload=normalized_best_success.payload,
+                evaluation_count=normalized_best_success.evaluation_count,
+                refinement=normalized_best_success.refinement,
+                candidate_equal=candidate_equal,
+            )
+            object.__setattr__(self, "best_success", normalized_best_success)
+
+        failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
+        success_evaluation_count = _success_evaluation_count(normalized_successes)
+        if self.evaluation_count < success_evaluation_count + failure_evaluation_count:
+            msg = "evaluation_count must be at least the terminal attempt cost"
+            raise ValueError(msg)
+
+        if self.best_success is None and normalized_successes:
+            msg = "best_success must be set when successes are present"
+            raise ValueError(msg)
+
+        if self.best_success is not None and self.best_success not in normalized_successes:
+            msg = "best_success must come from successes"
+            raise ValueError(msg)
+
+        if self.best_success is not None and any(
+            success.payload.score < self.best_success.payload.score
+            for success in normalized_successes
+        ):
+            msg = "best_success must have the minimal success score"
+            raise ValueError(msg)
+
+    @property
+    def observations(self) -> tuple[Observation[CandidateT], ...]:
+        """Return scalar observations projected from request-owned successes."""
+        return tuple(_observation_from_success(success) for success in self.successes)
+
+    @property
+    def best_observation(self) -> Observation[CandidateT] | None:
+        """Return the best scalar observation projection, if any."""
+        if self.best_success is None:
+            return None
+        return _observation_from_success(self.best_success)
+
+    @property
+    def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+        """Return success-aligned refinement provenance."""
+        return _success_refinements(self.successes)
+
+    @classmethod
+    def from_successes(
+        cls,
+        successes: Sequence[EvaluationSuccess[CandidateT, ObservationPayload]],
+        evaluation_count: int | None = None,
+        trace: Trace | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+    ) -> Self:
+        """Build a scalar run summary from request-owned scalar successes."""
+        success_tuple = tuple(successes)
+        normalized_trace = Trace() if trace is None else trace
+        failure_tuple = _optional_failure_tuple(failures)
+        failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
+        normalized_evaluation_count = (
+            _success_evaluation_count(success_tuple) + failure_evaluation_count
+        )
+        if evaluation_count is not None:
+            normalized_evaluation_count = evaluation_count
+
+        best_success: EvaluationSuccess[CandidateT, ObservationPayload] | None = None
+        if success_tuple:
+            best_success = min(
+                success_tuple,
+                key=lambda success: success.payload.score,
+            )
+
+        return cls(
+            best_success=best_success,
+            successes=success_tuple,
+            evaluation_count=normalized_evaluation_count,
+            trace=normalized_trace,
+            failures=failure_tuple,
+            candidate_equal=candidate_equal,
         )
 
     @classmethod
@@ -567,41 +789,28 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Returns
         -------
         Self
-            Terminal scalar summary ordered by canonical minimization score.
+            Terminal scalar summary ordered by successful attempt slot.
         """
-        observation_tuple = tuple(observations)
         normalized_trace = Trace() if trace is None else trace
         refinement_tuple = _optional_refinement_tuple(refinements)
         failure_tuple = _optional_failure_tuple(failures)
         failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
-        normalized_evaluation_count = len(observation_tuple) + failure_evaluation_count
+        successes = _successes_from_observations(
+            observations=observations,
+            refinements=refinement_tuple,
+            candidate_equal=candidate_equal,
+        )
+        normalized_evaluation_count = (
+            _success_evaluation_count(successes) + failure_evaluation_count
+        )
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
-        if not observation_tuple:
-            return cls(
-                best_observation=None,
-                observations=(),
-                evaluation_count=normalized_evaluation_count,
-                trace=normalized_trace,
-                refinements=refinement_tuple,
-                failures=failure_tuple,
-                candidate_equal=candidate_equal,
-            )
-
-        best_observation = min(
-            observation_tuple,
-            key=lambda observation: observation.score,
-        )
-
-        return cls(
-            best_observation=best_observation,
-            observations=observation_tuple,
+        return cls.from_successes(
+            successes=successes,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
-            refinements=refinement_tuple,
             failures=failure_tuple,
-            candidate_equal=candidate_equal,
         )
 
 
@@ -675,54 +884,60 @@ def collect_nondominated_records(
     return tuple(nondominated_records)
 
 
-@dataclass(frozen=True, slots=True)
+def collect_nondominated_successes(
+    successes: tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...],
+) -> tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...]:
+    """Return the stable nondominated frontier of vector-valued successes."""
+    nondominated_successes: list[
+        EvaluationSuccess[CandidateT, ObjectiveVectorPayload]
+    ] = []
+    for candidate_success in successes:
+        if any(
+            dominates_objective_scores(
+                left_scores=other_success.payload.objective_scores,
+                right_scores=candidate_success.payload.objective_scores,
+            )
+            for other_success in successes
+            if other_success is not candidate_success
+        ):
+            continue
+        nondominated_successes.append(candidate_success)
+
+    return tuple(nondominated_successes)
+
+
+@dataclass(frozen=True, slots=True, init=False)
 class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
-    """Terminal multi-objective surface over vector-valued records.
+    """Terminal multi-objective surface over vector-valued successes.
 
     Parameters
     ----------
-    nondominated_records : tuple[ObjectiveVectorRecord[CandidateT], ...]
-        Stable nondominated frontier of ``records``.
-    records : tuple[ObjectiveVectorRecord[CandidateT], ...]
-        Full ordered vector-valued record history.
+    nondominated_successes : tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...]
+        Stable nondominated frontier of ``successes``.
+    successes : tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...]
+        Full ordered vector-valued success history.
     evaluation_count : int
         Total logical evaluation cost accrued during the run.
     trace : Trace, default=Trace()
         Diagnostics trace captured during execution.
-    refinements : tuple[CandidateRefinement[CandidateT] | None, ...], default=()
-        Optional record-aligned refinement provenance. An empty tuple means no
-        refinement metadata was recorded for the run.
     failures : tuple[EvaluationFailure[CandidateT], ...], default=()
-        Recorded failed evaluation attempts. Successful vector records remain
-        in ``records`` only.
+        Recorded failed evaluation attempts. Successful vector payloads remain
+        in ``successes`` only.
     """
 
-    nondominated_records: tuple[ObjectiveVectorRecord[CandidateT], ...]
-    records: tuple[ObjectiveVectorRecord[CandidateT], ...]
+    nondominated_successes: tuple[
+        EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+        ...,
+    ]
+    successes: tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...]
     evaluation_count: int
     trace: Trace = field(default_factory=Trace)
-    refinements: tuple[CandidateRefinement[CandidateT] | None, ...] = ()
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
-    _candidate_equal: CandidateEquality[CandidateT] | None = field(
-        default=None,
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _candidate_equal_required: bool = field(
-        default=False,
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _validated_refinement_pairs: tuple[tuple[CandidateT, CandidateT], ...] = field(
-        default=(),
-        repr=False,
-        compare=False,
-        kw_only=True,
-    )
-    _validated_frontier_source_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = (
+    _validated_frontier_source_successes: tuple[
+        EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+        ...,
+    ] = (
         field(
             default=(),
             init=False,
@@ -730,22 +945,98 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             compare=False,
         )
     )
-    _validated_frontier_records: tuple[ObjectiveVectorRecord[CandidateT], ...] = field(
-        default=(),
-        init=False,
-        repr=False,
-        compare=False,
-    )
+    _validated_frontier_successes: tuple[
+        EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+        ...,
+    ] = field(default=(), init=False, repr=False, compare=False)
+
+    def __init__(
+        self,
+        *,
+        nondominated_successes: Sequence[
+            EvaluationSuccess[CandidateT, ObjectiveVectorPayload]
+        ]
+        | None = None,
+        successes: Sequence[EvaluationSuccess[CandidateT, ObjectiveVectorPayload]]
+        | None = None,
+        evaluation_count: int,
+        trace: Trace | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+        nondominated_records: Sequence[ObjectiveVectorRecord[CandidateT]] | None = None,
+        records: Sequence[ObjectiveVectorRecord[CandidateT]] | None = None,
+        refinements: Sequence[CandidateRefinement[CandidateT] | None] | None = None,
+    ) -> None:
+        """Create one vector surface, normalizing records to successes."""
+        normalized_successes: tuple[
+            EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+            ...,
+        ]
+        normalized_nondominated_successes: tuple[
+            EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+            ...,
+        ]
+        if records is not None:
+            normalized_successes = _successes_from_vector_records(
+                records=records,
+                refinements=_optional_refinement_tuple(refinements),
+                candidate_equal=candidate_equal,
+            )
+        elif successes is not None:
+            normalized_successes = tuple(successes)
+            if refinements is not None:
+                normalized_successes = _successes_with_refinements(
+                    successes=normalized_successes,
+                    refinements=refinements,
+                    candidate_equal=candidate_equal,
+                )
+        else:
+            normalized_successes = ()
+
+        if nondominated_records is not None:
+            normalized_nondominated_successes = _successes_from_vector_records(
+                records=nondominated_records,
+                refinements=(),
+                candidate_equal=candidate_equal,
+            )
+        elif records is not None:
+            normalized_nondominated_successes = collect_nondominated_successes(
+                normalized_successes
+            )
+        elif refinements is not None and successes is not None:
+            normalized_nondominated_successes = collect_nondominated_successes(
+                normalized_successes
+            )
+        elif nondominated_successes is not None:
+            normalized_nondominated_successes = tuple(nondominated_successes)
+        else:
+            normalized_nondominated_successes = ()
+
+        object.__setattr__(self, "__orig_class__", None)
+        object.__setattr__(
+            self,
+            "nondominated_successes",
+            normalized_nondominated_successes,
+        )
+        object.__setattr__(self, "successes", normalized_successes)
+        object.__setattr__(self, "evaluation_count", evaluation_count)
+        object.__setattr__(self, "trace", Trace() if trace is None else trace)
+        object.__setattr__(self, "failures", _optional_failure_tuple(failures))
+        object.__setattr__(self, "_validated_frontier_source_successes", ())
+        object.__setattr__(self, "_validated_frontier_successes", ())
+        self.__post_init__(candidate_equal)
 
     @classmethod
     def _from_prevalidated_frontier(
         cls,
         *,
-        nondominated_records: tuple[ObjectiveVectorRecord[CandidateT], ...],
-        records: tuple[ObjectiveVectorRecord[CandidateT], ...],
+        nondominated_successes: tuple[
+            EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
+            ...,
+        ],
+        successes: tuple[EvaluationSuccess[CandidateT, ObjectiveVectorPayload], ...],
         evaluation_count: int,
         trace: Trace,
-        refinements: tuple[CandidateRefinement[CandidateT] | None, ...],
         failures: tuple[EvaluationFailure[CandidateT], ...],
         candidate_equal: CandidateEquality[CandidateT] | None,
     ) -> Self:
@@ -754,17 +1045,13 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             surface,
             field_values={
                 "__orig_class__": None,
-                "nondominated_records": nondominated_records,
-                "records": records,
+                "nondominated_successes": nondominated_successes,
+                "successes": successes,
                 "evaluation_count": evaluation_count,
                 "trace": trace,
-                "refinements": refinements,
                 "failures": failures,
-                "_candidate_equal": None,
-                "_candidate_equal_required": False,
-                "_validated_refinement_pairs": (),
-                "_validated_frontier_source_records": records,
-                "_validated_frontier_records": nondominated_records,
+                "_validated_frontier_source_successes": successes,
+                "_validated_frontier_successes": nondominated_successes,
             },
         )
         surface.__post_init__(candidate_equal)
@@ -779,57 +1066,108 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Raises
         ------
         ValueError
-            If accounting is inconsistent, record dimensions disagree, the
-            frontier does not come from ``records``, or
-            ``nondominated_records`` is not the stable nondominated frontier.
+            If accounting is inconsistent, payload dimensions disagree, the
+            frontier does not come from ``successes``, or
+            ``nondominated_successes`` is not the stable nondominated frontier.
         """
         if self.evaluation_count < 0:
             msg = "evaluation_count must be non-negative"
             raise ValueError(msg)
 
+        normalized_successes = _normalize_successes(
+            successes=self.successes,
+            candidate_equal=candidate_equal,
+        )
+        normalized_nondominated_successes = _normalize_successes(
+            successes=self.nondominated_successes,
+            candidate_equal=candidate_equal,
+        )
+        object.__setattr__(self, "successes", normalized_successes)
+        object.__setattr__(
+            self,
+            "nondominated_successes",
+            normalized_nondominated_successes,
+        )
+
         failure_evaluation_count = _terminal_failure_evaluation_count(self.failures)
-        if self.evaluation_count < len(self.records) + failure_evaluation_count:
-            msg = "evaluation_count must be at least the number of records"
+        success_evaluation_count = _success_evaluation_count(normalized_successes)
+        if self.evaluation_count < success_evaluation_count + failure_evaluation_count:
+            msg = "evaluation_count must be at least the terminal attempt cost"
             raise ValueError(msg)
 
-        if len({len(record.objective_scores) for record in self.records}) > 1:
+        if (
+            len(
+                {
+                    len(success.payload.objective_scores)
+                    for success in normalized_successes
+                }
+            )
+            > 1
+        ):
             msg = "all objective score vectors must share one dimension"
             raise ValueError(msg)
 
         frontier_is_prevalidated = (
-            self.records is self._validated_frontier_source_records
-            and self.nondominated_records is self._validated_frontier_records
+            normalized_successes is self._validated_frontier_source_successes
+            and normalized_nondominated_successes
+            is self._validated_frontier_successes
         )
         if not frontier_is_prevalidated and (
-            self.nondominated_records != collect_nondominated_records(self.records)
+            normalized_nondominated_successes
+            != collect_nondominated_successes(normalized_successes)
         ):
             msg = (
-                "nondominated_records must equal the stable nondominated frontier "
-                "of records"
+                "nondominated_successes must equal the stable nondominated frontier "
+                "of successes"
             )
             raise ValueError(msg)
 
-        (
-            effective_candidate_equal,
-            candidate_equal_required,
-            normalized_refinements,
-            validated_refinement_pairs,
-        ) = _normalize_terminal_refinements(
-            records=self.records,
-            refinements=self.refinements,
-            record_label="records",
-            candidate_equal=candidate_equal,
-            carried_candidate_equal=self._candidate_equal,
-            candidate_equal_required=self._candidate_equal_required,
-            validated_refinement_pairs=self._validated_refinement_pairs,
+    @property
+    def records(self) -> tuple[ObjectiveVectorRecord[CandidateT], ...]:
+        """Return vector records projected from request-owned successes."""
+        return tuple(_vector_record_from_success(success) for success in self.successes)
+
+    @property
+    def nondominated_records(self) -> tuple[ObjectiveVectorRecord[CandidateT], ...]:
+        """Return nondominated vector record projections."""
+        return tuple(
+            _vector_record_from_success(success)
+            for success in self.nondominated_successes
         )
-        object.__setattr__(self, "refinements", normalized_refinements)
-        object.__setattr__(self, "_candidate_equal", effective_candidate_equal)
-        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
-        object.__setattr__(
-            self,
-            "_validated_refinement_pairs",
-            validated_refinement_pairs,
+
+    @property
+    def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
+        """Return success-aligned refinement provenance."""
+        return _success_refinements(self.successes)
+
+    @classmethod
+    def from_successes(
+        cls,
+        successes: Sequence[EvaluationSuccess[CandidateT, ObjectiveVectorPayload]],
+        evaluation_count: int | None = None,
+        trace: Trace | None = None,
+        failures: Sequence[EvaluationFailure[CandidateT]] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
+    ) -> Self:
+        """Build a nondominated surface from request-owned vector successes."""
+        success_tuple = tuple(successes)
+        normalized_trace = Trace() if trace is None else trace
+        failure_tuple = _optional_failure_tuple(failures)
+        failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
+        normalized_evaluation_count = (
+            _success_evaluation_count(success_tuple) + failure_evaluation_count
+        )
+        if evaluation_count is not None:
+            normalized_evaluation_count = evaluation_count
+
+        nondominated_successes = collect_nondominated_successes(success_tuple)
+        return cls._from_prevalidated_frontier(
+            nondominated_successes=nondominated_successes,
+            successes=success_tuple,
+            evaluation_count=normalized_evaluation_count,
+            trace=normalized_trace,
+            failures=failure_tuple,
+            candidate_equal=candidate_equal,
         )
 
     @classmethod
@@ -867,24 +1205,26 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Terminal surface whose frontier is the stable nondominated subset
             of ``records``.
         """
-        record_tuple = tuple(records)
         normalized_trace = Trace() if trace is None else trace
         refinement_tuple = _optional_refinement_tuple(refinements)
         failure_tuple = _optional_failure_tuple(failures)
         failure_evaluation_count = _terminal_failure_evaluation_count(failure_tuple)
-        normalized_evaluation_count = len(record_tuple) + failure_evaluation_count
+        successes = _successes_from_vector_records(
+            records=records,
+            refinements=refinement_tuple,
+            candidate_equal=candidate_equal,
+        )
+        normalized_evaluation_count = (
+            _success_evaluation_count(successes) + failure_evaluation_count
+        )
         if evaluation_count is not None:
             normalized_evaluation_count = evaluation_count
 
-        nondominated_records = collect_nondominated_records(record_tuple)
-        return cls._from_prevalidated_frontier(
-            nondominated_records=nondominated_records,
-            records=record_tuple,
+        return cls.from_successes(
+            successes=successes,
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
-            refinements=refinement_tuple,
             failures=failure_tuple,
-            candidate_equal=candidate_equal,
         )
 
     @classmethod
@@ -908,25 +1248,37 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Self
             Terminal nondominated surface derived from ``report``.
         """
-        return cls.from_records(
-            records=report.records,
+        vector_successes: list[EvaluationSuccess[CandidateT, ObjectiveVectorPayload]] = []
+        for success in report.successes:
+            payload = success.payload
+            vector_successes.append(
+                EvaluationSuccess(
+                    request=_record_candidate_request(payload),
+                    payload=ObjectiveVectorPayload(
+                        objective_values=payload.objective_values,
+                        objective_scores=payload.objective_scores,
+                        elapsed_seconds=payload.elapsed_seconds,
+                    ),
+                    evaluation_count=success.evaluation_count,
+                    refinement=success.refinement,
+                    candidate_equal=candidate_equal,
+                )
+            )
+
+        return cls.from_successes(
+            successes=tuple(vector_successes),
             evaluation_count=report.evaluation_count,
             trace=report.trace,
-            refinements=report.refinements,
             failures=report.failures,
-            candidate_equal=candidate_equal,
         )
 
 
 def terminal_surface_getstate(self: FrozenGenericSlotsCompat) -> list[object | None]:
     state: list[object | None] = []
     for dataclass_field in fields(self):
-        if dataclass_field.name == "_candidate_equal":
-            state.append(None)
-            continue
         if dataclass_field.name in {
-            "_validated_frontier_source_records",
-            "_validated_frontier_records",
+            "_validated_frontier_source_successes",
+            "_validated_frontier_successes",
         }:
             state.append(())
             continue

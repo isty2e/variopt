@@ -714,12 +714,13 @@ class CSAOptimizer(
     ) -> frozenset[str]:
         failed_proposal_ids: set[str] = set()
         successful_proposal_ids = {
-            outcome.record.proposal.proposal_id
-            for outcome in attempts.outcomes
-            if outcome.record.proposal.proposal_id is not None
+            request.proposal.proposal_id
+            for request in attempts.outcome_requests
+            if request.proposal.proposal_id is not None
         }
-        for failure in attempts.failures:
-            proposal_id = failure.proposal_id
+        for failure_request in attempts.failure_requests:
+            proposal = failure_request.proposal
+            proposal_id = proposal.proposal_id
             if proposal_id is None:
                 msg = (
                     "failed attempts supplied to CSAOptimizer.tell_attempts "
@@ -739,7 +740,7 @@ class CSAOptimizer(
                 msg = "failed attempt does not correspond to a pending proposal"
                 raise ValueError(msg)
 
-            if pending_proposal is not failure.proposal and pending_proposal != failure.proposal:
+            if pending_proposal is not proposal and pending_proposal != proposal:
                 msg = "failed attempt proposal does not match the pending proposal"
                 raise ValueError(msg)
 

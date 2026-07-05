@@ -9,10 +9,14 @@ from typing_extensions import override
 
 from ..artifacts import (
     EvaluationRequest,
-    Observation,
-    RequestAlignedEvaluationRecord,
+    ObservationPayload,
 )
-from ..evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
+from ..artifacts.records import RequestAlignedEvaluationRecord
+from ..evaluation_pipeline import (
+    CompatibilityEvaluationPayload,
+    evaluate_request_attempt,
+    evaluate_request_outcome,
+)
 from ..execution import ExecutionResources, NestedParallelismPolicy
 from ..outcomes import EvaluationAttemptBatch, EvaluationOutcome
 from ..problem import Problem
@@ -22,8 +26,8 @@ from .base import Evaluator
 BoundaryT = TypeVar("BoundaryT")
 SequentialEvaluationRecordT = DefaultTypeVar(
     "SequentialEvaluationRecordT",
-    bound=RequestAlignedEvaluationRecord,
-    default=Observation[CandidateT],
+    bound=CompatibilityEvaluationPayload,
+    default=ObservationPayload,
 )
 
 
@@ -32,7 +36,7 @@ class SequentialEvaluator(
     Evaluator[
         Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, SequentialEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ],
     Generic[BoundaryT, CandidateT, SequentialEvaluationRecordT],
 ):
@@ -65,7 +69,7 @@ class SequentialEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> tuple[EvaluationOutcome[CandidateT, SequentialEvaluationRecordT], ...]:
+    ) -> tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]:
         """Execute a request batch sequentially.
 
         Parameters
@@ -77,7 +81,7 @@ class SequentialEvaluator(
 
         Returns
         -------
-        tuple[EvaluationOutcome[CandidateT, SequentialEvaluationRecordT], ...]
+        tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]
             Outcomes aligned one-to-one with ``requests`` in batch order.
         """
         return tuple(
@@ -92,7 +96,7 @@ class SequentialEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]:
+    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
         """Execute a request batch into a dense success/failure attempt batch.
 
         Parameters
@@ -104,12 +108,12 @@ class SequentialEvaluator(
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
             Dense attempt batch aligned to ``requests``.
         """
         return EvaluationAttemptBatch[
             CandidateT,
-            SequentialEvaluationRecordT,
+            RequestAlignedEvaluationRecord,
         ].from_single_request_attempts(
             tuple(
                 evaluate_request_attempt(

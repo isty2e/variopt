@@ -11,8 +11,9 @@ RunMethod.ask -> Proposal -> Kernel or evaluator execution
     -> Study -> RunMethod feedback
 ```
 
-The evaluation record remains the semantic result. Refinement metadata explains
-how execution reached the candidate in a successful outcome record.
+The successful attempt remains the semantic result: it owns the evaluated
+request, the request-free payload, and optional refinement metadata. Legacy
+records and observations are compatibility projections from that success.
 
 ## Candidate Vocabulary
 
@@ -20,18 +21,18 @@ how execution reached the candidate in a successful outcome record.
 | --- | --- | --- |
 | Proposed candidate | `RunMethod` / `Proposal` | The candidate selected by the search method before execution. |
 | Source candidate | `CandidateRefinement.source_candidate` | The candidate before execution-side refinement. Usually the proposal candidate. |
-| Refined candidate | `CandidateRefinement.refined_candidate` | The candidate after refinement. It must match the aligned evaluation record candidate. |
-| Evaluated candidate | `EvaluationRecord.candidate` | The canonical candidate evaluated by the problem's evaluation protocol. |
+| Refined candidate | `CandidateRefinement.refined_candidate` | The candidate after refinement. It must match the aligned success request candidate. |
+| Evaluated candidate | `EvaluationSuccess.request.candidate` | The canonical candidate evaluated by the problem's evaluation protocol. |
 | Accepted candidate | `RunMethod` state | A candidate admitted into optimizer state, such as a CSA bank entry. Not every evaluated candidate is accepted. |
 
 The important invariant is:
 
 ```text
-EvaluationOutcome.refinement.refined_candidate == EvaluationOutcome.record.candidate
+EvaluationSuccess.refinement.refined_candidate == EvaluationSuccess.request.candidate
 ```
 
-`EvaluationOutcome` validates that invariant when refinement metadata is
-present.
+`EvaluationOutcome` and terminal successes validate that invariant when
+refinement metadata is present.
 
 ## Ownership Boundary
 
@@ -63,14 +64,18 @@ evaluates several inner candidates before returning one refined result. Set
 `count_evaluation_cost=False` only when you deliberately want outer-record
 counting.
 
-Terminal surfaces preserve provenance only as aligned metadata:
+Terminal surfaces preserve provenance as success-aligned metadata:
 
-- `RunReport.refinements` aligns with `RunReport.records`.
-- `RunResult.refinements` aligns with `RunResult.observations`.
-- `NondominatedRunSurface.refinements` aligns with its source vector records.
+- `RunReport.refinements` aligns with `RunReport.successes`; `records` is the
+  legacy payload projection.
+- `RunResult.refinements` aligns with `RunResult.successes`; `observations` is
+  the scalar compatibility projection.
+- `NondominatedRunSurface.refinements` aligns with
+  `NondominatedRunSurface.successes`; vector records and frontier records are
+  compatibility projections.
 
 When no refinement metadata was recorded, these fields use the compact empty
-tuple. If some records have refinement and some do not, unrefined positions are
+tuple. If some successes have refinement and some do not, unrefined positions are
 represented by `None`.
 
 ## Local Search Behavior

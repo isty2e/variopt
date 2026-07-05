@@ -1,7 +1,10 @@
 """Regression coverage for the trimmed variopt root facade."""
 
 
+import pytest
+
 import variopt
+import variopt.artifacts as artifact_facade
 from variopt.artifacts import (
     CandidateRefinement,
     EvaluationExceptionSnapshot,
@@ -93,7 +96,10 @@ class RootFacadeExportTests:
     def test_root_facade_omits_family_specific_helper_contracts(self) -> None:
         removed_names = (
             "CandidateSampler",
+            "EvaluationRecord",
+            "InteractionEvaluationRecord",
             "RandomSeed",
+            "RequestAlignedEvaluationRecord",
             "SearchMethod",
             "SpaceBoundaryValue",
             "SpaceCandidateValue",
@@ -106,3 +112,29 @@ class RootFacadeExportTests:
         assert CandidateSampler is not None
         assert SpaceBoundaryValue is not None
         assert SpaceCandidateValue is not None
+
+    def test_artifact_facade_omits_obsolete_generic_record_api(self) -> None:
+        removed_names = (
+            "EvaluationRecord",
+            "InteractionEvaluationRecord",
+            "RequestAlignedEvaluationRecord",
+        )
+
+        assert all(name not in artifact_facade.__all__ for name in removed_names)
+        assert all(not hasattr(artifact_facade, name) for name in removed_names)
+
+    def test_obsolete_generic_record_api_cannot_be_imported_from_facades(
+        self,
+    ) -> None:
+        removed_imports = (
+            "from variopt import EvaluationRecord",
+            "from variopt import InteractionEvaluationRecord",
+            "from variopt import RequestAlignedEvaluationRecord",
+            "from variopt.artifacts import EvaluationRecord",
+            "from variopt.artifacts import InteractionEvaluationRecord",
+            "from variopt.artifacts import RequestAlignedEvaluationRecord",
+        )
+
+        for import_statement in removed_imports:
+            with pytest.raises(ImportError):
+                exec(import_statement, {})

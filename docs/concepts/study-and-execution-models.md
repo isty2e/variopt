@@ -116,8 +116,8 @@ diagnostics, evaluation-cost accounting, and candidate-refinement provenance.
 Recorded user-code failures remain separate `EvaluationFailure` attempts.
 
 `Study` preserves successful-outcome metadata in terminal surfaces while
-keeping the semantic feedback record-based. Run methods normally consume
-`EvaluationRecord` values through `tell(...)`; methods that adapt from
+keeping the semantic feedback payload-based. Run methods normally consume
+successful payload projections through `tell(...)`; methods that adapt from
 execution-side metadata can override `tell_outcomes(...)` or
 `tell_attempts(...)` without making refinement or failure reporting part of the
 evaluation protocol.

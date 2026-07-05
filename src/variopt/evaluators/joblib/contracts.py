@@ -1,18 +1,24 @@
 """Typed joblib API shims shared by joblib-backed evaluators."""
 
 from collections.abc import Callable, Generator, Iterable
-from typing import Generic, Literal, Protocol, TypeVar
+from typing import Generic, Literal, Protocol, TypeAlias, TypeVar
 
 from typing_extensions import TypeVar as DefaultTypeVar
 
-from ...artifacts import Observation, RequestAlignedEvaluationRecord
-from ...typevars import CandidateT
+from ...artifacts import (
+    ObjectiveVectorPayload,
+    ObservationPayload,
+)
+from ...artifacts.records import RequestAlignedEvaluationRecord
 
 BoundaryT = TypeVar("BoundaryT")
-JoblibEvaluationRecordT = DefaultTypeVar(
-    "JoblibEvaluationRecordT",
-    bound=RequestAlignedEvaluationRecord,
-    default=Observation[CandidateT],
+JoblibEvaluationPayload: TypeAlias = (
+    RequestAlignedEvaluationRecord | ObservationPayload | ObjectiveVectorPayload
+)
+JoblibEvaluationPayloadT = DefaultTypeVar(
+    "JoblibEvaluationPayloadT",
+    bound=JoblibEvaluationPayload,
+    default=ObservationPayload,
 )
 ListResultT = TypeVar("ListResultT")
 YieldResultT = TypeVar("YieldResultT", covariant=True)

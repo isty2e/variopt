@@ -6,7 +6,8 @@ from typing import Generic, TypeVar
 
 from typing_extensions import override
 
-from ..artifacts import ProposalEvaluationSpec, RequestAlignedEvaluationRecord
+from ..artifacts import ProposalEvaluationSpec
+from ..artifacts.records import RequestAlignedEvaluationRecord
 from ..execution import (
     SEQUENTIAL_EXECUTION_MODEL,
     SYNC_BATCH_EXECUTION_MODEL,

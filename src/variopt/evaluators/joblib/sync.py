@@ -8,6 +8,7 @@ import joblib  # pyright: ignore[reportMissingTypeStubs]
 from typing_extensions import override
 
 from ...artifacts import EvaluationRequest
+from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
 from ...outcomes import EvaluationAttemptBatch, EvaluationOutcome
@@ -17,7 +18,7 @@ from ..base import Evaluator
 from .contracts import (
     BoundaryT,
     JoblibDelayedFactory,
-    JoblibEvaluationRecordT,
+    JoblibEvaluationPayloadT,
     JoblibListParallelFactory,
 )
 from .execution import build_execution_resources, validate_joblib_configuration
@@ -26,11 +27,11 @@ from .execution import build_execution_resources, validate_joblib_configuration
 @dataclass(slots=True)
 class JoblibEvaluator(
     Evaluator[
-        Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT],
+        Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         EvaluationRequest[CandidateT],
-        EvaluationOutcome[CandidateT, JoblibEvaluationRecordT],
+        EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord],
     ],
-    Generic[BoundaryT, CandidateT, JoblibEvaluationRecordT],
+    Generic[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
 ):
     """Joblib-backed evaluator that preserves canonical batch ordering.
 
@@ -70,26 +71,26 @@ class JoblibEvaluator(
     @override
     def evaluate(
         self,
-        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT],
+        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> tuple[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT], ...]:
+    ) -> tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]:
         """Execute a request batch through joblib.
 
         Parameters
         ----------
-        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
             Problem that defines evaluation semantics.
         requests : Sequence[EvaluationRequest[CandidateT]]
             Request batch to execute.
 
         Returns
         -------
-        tuple[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT], ...]
+        tuple[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord], ...]
             Ordered outcomes aligned one-to-one with ``requests``.
         """
         parallel_factory = cast(
             JoblibListParallelFactory[
-                EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
+                EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]
             ],
             getattr(joblib, "Parallel"),
         )
@@ -111,26 +112,26 @@ class JoblibEvaluator(
 
     def evaluate_attempts(
         self,
-        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT],
+        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]:
+    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]:
         """Execute a request batch through joblib into a dense attempt batch.
 
         Parameters
         ----------
-        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
             Problem that defines evaluation semantics.
         requests : Sequence[EvaluationRequest[CandidateT]]
             Request batch to execute.
 
         Returns
         -------
-        EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]
+        EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
             Dense attempt batch aligned to ``requests``.
         """
         parallel_factory = cast(
             JoblibListParallelFactory[
-                EvaluationAttemptBatch[CandidateT, JoblibEvaluationRecordT]
+                EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord]
             ],
             getattr(joblib, "Parallel"),
         )
@@ -150,5 +151,5 @@ class JoblibEvaluator(
         )
         return EvaluationAttemptBatch[
             CandidateT,
-            JoblibEvaluationRecordT,
+            RequestAlignedEvaluationRecord,
         ].from_single_request_attempts(tuple(attempts))

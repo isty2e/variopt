@@ -1,8 +1,10 @@
 # Canonical Usage Patterns
 
 This guide shows the concrete caller-facing paths that became canonical as
-`variopt` moved to record-first evaluation, sibling interaction semantics, and
-explicit execution reports.
+`variopt` moved to request-first evaluation, sibling interaction semantics, and
+explicit execution reports. Problem protocols should prefer request-free
+payloads; execution artifacts own request identity, success/failure attempt
+slots, and terminal report projections.
 
 Use [`Study.optimize`][variopt.Study.optimize]
 when the problem yields scalar
@@ -11,21 +13,91 @@ records and you want one scalar
 [`RunResult`][variopt.RunResult].
 
 Use [`Study.run`][variopt.Study.run]
-when the problem yields general
-[`EvaluationRecord`][variopt.EvaluationRecord]
-instances and you want one generic
+when a run method consumes successful payload projections and you want one
+generic
 [`RunReport`][variopt.RunReport].
 
-## Record-First `Study.run(...)`
+## Request-Free Protocol Payloads
 
-The smallest practical pattern is:
+The smallest practical custom protocol pattern is:
 
-1. Define one non-scalar record type.
+1. Define one request-free payload type.
 2. Implement one proposal-local
    [`EvaluationProtocol`][variopt.EvaluationProtocol].
-3. Use a normal
-   [`Problem`][variopt.Problem] and
-   [`Study`][variopt.Study].
+3. Let evaluation artifacts attach request identity when materializing
+   [`EvaluationSuccess`][variopt.artifacts.EvaluationSuccess]
+   and terminal reports.
+
+```python
+from dataclasses import dataclass
+
+from typing_extensions import override
+
+from variopt import (
+    EvaluationProtocol,
+    EvaluationRequest,
+    IntegerSpace,
+    Problem,
+    Proposal,
+    RunReport,
+)
+from variopt.artifacts import EvaluationSuccess
+
+
+@dataclass(frozen=True, slots=True)
+class LabelPayload:
+    label: str
+
+
+class ParityProtocol(EvaluationProtocol[int, LabelPayload]):
+    @override
+    def evaluate_request(self, request: EvaluationRequest[int]) -> LabelPayload:
+        candidate = request.candidate
+        return LabelPayload(label=f"parity:{candidate % 2}")
+
+
+protocol = ParityProtocol()
+problem = Problem(
+    space=IntegerSpace(low=0, high=10),
+    evaluation_protocol=protocol,
+)
+requests = (
+    EvaluationRequest(proposal=Proposal(candidate=3, proposal_id="p-1")),
+    EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-2")),
+)
+
+
+def evaluate_success(
+    request: EvaluationRequest[int],
+) -> EvaluationSuccess[int, LabelPayload]:
+    problem.space.validate(request.candidate)
+    return EvaluationSuccess(
+        request=request,
+        payload=problem.evaluation_protocol.evaluate_request(request),
+        evaluation_count=1,
+    )
+
+
+successes = tuple(
+    evaluate_success(request) for request in requests
+)
+report = RunReport[int, LabelPayload].from_successes(successes)
+
+assert report.evaluation_count == 2
+assert [payload.label for payload in report.records] == ["parity:1", "parity:0"]
+```
+
+In normal optimization runs, [`Problem`][variopt.Problem] and
+[`Study`][variopt.Study] provide the validation and orchestration shell around
+the same request-free protocol contract.
+
+## Compatibility `Study.run(...)`
+
+`Study.run(...)` still interoperates with custom run methods that consume
+successful payload projections through `RunMethod.tell(...)`. If a custom
+payload is used directly with that legacy feedback path today, it must expose
+the evaluated request and candidate structurally; do not subclass an
+obsolete generic record base from the public facade.
 
 ```python
 from dataclasses import dataclass
@@ -35,7 +107,6 @@ from typing_extensions import override
 
 from variopt import (
     EvaluationProtocol,
-    EvaluationRecord,
     EvaluationRequest,
     IntegerSpace,
     Problem,
@@ -47,8 +118,14 @@ from variopt.evaluators import SequentialEvaluator
 
 
 @dataclass(frozen=True, slots=True)
-class LabelRecord(EvaluationRecord[int]):
+class LabelRecord:
+    request: EvaluationRequest[int]
+    candidate: int
     label: str
+
+    @property
+    def proposal(self) -> Proposal[int]:
+        return self.request.proposal
 
 
 class ParityProtocol(EvaluationProtocol[int, LabelRecord]):
@@ -134,7 +211,7 @@ assert len(report.trace.events) == 2
 assert len(final_state.tell_history) == 2
 ```
 
-`Study.run(...)` is the canonical terminal path for non-scalar records.
+`Study.run(...)` is the terminal compatibility path for non-scalar records.
 `Study.optimize(...)` stays scalar-only and will reject general record types.
 
 ## `RunReport` To `NondominatedRunSurface`
@@ -146,55 +223,38 @@ from the generic report instead.
 
 ```python
 from variopt import (
+    EvaluationRequest,
     NondominatedRunSurface,
-    ObjectiveVectorRecord,
     OptimizationDirection,
     Proposal,
     RunReport,
 )
+from variopt.artifacts import EvaluationSuccess, ObjectiveVectorPayload
 
 
-records = (
-    ObjectiveVectorRecord.from_objective_values(
-        proposal=Proposal(candidate=1, proposal_id="p-1"),
-        candidate=1,
-        objective_values=(1.0, 3.0),
-        directions=(
-            OptimizationDirection.MINIMIZE,
-            OptimizationDirection.MINIMIZE,
+successes = tuple(
+    EvaluationSuccess(
+        request=EvaluationRequest(
+            proposal=Proposal(candidate=candidate, proposal_id=proposal_id),
         ),
-    ),
-    ObjectiveVectorRecord.from_objective_values(
-        proposal=Proposal(candidate=2, proposal_id="p-2"),
-        candidate=2,
-        objective_values=(2.0, 2.0),
-        directions=(
-            OptimizationDirection.MINIMIZE,
-            OptimizationDirection.MINIMIZE,
+        payload=ObjectiveVectorPayload.from_objective_values(
+            objective_values=objective_values,
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MINIMIZE,
+            ),
         ),
-    ),
-    ObjectiveVectorRecord.from_objective_values(
-        proposal=Proposal(candidate=3, proposal_id="p-3"),
-        candidate=3,
-        objective_values=(3.0, 1.0),
-        directions=(
-            OptimizationDirection.MINIMIZE,
-            OptimizationDirection.MINIMIZE,
-        ),
-    ),
-    ObjectiveVectorRecord.from_objective_values(
-        proposal=Proposal(candidate=4, proposal_id="p-4"),
-        candidate=4,
-        objective_values=(4.0, 4.0),
-        directions=(
-            OptimizationDirection.MINIMIZE,
-            OptimizationDirection.MINIMIZE,
-        ),
-    ),
+    )
+    for candidate, proposal_id, objective_values in (
+        (1, "p-1", (1.0, 3.0)),
+        (2, "p-2", (2.0, 2.0)),
+        (3, "p-3", (3.0, 1.0)),
+        (4, "p-4", (4.0, 4.0)),
+    )
 )
 
-report = RunReport[int, ObjectiveVectorRecord[int]].from_records(
-    records=records,
+report = RunReport[int, ObjectiveVectorPayload].from_successes(
+    successes=successes,
     evaluation_count=5,
 )
 surface = NondominatedRunSurface[int].from_report(report)
@@ -228,7 +288,6 @@ from variopt import (
     Proposal,
 )
 from variopt.artifacts import (
-    InteractionEvaluationRecord,
     InteractionEvaluationSpec,
     InteractionEvaluationUnit,
 )
@@ -240,25 +299,26 @@ class MatchupSpec(InteractionEvaluationSpec):
 
 
 @dataclass(frozen=True, slots=True)
-class MatchupRecord(InteractionEvaluationRecord[int]):
+class MatchupPayload:
+    candidates: tuple[int, ...]
     winner: int
     arena: str
 
 
-class MatchupProtocol(InteractionEvaluationProtocol[int, MatchupRecord]):
+class MatchupProtocol(InteractionEvaluationProtocol[int, MatchupPayload]):
     @override
     def evaluate_interaction_unit(
         self,
         interaction_unit: InteractionEvaluationUnit[int],
-    ) -> MatchupRecord:
+    ) -> MatchupPayload:
         winner = max(interaction_unit.candidates)
         interaction_spec = interaction_unit.interaction_evaluation_spec
         arena = "default"
         if isinstance(interaction_spec, MatchupSpec):
             arena = interaction_spec.arena
 
-        return MatchupRecord(
-            interaction_unit=interaction_unit,
+        return MatchupPayload(
+            candidates=interaction_unit.candidates,
             winner=winner,
             arena=arena,
         )
@@ -270,7 +330,7 @@ problem = InteractionProblem(
     name="matchup",
 )
 
-record = problem.interaction_evaluation_protocol.evaluate_requests(
+payload = problem.interaction_evaluation_protocol.evaluate_requests(
     (
         EvaluationRequest(proposal=Proposal(candidate=2, proposal_id="left")),
         EvaluationRequest(proposal=Proposal(candidate=7, proposal_id="right")),
@@ -278,9 +338,9 @@ record = problem.interaction_evaluation_protocol.evaluate_requests(
     interaction_evaluation_spec=MatchupSpec(arena="tournament"),
 )
 
-assert record.winner == 7
-assert record.arena == "tournament"
-assert record.candidates == (2, 7)
+assert payload.winner == 7
+assert payload.arena == "tournament"
+assert payload.candidates == (2, 7)
 ```
 
 Current boundary note:

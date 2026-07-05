@@ -612,6 +612,30 @@ class EvaluationAttemptBatch(
         return tuple(outcome.record for outcome in self.outcomes)
 
     @property
+    def outcome_requests(self) -> tuple[EvaluationRequest[CandidateT], ...]:
+        """Return successful request slots in outcome order.
+
+        Returns
+        -------
+        tuple[EvaluationRequest[CandidateT], ...]
+            Canonical requests for successful attempts, aligned one-to-one with
+            :attr:`outcomes`.
+        """
+        return tuple(self.requests[index] for index in self.outcome_indices)
+
+    @property
+    def failure_requests(self) -> tuple[EvaluationRequest[CandidateT], ...]:
+        """Return failed request slots in failure order.
+
+        Returns
+        -------
+        tuple[EvaluationRequest[CandidateT], ...]
+            Canonical requests for failed attempts, aligned one-to-one with
+            :attr:`failures`.
+        """
+        return tuple(self.requests[index] for index in self.failure_indices)
+
+    @property
     def evaluation_count(self) -> int:
         """Return total logical evaluation cost for the batch.
 

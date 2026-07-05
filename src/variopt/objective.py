@@ -10,7 +10,7 @@ from .artifacts import (
     EvaluationRequest,
     InteractionEvaluationSpec,
     InteractionEvaluationUnit,
-    Observation,
+    ObservationPayload,
     Proposal,
     ProposalEvaluationSpec,
 )
@@ -22,15 +22,15 @@ InteractionProtocolRecordT = TypeVar("InteractionProtocolRecordT")
 
 
 class EvaluationProtocol(ABC, Generic[CandidateT, ProtocolRecordT]):
-    """Evaluate one canonical request into one semantic record.
+    """Evaluate one canonical request into one request-free payload.
 
     Notes
     -----
     This is the direction-free evaluation contract used by the core execution
     pipeline. Implementations should interpret exactly one
     :class:`~variopt.artifacts.EvaluationRequest` and return exactly one
-    domain-level record. Scalar ordering semantics, execution accounting, and
-    batching policy belong to adjacent layers rather than to this protocol.
+    request-free payload. Request identity, execution accounting, and batching
+    policy belong to adjacent layers rather than to this protocol.
     """
 
     @abstractmethod
@@ -49,7 +49,7 @@ class EvaluationProtocol(ABC, Generic[CandidateT, ProtocolRecordT]):
         Returns
         -------
         ProtocolRecordT
-            Semantic evaluation record produced for ``request``.
+            Request-free payload produced for ``request``.
         """
 
     def evaluate_proposal(
@@ -71,7 +71,7 @@ class EvaluationProtocol(ABC, Generic[CandidateT, ProtocolRecordT]):
         Returns
         -------
         ProtocolRecordT
-            Semantic evaluation record produced for the lowered request.
+            Request-free payload produced for the lowered request.
         """
         return self.evaluate_request(
             EvaluationRequest(
@@ -143,13 +143,13 @@ class InteractionEvaluationProtocol(
 
 
 class ObservationEvaluationProtocol(ABC, Generic[CandidateT]):
-    """Evaluate requests into scalar observations with explicit direction.
+    """Evaluate requests into scalar payloads with explicit direction.
 
     Notes
     -----
     This is the scalar compatibility layer over the direction-free
     :class:`EvaluationProtocol` contract. It keeps raw objective direction
-    handling explicit at the boundary where scalar observations are created.
+    handling explicit at the boundary where scalar payloads are created.
     """
 
     @abstractmethod
@@ -158,8 +158,8 @@ class ObservationEvaluationProtocol(ABC, Generic[CandidateT]):
         request: EvaluationRequest[CandidateT],
         *,
         direction: OptimizationDirection,
-    ) -> Observation[CandidateT]:
-        """Evaluate one request into a scalar observation.
+    ) -> ObservationPayload:
+        """Evaluate one request into a scalar payload.
 
         Parameters
         ----------
@@ -171,8 +171,8 @@ class ObservationEvaluationProtocol(ABC, Generic[CandidateT]):
 
         Returns
         -------
-        Observation[CandidateT]
-            Scalar observation carrying both the raw value and the canonical
+        ObservationPayload
+            Scalar payload carrying both the raw value and the canonical
             minimization score.
         """
 
@@ -182,8 +182,8 @@ class ObservationEvaluationProtocol(ABC, Generic[CandidateT]):
         *,
         direction: OptimizationDirection,
         proposal_evaluation_spec: ProposalEvaluationSpec | None = None,
-    ) -> Observation[CandidateT]:
-        """Evaluate one proposal into a scalar observation.
+    ) -> ObservationPayload:
+        """Evaluate one proposal into a scalar payload.
 
         Parameters
         ----------
@@ -198,8 +198,8 @@ class ObservationEvaluationProtocol(ABC, Generic[CandidateT]):
 
         Returns
         -------
-        Observation[CandidateT]
-            Scalar observation produced for the lowered request.
+        ObservationPayload
+            Scalar payload produced for the lowered request.
         """
         return self.evaluate_request(
             EvaluationRequest(
@@ -245,7 +245,7 @@ class ScalarEvaluationProtocol(
         request: EvaluationRequest[CandidateT],
         *,
         direction: OptimizationDirection,
-    ) -> Observation[CandidateT]:
+    ) -> ObservationPayload:
         """Evaluate one request by delegating to :meth:`evaluate`.
 
         Parameters
@@ -258,13 +258,11 @@ class ScalarEvaluationProtocol(
 
         Returns
         -------
-        Observation[CandidateT]
-            Scalar observation constructed from the raw objective value.
+        ObservationPayload
+            Scalar payload constructed from the raw objective value.
         """
         candidate = request.candidate
-        return Observation.from_objective_value(
-            request=request,
-            candidate=candidate,
+        return ObservationPayload.from_objective_value(
             value=self.evaluate(candidate),
             direction=direction,
         )

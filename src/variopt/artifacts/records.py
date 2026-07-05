@@ -23,6 +23,205 @@ ObservationCandidateT = TypeVar("ObservationCandidateT")
 ObjectiveVectorCandidateT = TypeVar("ObjectiveVectorCandidateT")
 
 
+@dataclass(frozen=True, slots=True)
+class ObservationPayload(FrozenGenericSlotsCompat):
+    """Request-free scalar objective payload.
+
+    Parameters
+    ----------
+    value : float
+        Raw scalar objective value.
+    score : float
+        Canonical minimization score derived from ``value`` and the optimization
+        direction.
+    elapsed_seconds : float | None, optional
+        Optional wall-clock runtime for the evaluation.
+    """
+
+    value: float
+    score: float
+    elapsed_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        """Validate scalar payload values.
+
+        Raises
+        ------
+        ValueError
+            If ``value`` or ``score`` is non-finite, or if
+            ``elapsed_seconds`` is negative.
+        """
+        if not np.isfinite(self.value):
+            msg = "value must be finite"
+            raise ValueError(msg)
+
+        if not np.isfinite(self.score):
+            msg = "score must be finite"
+            raise ValueError(msg)
+
+        if self.elapsed_seconds is not None:
+            if not np.isfinite(self.elapsed_seconds):
+                msg = "elapsed_seconds must be finite"
+                raise ValueError(msg)
+            if self.elapsed_seconds < 0.0:
+                msg = "elapsed_seconds must be non-negative"
+                raise ValueError(msg)
+
+    @staticmethod
+    def from_objective_value(
+        *,
+        value: float,
+        direction: OptimizationDirection,
+        elapsed_seconds: float | None = None,
+    ) -> "ObservationPayload":
+        """Build a scalar payload from a raw objective value.
+
+        Parameters
+        ----------
+        value : float
+            Raw scalar objective value.
+        direction : OptimizationDirection
+            Direction used to normalize ``value`` into the canonical
+            minimization score.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+
+        Returns
+        -------
+        ObservationPayload
+            Request-free scalar objective payload.
+        """
+        normalized_value = float(value)
+        return ObservationPayload(
+            value=normalized_value,
+            score=direction.normalize_objective_value(normalized_value),
+            elapsed_seconds=elapsed_seconds,
+        )
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
+    """Request-free multi-objective payload.
+
+    Parameters
+    ----------
+    objective_values : Sequence[float]
+        Raw objective values.
+    objective_scores : Sequence[float]
+        Canonical minimization scores aligned with ``objective_values``.
+    elapsed_seconds : float | None, optional
+        Optional wall-clock runtime for the evaluation.
+    """
+
+    objective_values: tuple[float, ...]
+    objective_scores: tuple[float, ...]
+    elapsed_seconds: float | None = None
+
+    def __init__(
+        self,
+        *,
+        objective_values: Sequence[float],
+        objective_scores: Sequence[float],
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        """Create one request-free vector objective payload.
+
+        Parameters
+        ----------
+        objective_values : Sequence[float]
+            Raw objective values.
+        objective_scores : Sequence[float]
+            Canonical minimization scores aligned with ``objective_values``.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+        """
+        normalized_objective_values = normalize_objective_vector(
+            values=objective_values,
+            field_name="objective_values",
+        )
+        normalized_objective_scores = normalize_objective_vector(
+            values=objective_scores,
+            field_name="objective_scores",
+        )
+        object.__setattr__(self, "__orig_class__", None)
+        object.__setattr__(self, "objective_values", normalized_objective_values)
+        object.__setattr__(self, "objective_scores", normalized_objective_scores)
+        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        """Validate vector objective payload values.
+
+        Raises
+        ------
+        ValueError
+            If the objective vectors have different lengths or if
+            ``elapsed_seconds`` is negative.
+        """
+        if len(self.objective_values) != len(self.objective_scores):
+            msg = "objective_values and objective_scores must have the same length"
+            raise ValueError(msg)
+
+        if self.elapsed_seconds is not None:
+            if not np.isfinite(self.elapsed_seconds):
+                msg = "elapsed_seconds must be finite"
+                raise ValueError(msg)
+            if self.elapsed_seconds < 0.0:
+                msg = "elapsed_seconds must be non-negative"
+                raise ValueError(msg)
+
+    @staticmethod
+    def from_objective_values(
+        *,
+        objective_values: Sequence[float],
+        directions: Sequence[OptimizationDirection],
+        elapsed_seconds: float | None = None,
+    ) -> "ObjectiveVectorPayload":
+        """Build a vector payload from raw objective values.
+
+        Parameters
+        ----------
+        objective_values : Sequence[float]
+            Raw objective values.
+        directions : Sequence[OptimizationDirection]
+            Direction for each objective value.
+        elapsed_seconds : float | None, optional
+            Optional wall-clock runtime for the evaluation.
+
+        Returns
+        -------
+        ObjectiveVectorPayload
+            Request-free vector objective payload with normalized scores.
+
+        Raises
+        ------
+        ValueError
+            If ``directions`` does not align with ``objective_values``.
+        """
+        normalized_objective_values = normalize_objective_vector(
+            values=objective_values,
+            field_name="objective_values",
+        )
+        normalized_directions = tuple(directions)
+        if len(normalized_directions) != len(normalized_objective_values):
+            msg = "directions must align with objective_values"
+            raise ValueError(msg)
+
+        objective_scores = tuple(
+            direction.normalize_objective_value(value)
+            for value, direction in zip(
+                normalized_objective_values,
+                normalized_directions,
+                strict=True,
+            )
+        )
+        return ObjectiveVectorPayload(
+            objective_values=normalized_objective_values,
+            objective_scores=objective_scores,
+            elapsed_seconds=elapsed_seconds,
+        )
+
+
 class RequestAlignedEvaluationRecord(Protocol):
     """Minimal request-aligned evaluation record contract.
 

@@ -39,11 +39,15 @@ submodules are not automatically part of the stable public contract.
 
 Execution-related public artifacts are documented through the root facade and
 `variopt.artifacts`: `CandidateRefinement`, `EvaluationOutcome`,
-`EvaluationFailure`, `EvaluationExceptionSnapshot`, `EvaluationAttemptBatch`,
-`RunReport`, `RunResult`, and `NondominatedRunSurface`. Run-method attempt
-assimilation exposes `UnsupportedEvaluationFailureError` for optimizers that
-cannot safely consume recorded failures; study orchestration exposes
-`RunExecutionFailed` for hard failures with partial run state. Kernel
-implementation contracts used by those examples, including `ProposalBatchQuery`,
-`KernelDiagnostics`, `KernelStatus`, `ExecutionResources`, and
-`NestedParallelismPolicy`, are also root-facade names.
+`EvaluationFailure`, `EvaluationExceptionSnapshot`, `EvaluationSuccess`,
+`ObservationPayload`, `ObjectiveVectorPayload`, `EvaluationAttemptBatch`,
+`RunReport`, `RunResult`, and `NondominatedRunSurface`. The root execution
+facade still exposes outcome-aware execution metadata such as
+`EvaluationOutcome`; the artifact facade also exposes request-owned success and
+payload artifacts for integrations that need to keep request identity separate
+from objective payloads. Run-method attempt assimilation exposes
+`UnsupportedEvaluationFailureError` for optimizers that cannot safely consume
+recorded failures; study orchestration exposes `RunExecutionFailed` for hard
+failures with partial run state. Kernel implementation contracts used by those
+examples, including `ProposalBatchQuery`, `KernelDiagnostics`, `KernelStatus`,
+`ExecutionResources`, and `NestedParallelismPolicy`, are also root-facade names.

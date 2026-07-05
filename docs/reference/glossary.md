@@ -14,12 +14,12 @@ structured leaf paths changed by refinement. See
 
 ## EvaluationOutcome
 
-The runtime pairing of an `EvaluationRecord` with the evaluation cost it
-charged against the study budget, optional kernel diagnostics, and optional
-candidate-refinement provenance. Produced by an `Evaluator` or kernel path,
-consumed by `Study`, exposed to outcome-aware methods through
-`RunMethod.tell_outcomes`, and lowered to its contained record before the
-canonical `RunMethod.tell` path. See
+The runtime pairing of one successful request-aligned compatibility payload
+with the evaluation cost it charged against the study budget, optional kernel
+diagnostics, and optional candidate-refinement provenance. Produced by an
+`Evaluator` or kernel path, consumed by `Study`, exposed to outcome-aware
+methods through `RunMethod.tell_outcomes`, and lowered to its contained
+payload before the canonical `RunMethod.tell` path. See
 [`EvaluationOutcome`][variopt.EvaluationOutcome].
 
 ## EvaluationFailure
@@ -28,16 +28,25 @@ A request-aligned record of a user-code evaluation failure. It keeps the
 canonical `EvaluationRequest`, a JSON- and pickle-friendly
 `EvaluationExceptionSnapshot`, and the logical evaluation cost consumed by the
 failed attempt. It does not contain the raw exception object and is not a fake
-`EvaluationRecord`. See [`EvaluationFailure`][variopt.EvaluationFailure].
+successful payload. See [`EvaluationFailure`][variopt.EvaluationFailure].
+
+## EvaluationSuccess
+
+A request-owned successful attempt artifact. It keeps the canonical
+`EvaluationRequest`, a request-free payload such as `ObservationPayload` or
+`ObjectiveVectorPayload`, the logical evaluation cost, and optional
+`CandidateRefinement` provenance aligned against `request.candidate`. See
+[`EvaluationSuccess`][variopt.artifacts.EvaluationSuccess].
 
 ## EvaluationAttemptBatch
 
-The dense aggregate that aligns a batch of `EvaluationRequest` slots with
-successful `EvaluationOutcome`s and recorded `EvaluationFailure`s. The aggregate
-owns slot indices, duplicate-index rejection, request identity alignment, and
-total evaluation-count accounting. `RunMethod.tell_attempts` consumes this
-aggregate at the optimizer assimilation boundary. See
-[`EvaluationAttemptBatch`][variopt.EvaluationAttemptBatch].
+At the artifact facade, the ordered aggregate whose slots are exactly
+`EvaluationSuccess` or `EvaluationFailure` values. It owns request-slot order,
+success/failure projections, successful payload projection, and total
+evaluation-count accounting. The root execution facade also exposes the current
+outcome-aware `EvaluationAttemptBatch` used by `RunMethod.tell_attempts`, where
+successful slots carry `EvaluationOutcome` metadata. See
+[`EvaluationAttemptBatch`][variopt.artifacts.EvaluationAttemptBatch].
 
 ## DiversityMetric
 
@@ -48,16 +57,27 @@ It is a search component, not part of the `SearchSpace` itself. See
 ## EvaluationProtocol
 
 The per-problem rule that turns an `EvaluationRequest` into an
-`EvaluationRecord`. Specialisations include `ScalarEvaluationProtocol`,
-`ObservationEvaluationProtocol`, and `InteractionEvaluationProtocol`. See
+request-free payload. Scalar specialisations produce `ObservationPayload`
+values; execution layers own request identity, success/failure attempt
+recording, and compatibility projection into request-aligned payloads while
+legacy record-consuming APIs remain. Specialisations include
+`ScalarEvaluationProtocol`, `ObservationEvaluationProtocol`, and
+`InteractionEvaluationProtocol`. See
 [`EvaluationProtocol`][variopt.EvaluationProtocol].
 
-## EvaluationRecord
+## ObservationPayload
 
-The canonical output of one evaluation. Carries the originating `Proposal`,
-the canonical candidate, and protocol-specific payload (score, vector, label,
-interaction outcome, …). See
-[`EvaluationRecord`][variopt.EvaluationRecord].
+The request-free scalar objective payload: raw objective value, canonical
+minimization score, and optional elapsed time. Request identity belongs to
+`EvaluationSuccess`, not to the payload. See
+[`ObservationPayload`][variopt.artifacts.ObservationPayload].
+
+## ObjectiveVectorPayload
+
+The request-free multi-objective payload: raw objective vector, canonical
+minimization score vector, and optional elapsed time. Request identity belongs
+to `EvaluationSuccess`, not to the payload. See
+[`ObjectiveVectorPayload`][variopt.artifacts.ObjectiveVectorPayload].
 
 ## EvaluationRequest
 
@@ -106,11 +126,11 @@ allowed below the current execution owner. See
 
 ## NondominatedRunSurface
 
-The multi-objective terminal sibling of `RunResult`. Materialised from a
-`RunReport` of `ObjectiveVectorRecord`s; exposes the non-dominated candidate
-set while preserving record-aligned `CandidateRefinement` provenance when the
-source report carried it. Recorded evaluation failures remain separate from the
-frontier through `NondominatedRunSurface.failures`. See
+The multi-objective terminal sibling of `RunResult`. Stores vector-valued
+`EvaluationSuccess` history, exposes a stable non-dominated success frontier,
+and keeps vector records as compatibility projections. `CandidateRefinement`
+provenance aligns with the source successes. Recorded evaluation failures
+remain separate from the frontier through `NondominatedRunSurface.failures`. See
 [`NondominatedRunSurface`][variopt.NondominatedRunSurface].
 
 ## Objective
@@ -121,15 +141,17 @@ See [`Objective`][variopt.Objective].
 
 ## ObjectiveVectorRecord
 
-The record type for multi-objective problems. Carries a tuple of objective
-values and their `OptimizationDirection`s. See
+The request-aligned record projection for multi-objective problem results.
+Carries objective values and canonical minimization scores aligned with the
+originating request. See
 [`ObjectiveVectorRecord`][variopt.ObjectiveVectorRecord].
 
 ## Observation
 
-The scalar-record sibling of `EvaluationRecord` used by
-`ScalarEvaluationProtocol` and `Study.optimize`. Carries a single value and
-its optimization direction. See [`Observation`][variopt.Observation].
+The scalar request-aligned record projection used by legacy outcome/report
+boundaries and `Study.optimize`. Scalar protocols produce `ObservationPayload`
+first; execution layers attach request identity when projecting to
+`Observation`. See [`Observation`][variopt.Observation].
 
 ## OptimizationDirection
 
@@ -174,9 +196,9 @@ and prioritized structured leaf paths. See
 
 ## RunMethod
 
-The search-state owner. Proposes candidates via `ask`, consumes records via
-`tell`, may opt into full outcome metadata through `tell_outcomes`, consumes
-dense attempt batches through `tell_attempts`, and owns the persistent
+The search-state owner. Proposes candidates via `ask`, consumes successful
+payload projections via `tell`, may opt into full outcome metadata through
+`tell_outcomes`, consumes dense attempt batches through `tell_attempts`, and owns the persistent
 search-state object. Population optimizers
 (`CSAOptimizer`, `DifferentialEvolutionOptimizer`,
 `GeneticAlgorithmOptimizer`) are `RunMethod` implementations. See
@@ -201,20 +223,24 @@ checkpoint-safe report and state when one was reached. See
 
 ## RunReport
 
-The generic terminal report produced by `Study.run(...)`. Covers any
-`EvaluationRecord` type and may carry record-aligned
-`CandidateRefinement` provenance when a kernel or evaluator changed candidates
-before evaluation. Recorded evaluation failures are exposed separately through
-`RunReport.failures`; they are not mixed into `RunReport.records`. See
+The generic terminal report produced by `Study.run(...)`. Stores ordered
+request-owned `EvaluationSuccess` history for any payload type and exposes
+`records` as the legacy payload projection. `CandidateRefinement` provenance
+aligns with successes when a kernel or evaluator changed candidates before
+evaluation. Recorded evaluation failures are exposed separately through
+`RunReport.failures`; they are not mixed into `RunReport.successes` or
+`RunReport.records`. See
 [`RunReport`][variopt.RunReport].
 
 ## RunResult
 
-The scalar terminal result produced by `Study.optimize(...)`. Covers scalar
-`Observation` records only and preserves observation-aligned
-`CandidateRefinement` provenance when local refinement changed evaluated
+The scalar terminal result produced by `Study.optimize(...)`. Stores scalar
+`EvaluationSuccess` history, identifies the best success by score, and exposes
+`observations` as the scalar compatibility projection. `CandidateRefinement`
+provenance aligns with successes when local refinement changed evaluated
 candidates. Recorded evaluation failures are exposed separately through
-`RunResult.failures`; they are not mixed into `RunResult.observations`. See
+`RunResult.failures`; they are not mixed into `RunResult.successes` or
+`RunResult.observations`. See
 [`RunResult`][variopt.RunResult].
 
 ## SearchSpace

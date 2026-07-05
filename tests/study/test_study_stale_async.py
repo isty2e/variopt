@@ -21,6 +21,7 @@ from tests.study_support import (
     SpaceOwnedEqualityOptimizer,
     SpaceOwnedEqualitySpace,
     SquareObjective,
+    make_observation_outcome,
 )
 from variopt import (
     EvaluationOutcome,
@@ -162,10 +163,7 @@ class HolAvoidanceAsyncEvaluator(
         )
         self._next_batch_id += 1
         outcomes: tuple[StaleAsyncOutcome, ...] = tuple(
-            EvaluationOutcome[int, Observation[int]](
-                record=problem.evaluation_protocol.evaluate_request(request),
-                evaluation_count=1,
-            )
+            make_observation_outcome(problem=problem, request=request)
             for request in requests
         )
         poll_results: tuple[tuple[StaleAsyncCompletionGroup, ...], ...]
@@ -521,16 +519,16 @@ class StudyStaleAsyncTests:
             "p-2",
             "p-1",
         )
-        assert tuple(record.candidate for record in report.records) == (11, 13)
+        assert tuple(record.candidate for record in report.records) == (12, 14)
         assert len(report.refinements) == 2
         first_refinement = report.refinements[0]
         second_refinement = report.refinements[1]
         assert first_refinement is not None
         assert second_refinement is not None
         assert first_refinement.source_candidate == 12
-        assert first_refinement.refined_candidate == 11
+        assert first_refinement.refined_candidate == 12
         assert second_refinement.source_candidate == 14
-        assert second_refinement.refined_candidate == 13
+        assert second_refinement.refined_candidate == 14
         assert tuple(
             observation.proposal.proposal_id
             for observation_batch in final_state.tell_history
@@ -609,8 +607,8 @@ class StudyStaleAsyncTests:
             observation.proposal.proposal_id for observation in result.observations
         ) == ("p-2", "p-1")
         assert tuple(observation.candidate for observation in result.observations) == (
-            11,
-            13,
+            12,
+            14,
         )
         assert len(result.refinements) == 2
         first_refinement = result.refinements[0]
@@ -618,9 +616,9 @@ class StudyStaleAsyncTests:
         assert first_refinement is not None
         assert second_refinement is not None
         assert first_refinement.source_candidate == 12
-        assert first_refinement.refined_candidate == 11
+        assert first_refinement.refined_candidate == 12
         assert second_refinement.source_candidate == 14
-        assert second_refinement.refined_candidate == 13
+        assert second_refinement.refined_candidate == 14
         assert tuple(
             observation.proposal.proposal_id
             for observation_batch in final_state.tell_history

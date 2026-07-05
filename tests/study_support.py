@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TypeVar, final
+from typing import TypeGuard, TypeVar, final
 
 import numpy as np
 from typing_extensions import override
@@ -12,7 +12,6 @@ from variopt import (
     EvaluationAttemptBatch,
     EvaluationOutcome,
     EvaluationProtocol,
-    EvaluationRecord,
     EvaluationRequest,
     Evaluator,
     Kernel,
@@ -25,6 +24,8 @@ from variopt import (
     RunMethod,
     SearchSpace,
 )
+from variopt.artifacts import ObservationPayload, ProposalEvaluationSpec
+from variopt.artifacts.records import RequestAlignedEvaluationRecord
 from variopt.evaluation_pipeline import (
     evaluate_request_attempt,
     evaluate_request_outcome,
@@ -407,21 +408,32 @@ class ShiftedObservationProtocol(ObservationEvaluationProtocol[int]):
         request: EvaluationRequest[int],
         *,
         direction: OptimizationDirection,
-    ) -> Observation[int]:
+    ) -> ObservationPayload:
         candidate = max(0, request.candidate - 1)
-        return Observation.from_objective_value(
-            request=request,
-            candidate=candidate,
+        return ObservationPayload.from_objective_value(
             value=float(candidate * candidate),
             direction=direction,
         )
 
 
 @dataclass(frozen=True, slots=True)
-class LabelRecord(EvaluationRecord[int]):
-    """Simple non-scalar evaluation record for study regression tests."""
+class LabelRecord:
+    """Simple request-aligned compatibility payload for study regression tests."""
+
+    request: EvaluationRequest[int]
+    candidate: int
 
     label: str
+
+    @property
+    def proposal(self) -> Proposal[int]:
+        """Return the proposal compatibility view."""
+        return self.request.proposal
+
+    @property
+    def proposal_evaluation_spec(self) -> ProposalEvaluationSpec | None:
+        """Return request-local metadata attached to the source request."""
+        return self.request.proposal_evaluation_spec
 
 
 class LabelProtocol(EvaluationProtocol[int, LabelRecord]):
@@ -445,7 +457,8 @@ def _make_async_evaluation_outcome(
     *,
     attach_refinement: bool,
 ) -> EvaluationOutcome[int, Observation[int]]:
-    record = problem.evaluation_protocol.evaluate_request(request)
+    outcome = make_observation_outcome(problem=problem, request=request)
+    record = outcome.record
     refinement = None
     if attach_refinement:
         refinement = CandidateRefinement(
@@ -457,6 +470,54 @@ def _make_async_evaluation_outcome(
         record=record,
         evaluation_count=1,
         refinement=refinement,
+    )
+
+
+def make_observation_outcome(
+    *,
+    problem: Problem[int, int],
+    request: EvaluationRequest[int],
+) -> EvaluationOutcome[int, Observation[int]]:
+    outcome = evaluate_request_outcome(problem=problem, request=request)
+    return _require_observation_outcome(outcome)
+
+
+def _require_observation_outcome(
+    outcome: EvaluationOutcome[int, RequestAlignedEvaluationRecord],
+) -> EvaluationOutcome[int, Observation[int]]:
+    record = outcome.record
+    if not _is_int_observation_record(record):
+        msg = "test fixture expected a scalar Observation compatibility record"
+        raise TypeError(msg)
+
+    return EvaluationOutcome(
+        record=record,
+        evaluation_count=outcome.evaluation_count,
+        refinement=outcome.refinement,
+    )
+
+
+def _is_int_observation_record(
+    record: RequestAlignedEvaluationRecord,
+) -> TypeGuard[Observation[int]]:
+    return isinstance(record, Observation)
+
+
+def make_observation_attempt(
+    *,
+    problem: Problem[int, int],
+    request: EvaluationRequest[int],
+) -> EvaluationAttemptBatch[int, Observation[int]]:
+    attempt = evaluate_request_attempt(problem=problem, request=request)
+    return EvaluationAttemptBatch(
+        requests=attempt.requests,
+        outcome_indices=attempt.outcome_indices,
+        outcomes=tuple(
+            _require_observation_outcome(outcome)
+            for outcome in attempt.outcomes
+        ),
+        failure_indices=attempt.failure_indices,
+        failures=attempt.failures,
     )
 
 
@@ -1133,7 +1194,9 @@ class AttemptOutOfOrderAsyncEvaluator(OutOfOrderAsyncEvaluator):
         self._pending_attempt_groups[handle.batch_id] = tuple(
             CompletionGroup(
                 start_index=index,
-                outcomes=(evaluate_request_attempt(problem=problem, request=request),),
+                outcomes=(
+                    make_observation_attempt(problem=problem, request=request),
+                ),
             )
             for index, request in reversed(tuple(enumerate(requests)))
         )
@@ -1397,10 +1460,7 @@ class MisorderedEvaluator(
         requests: Sequence[EvaluationRequest[int]],
     ) -> Sequence[EvaluationOutcome[int, Observation[int]]]:
         return tuple(
-            EvaluationOutcome(
-                record=problem.evaluation_protocol.evaluate_request(request),
-                evaluation_count=1,
-            )
+            make_observation_outcome(problem=problem, request=request)
             for request in reversed(requests)
         )
 
@@ -1433,7 +1493,7 @@ class HardFailingEvaluator(
             raise RuntimeError(f"hard evaluator failure {self._call_count}")
 
         return tuple(
-            evaluate_request_outcome(problem=problem, request=request)
+            make_observation_outcome(problem=problem, request=request)
             for request in requests
         )
 

@@ -282,16 +282,16 @@ class StudyExactAsyncTests:
             "p-1",
             "p-2",
         )
-        assert tuple(observation.candidate for observation in report.records) == (3, 1)
+        assert tuple(observation.candidate for observation in report.records) == (4, 2)
         assert len(report.refinements) == 2
         first_refinement = report.refinements[0]
         second_refinement = report.refinements[1]
         assert first_refinement is not None
         assert second_refinement is not None
         assert first_refinement.source_candidate == 4
-        assert first_refinement.refined_candidate == 3
+        assert first_refinement.refined_candidate == 4
         assert second_refinement.source_candidate == 2
-        assert second_refinement.refined_candidate == 1
+        assert second_refinement.refined_candidate == 2
         assert tuple(
                 observation.proposal.proposal_id
                 for observation in next_state.tell_history[0]
@@ -359,16 +359,16 @@ class StudyExactAsyncTests:
             "p-1",
             "p-2",
         )
-        assert tuple(observation.candidate for observation in result.observations) == (3, 1)
+        assert tuple(observation.candidate for observation in result.observations) == (4, 2)
         assert len(result.refinements) == 2
         first_refinement = result.refinements[0]
         second_refinement = result.refinements[1]
         assert first_refinement is not None
         assert second_refinement is not None
         assert first_refinement.source_candidate == 4
-        assert first_refinement.refined_candidate == 3
+        assert first_refinement.refined_candidate == 4
         assert second_refinement.source_candidate == 2
-        assert second_refinement.refined_candidate == 1
+        assert second_refinement.refined_candidate == 2
         assert tuple(
                 observation.proposal.proposal_id
                 for observation in next_state.tell_history[0]
@@ -510,7 +510,7 @@ class StudyExactAsyncTests:
         assert stored_outcome is not None
         assert stored_outcome.refinement is not None
         assert stored_outcome.refinement.source_candidate == 2
-        assert stored_outcome.refinement.refined_candidate == 1
+        assert stored_outcome.refinement.refined_candidate == 2
 
         resumed_session = study.resume_exact_async_step_session(resume_handle)
         observations, next_state = resumed_session.finish()
@@ -521,7 +521,7 @@ class StudyExactAsyncTests:
         first_resumed_outcome = first_resumed_attempt.single_outcome_or_none()
         second_resumed_outcome = second_resumed_attempt.single_outcome_or_none()
 
-        assert tuple(observation.candidate for observation in observations) == (3, 1)
+        assert tuple(observation.candidate for observation in observations) == (4, 2)
         assert first_resumed_outcome is not None
         assert second_resumed_outcome is not None
         assert first_resumed_outcome.refinement is not None

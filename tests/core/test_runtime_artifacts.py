@@ -19,7 +19,6 @@ from variopt import (
     EvaluationExceptionSnapshot,
     EvaluationFailure,
     EvaluationOutcome,
-    EvaluationRecord,
     EvaluationRequest,
     NondominatedRunSurface,
     ObjectiveVectorRecord,
@@ -29,7 +28,14 @@ from variopt import (
     RunReport,
     RunResult,
 )
-from variopt.artifacts import Trace, TraceEvent
+from variopt.artifacts import EvaluationAttemptBatch as ArtifactEvaluationAttemptBatch
+from variopt.artifacts import (
+    EvaluationSuccess,
+    ObjectiveVectorPayload,
+    ObservationPayload,
+    Trace,
+    TraceEvent,
+)
 from variopt.kernel import DirectKernel
 
 
@@ -70,6 +76,14 @@ def fail_if_candidate_equal_is_called(
     _ = left_candidate
     _ = right_candidate
     raise AssertionError("candidate equality should not be called")
+
+
+def make_observation_payload(value: float = 1.0) -> ObservationPayload:
+    """Return a request-free scalar payload for attempt artifact tests."""
+    return ObservationPayload.from_objective_value(
+        value=value,
+        direction=OptimizationDirection.MINIMIZE,
+    )
 
 
 def make_truthy_vector_equality_candidate() -> object:
@@ -136,6 +150,18 @@ def make_int_failure(
     )
 
 
+def make_int_outcome(request: EvaluationRequest[int]) -> EvaluationOutcome[int]:
+    """Return a typed integer evaluation outcome."""
+    return EvaluationOutcome(
+        observation=Observation.from_objective_value(
+            request=request,
+            candidate=request.candidate,
+            value=float(request.candidate),
+            direction=OptimizationDirection.MINIMIZE,
+        )
+    )
+
+
 class RuntimeArtifactConformanceTests(contract_cases.ArtifactConformanceCase[int]):
     """Runtime-artifact conformance for Proposal, Observation, RunResult, and Trace."""
 
@@ -169,6 +195,501 @@ class RuntimeArtifactConformanceTests(contract_cases.ArtifactConformanceCase[int
 class RuntimeArtifactsTests:
     """Coverage for immutable runtime-artifact value objects."""
 
+    def test_observation_payload_is_request_free(self) -> None:
+        payload = ObservationPayload.from_objective_value(
+            value=4.0,
+            direction=OptimizationDirection.MAXIMIZE,
+            elapsed_seconds=0.2,
+        )
+
+        assert payload.value == 4.0
+        assert payload.score == -4.0
+        assert payload.elapsed_seconds == 0.2
+        assert not hasattr(payload, "request")
+        assert not hasattr(payload, "candidate")
+
+    def test_observation_payload_pickle_preserves_request_free_payload(self) -> None:
+        payload = ObservationPayload.from_objective_value(
+            value=4.0,
+            direction=OptimizationDirection.MAXIMIZE,
+            elapsed_seconds=0.2,
+        )
+
+        restored = cast(ObservationPayload, pickle.loads(pickle.dumps(payload)))
+
+        assert type(restored) is ObservationPayload
+        assert restored == payload
+
+    def test_observation_payload_rejects_invalid_payload_values(self) -> None:
+        with pytest.raises(ValueError, match="value must be finite"):
+            _ = ObservationPayload(value=float("nan"), score=1.0)
+
+        with pytest.raises(ValueError, match="score must be finite"):
+            _ = ObservationPayload(value=1.0, score=float("inf"))
+
+        with pytest.raises(ValueError, match="elapsed_seconds must be non-negative"):
+            _ = ObservationPayload(value=1.0, score=1.0, elapsed_seconds=-0.1)
+
+        with pytest.raises(ValueError, match="elapsed_seconds must be finite"):
+            _ = ObservationPayload(value=1.0, score=1.0, elapsed_seconds=float("nan"))
+
+    def test_objective_vector_payload_is_request_free(self) -> None:
+        payload = ObjectiveVectorPayload.from_objective_values(
+            objective_values=(2.0, 3.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MAXIMIZE,
+            ),
+            elapsed_seconds=0.3,
+        )
+
+        assert payload.objective_values == (2.0, 3.0)
+        assert payload.objective_scores == (2.0, -3.0)
+        assert payload.elapsed_seconds == 0.3
+        assert not hasattr(payload, "request")
+        assert not hasattr(payload, "candidate")
+
+    def test_objective_vector_payload_pickle_preserves_request_free_payload(
+        self,
+    ) -> None:
+        payload = ObjectiveVectorPayload.from_objective_values(
+            objective_values=(2.0, 3.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MAXIMIZE,
+            ),
+            elapsed_seconds=0.3,
+        )
+
+        restored = cast(ObjectiveVectorPayload, pickle.loads(pickle.dumps(payload)))
+
+        assert type(restored) is ObjectiveVectorPayload
+        assert restored == payload
+
+    def test_objective_vector_payload_rejects_misaligned_vectors(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="objective_values and objective_scores must have the same length",
+        ):
+            _ = ObjectiveVectorPayload(
+                objective_values=(1.0, 2.0),
+                objective_scores=(1.0,),
+            )
+
+        with pytest.raises(ValueError, match="directions must align"):
+            _ = ObjectiveVectorPayload.from_objective_values(
+                objective_values=(1.0, 2.0),
+                directions=(OptimizationDirection.MINIMIZE,),
+            )
+
+        with pytest.raises(ValueError, match="elapsed_seconds must be finite"):
+            _ = ObjectiveVectorPayload(
+                objective_values=(1.0,),
+                objective_scores=(1.0,),
+                elapsed_seconds=float("inf"),
+            )
+
+        with pytest.raises(ValueError, match="objective_values must not be empty"):
+            _ = ObjectiveVectorPayload(objective_values=(), objective_scores=())
+
+    def test_evaluation_success_owns_request_and_payload(self) -> None:
+        request = make_int_request(candidate=5, proposal_id="p-5")
+        payload = make_observation_payload(value=25.0)
+        success: EvaluationSuccess[int, ObservationPayload] = EvaluationSuccess(
+            request=request,
+            payload=payload,
+            evaluation_count=2,
+        )
+
+        assert success.request is request
+        assert success.payload is payload
+        assert success.candidate == 5
+        assert success.proposal is request.proposal
+        assert success.proposal_id == "p-5"
+        assert success.evaluation_count == 2
+
+    def test_evaluation_success_rejects_negative_evaluation_count(self) -> None:
+        request = make_int_request(candidate=5, proposal_id="p-5")
+
+        with pytest.raises(ValueError, match="evaluation_count must be non-negative"):
+            _ = EvaluationSuccess(
+                request=request,
+                payload=make_observation_payload(),
+                evaluation_count=-1,
+            )
+
+    def test_evaluation_success_without_refinement_never_calls_candidate_equal(
+        self,
+    ) -> None:
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(1))
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            candidate_equal=fail_if_candidate_equal_is_called,
+        )
+
+        replaced = replace(success, evaluation_count=2)
+
+        assert replaced.evaluation_count == 2
+
+    def test_evaluation_success_refinement_uses_request_candidate(self) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request_candidate = SpaceOwnedEqualityCandidate(2)
+        refined_candidate = SpaceOwnedEqualityCandidate(2)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=request_candidate)
+        )
+        refinement = CandidateRefinement(
+            source_candidate=source_candidate,
+            refined_candidate=refined_candidate,
+        )
+
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            refinement=refinement,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert success.request is request
+        assert success.refinement is refinement
+
+    def test_evaluation_success_rejects_raw_equality_refinement_fallback(self) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request_candidate = SpaceOwnedEqualityCandidate(2)
+        refined_candidate = SpaceOwnedEqualityCandidate(2)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=request_candidate)
+        )
+        refinement = CandidateRefinement(
+            source_candidate=source_candidate,
+            refined_candidate=refined_candidate,
+        )
+
+        with pytest.raises(
+            TypeError,
+            match="candidate equality must produce a scalar truth value",
+        ):
+            _ = EvaluationSuccess(
+                request=request,
+                payload=make_observation_payload(),
+                refinement=refinement,
+            )
+
+    def test_evaluation_success_rejects_explicit_equality_refinement_mismatch(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request_candidate = SpaceOwnedEqualityCandidate(2)
+        refined_candidate = SpaceOwnedEqualityCandidate(3)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=request_candidate)
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="refinement refined_candidate must match",
+        ):
+            _ = EvaluationSuccess(
+                request=request,
+                payload=make_observation_payload(),
+                refinement=CandidateRefinement(
+                    source_candidate=source_candidate,
+                    refined_candidate=refined_candidate,
+                ),
+                candidate_equal=space_owned_candidates_equal,
+            )
+
+    def test_evaluation_success_replace_reuses_explicit_candidate_equality(self) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request_candidate = SpaceOwnedEqualityCandidate(2)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=request_candidate)
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        replaced = replace(
+            success,
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+        )
+
+        assert replaced.refinement is not success.refinement
+        assert replaced.request is request
+
+    def test_evaluation_success_replace_revalidates_changed_request(self) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2))
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        mismatched_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(3)))
+        )
+        matching_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2)))
+        )
+
+        with pytest.raises(ValueError, match="refinement refined_candidate must match"):
+            _ = replace(success, request=mismatched_request)
+
+        replaced = replace(success, request=matching_request)
+        assert replaced.request is matching_request
+
+    def test_evaluation_success_pickle_strips_candidate_equal_safely(self) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request_candidate = SpaceOwnedEqualityCandidate(2)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=request_candidate)
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        restored = cast(
+            EvaluationSuccess[SpaceOwnedEqualityCandidate, ObservationPayload],
+            pickle.loads(pickle.dumps(success)),
+        )
+        assert type(restored) is EvaluationSuccess
+        recount = replace(restored, evaluation_count=3)
+
+        assert recount.evaluation_count == 3
+        assert recount.refinement is restored.refinement
+
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = replace(
+                restored,
+                refinement=CandidateRefinement(
+                    source_candidate=source_candidate,
+                    refined_candidate=SpaceOwnedEqualityCandidate(2),
+                ),
+            )
+
+        repaired = replace(
+            restored,
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        assert repaired.refinement is not restored.refinement
+
+    def test_evaluation_success_pickle_strips_unpicklable_candidate_equal(self) -> None:
+        def local_candidates_equal(
+            left_candidate: SpaceOwnedEqualityCandidate,
+            right_candidate: SpaceOwnedEqualityCandidate,
+        ) -> bool:
+            return left_candidate.stable_id == right_candidate.stable_id
+
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request_candidate = SpaceOwnedEqualityCandidate(2)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=request_candidate)
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=local_candidates_equal,
+        )
+
+        restored = cast(
+            EvaluationSuccess[SpaceOwnedEqualityCandidate, ObservationPayload],
+            pickle.loads(pickle.dumps(success)),
+        )
+
+        assert restored.request.candidate.stable_id == 2
+        assert type(restored) is EvaluationSuccess
+
+    def test_artifact_attempt_batch_projects_mixed_attempt_slots(self) -> None:
+        request_one = make_int_request(candidate=1, proposal_id="p-1")
+        request_two = make_int_request(candidate=2, proposal_id="p-2")
+        request_three = make_int_request(candidate=3, proposal_id="p-3")
+        payload_one = make_observation_payload(value=1.0)
+        payload_three = make_observation_payload(value=3.0)
+        success_one: EvaluationSuccess[int, ObservationPayload] = EvaluationSuccess(
+            request=request_one,
+            payload=payload_one,
+            evaluation_count=2,
+        )
+        failure = make_int_failure(request_two, evaluation_count=4)
+        success_three: EvaluationSuccess[int, ObservationPayload] = EvaluationSuccess(
+            request=request_three,
+            payload=payload_three,
+            evaluation_count=8,
+        )
+        batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(
+                attempts=(success_one, failure, success_three),
+            )
+        )
+
+        assert batch.attempt_count == 3
+        assert batch.requests == (request_one, request_two, request_three)
+        assert batch.success_indices == (0, 2)
+        assert batch.failure_indices == (1,)
+        assert batch.successes == (success_one, success_three)
+        assert batch.failures == (failure,)
+        assert batch.payloads == (payload_one, payload_three)
+        assert batch.evaluation_count == 14
+        assert batch.has_failures is True
+
+    def test_artifact_attempt_batch_supports_all_failure_slots(self) -> None:
+        request_one = make_int_request(candidate=1, proposal_id="p-1")
+        request_two = make_int_request(candidate=2, proposal_id="p-2")
+        failure_one = make_int_failure(request_one, evaluation_count=2)
+        failure_two = make_int_failure(request_two, evaluation_count=3)
+        batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(attempts=(failure_one, failure_two))
+        )
+
+        assert batch.attempt_count == 2
+        assert batch.requests == (request_one, request_two)
+        assert batch.success_indices == ()
+        assert batch.failure_indices == (0, 1)
+        assert batch.successes == ()
+        assert batch.failures == (failure_one, failure_two)
+        assert batch.payloads == ()
+        assert batch.evaluation_count == 5
+        assert batch.has_failures is True
+
+    def test_artifact_attempt_batch_supports_empty_slots(self) -> None:
+        batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(attempts=())
+        )
+
+        assert batch.attempt_count == 0
+        assert batch.requests == ()
+        assert batch.success_indices == ()
+        assert batch.failure_indices == ()
+        assert batch.successes == ()
+        assert batch.failures == ()
+        assert batch.payloads == ()
+        assert batch.evaluation_count == 0
+        assert batch.has_failures is False
+
+    def test_artifact_attempt_batch_single_success_rejects_empty_batch(self) -> None:
+        batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(attempts=())
+        )
+
+        with pytest.raises(ValueError, match="exactly one request"):
+            _ = batch.single_success_or_none()
+
+    def test_artifact_attempt_batch_pickle_preserves_ordered_slots(self) -> None:
+        request_one = make_int_request(candidate=1, proposal_id="p-1")
+        request_two = make_int_request(candidate=2, proposal_id="p-2")
+        success: EvaluationSuccess[int, ObservationPayload] = EvaluationSuccess(
+            request=request_one,
+            payload=make_observation_payload(),
+        )
+        failure = make_int_failure(request_two)
+        batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(attempts=(success, failure))
+        )
+
+        restored = cast(
+            ArtifactEvaluationAttemptBatch[int, ObservationPayload],
+            pickle.loads(pickle.dumps(batch)),
+        )
+
+        assert restored.attempts == batch.attempts
+        assert restored.success_indices == (0,)
+        assert restored.failure_indices == (1,)
+
+    def test_artifact_attempt_batch_supports_vector_payload_successes(self) -> None:
+        request = make_int_request(candidate=1, proposal_id="p-1")
+        payload = ObjectiveVectorPayload.from_objective_values(
+            objective_values=(1.0, 2.0),
+            directions=(
+                OptimizationDirection.MINIMIZE,
+                OptimizationDirection.MAXIMIZE,
+            ),
+        )
+        success: EvaluationSuccess[int, ObjectiveVectorPayload] = EvaluationSuccess(
+            request=request,
+            payload=payload,
+        )
+        batch: ArtifactEvaluationAttemptBatch[int, ObjectiveVectorPayload] = (
+            ArtifactEvaluationAttemptBatch(attempts=(success,))
+        )
+
+        assert batch.payloads == (payload,)
+        assert batch.single_success_or_none() is success
+
+    def test_artifact_attempt_batch_single_success_view(self) -> None:
+        request = make_int_request(candidate=1, proposal_id="p-1")
+        success: EvaluationSuccess[int, ObservationPayload] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+        )
+        success_batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(attempts=(success,))
+        )
+        failure_batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(
+                attempts=(make_int_failure(request),),
+            )
+        )
+        mixed_batch: ArtifactEvaluationAttemptBatch[int, ObservationPayload] = (
+            ArtifactEvaluationAttemptBatch(
+                attempts=(success, make_int_failure(request)),
+            )
+        )
+
+        assert success_batch.single_success_or_none() is success
+        assert failure_batch.single_success_or_none() is None
+        with pytest.raises(ValueError, match="exactly one request"):
+            _ = mixed_batch.single_success_or_none()
+
     def test_observation_is_scalar_evaluation_record(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
         observation = Observation(
@@ -178,7 +699,8 @@ class RuntimeArtifactsTests:
             score=16.0,
         )
 
-        assert isinstance(observation, EvaluationRecord)
+        assert observation.request.proposal is proposal
+        assert observation.candidate == 4
 
     def test_objective_vector_record_is_vector_evaluation_record(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
@@ -192,7 +714,8 @@ class RuntimeArtifactsTests:
             ),
         )
 
-        assert isinstance(record, EvaluationRecord)
+        assert record.request.proposal is proposal
+        assert record.candidate == 4
         assert record.objective_values == (16.0, 3.0)
         assert record.objective_scores == (16.0, -3.0)
 
@@ -292,6 +815,27 @@ class RuntimeArtifactsTests:
                 exception=snapshot,
                 evaluation_count=-1,
             )
+
+    def test_evaluation_attempt_batch_projects_requests_by_attempt_slot(self) -> None:
+        request_one = make_int_request(1, "p-1")
+        request_two = make_int_request(2, "p-2")
+        request_three = make_int_request(3, "p-3")
+        outcome = make_int_outcome(request_two)
+        failure_one = make_int_failure(request_one)
+        failure_three = make_int_failure(request_three)
+        attempts: EvaluationAttemptBatch[int] = EvaluationAttemptBatch(
+            requests=(request_one, request_two, request_three),
+            outcomes=(outcome,),
+            outcome_indices=(1,),
+            failures=(failure_one, failure_three),
+            failure_indices=(0, 2),
+        )
+
+        assert attempts.outcome_requests == (request_two,)
+        assert attempts.failure_requests == (request_one, request_three)
+        assert attempts.outcome_requests[0] is request_two
+        assert attempts.failure_requests[0] is request_one
+        assert attempts.failure_requests[1] is request_three
 
     def test_exception_snapshot_rejects_empty_exception_type(self) -> None:
         with pytest.raises(ValueError, match="exception_module"):
@@ -457,6 +1001,19 @@ class RuntimeArtifactsTests:
             _ = EvaluationAttemptBatch(
                 requests=(request,),
                 outcomes=(outcome,),
+            )
+
+    def test_evaluation_attempt_batch_rejects_value_equal_failure_request_copy(
+        self,
+    ) -> None:
+        request = make_int_request(1, "p-1")
+        equal_but_foreign_request = make_int_request(1, "p-1")
+        failure = make_int_failure(equal_but_foreign_request)
+
+        with pytest.raises(ValueError, match="failure request"):
+            _ = EvaluationAttemptBatch[int, Observation[int]](
+                requests=(request,),
+                failures=(failure,),
             )
 
     def test_evaluation_attempt_batch_rejects_failure_reused_for_wrong_slot(
@@ -1371,6 +1928,31 @@ class RuntimeArtifactsTests:
 
         assert result.evaluation_count == 4
 
+    def test_terminal_artifacts_support_all_failure_without_successes(self) -> None:
+        failure = make_int_failure(
+            make_int_request(2, "p-2"),
+            "bad candidate",
+            evaluation_count=3,
+        )
+
+        result = RunResult[int].from_successes(successes=(), failures=(failure,))
+        report = RunReport[int, Observation[int]].from_successes(
+            successes=(),
+            failures=(failure,),
+        )
+        surface = NondominatedRunSurface[int].from_successes(
+            successes=(),
+            failures=(failure,),
+        )
+
+        assert result.best_success is None
+        assert result.observations == ()
+        assert report.records == ()
+        assert surface.nondominated_records == ()
+        assert result.evaluation_count == 3
+        assert report.evaluation_count == 3
+        assert surface.evaluation_count == 3
+
     def test_terminal_artifacts_reject_evaluation_count_below_failure_cost(self) -> None:
         proposal_one = Proposal(candidate=4, proposal_id="p-1")
         observation = Observation(
@@ -1549,9 +2131,11 @@ class RuntimeArtifactsTests:
     ) -> None:
         candidate = AmbiguousEqualityCandidate()
         proposal = Proposal(candidate=candidate, proposal_id="p-1")
-        record = EvaluationRecord(
+        record = Observation(
             request=EvaluationRequest(proposal=proposal),
             candidate=candidate,
+            value=1.0,
+            score=1.0,
         )
         refinement = CandidateRefinement(
             source_candidate=candidate,
@@ -1560,7 +2144,10 @@ class RuntimeArtifactsTests:
         )
 
         with pytest.raises(TypeError):
-            _ = RunReport[AmbiguousEqualityCandidate, EvaluationRecord[AmbiguousEqualityCandidate]].from_records(
+            _ = RunReport[
+                AmbiguousEqualityCandidate,
+                Observation[AmbiguousEqualityCandidate],
+            ].from_records(
                 records=(record,),
                 refinements=(refinement,),
             )
@@ -1577,9 +2164,11 @@ class RuntimeArtifactsTests:
         request: EvaluationRequest[object] = EvaluationRequest(
             proposal=proposal,
         )
-        record: EvaluationRecord[object] = EvaluationRecord(
+        record: Observation[object] = Observation(
             request=request,
             candidate=record_candidate,
+            value=1.0,
+            score=1.0,
         )
         refinement: CandidateRefinement[object] = CandidateRefinement(
             source_candidate=record_candidate,
@@ -1590,7 +2179,7 @@ class RuntimeArtifactsTests:
         with pytest.raises(TypeError, match="scalar truth value"):
             _ = RunReport[
                 object,
-                EvaluationRecord[object],
+                Observation[object],
             ].from_records(
                 records=(record,),
                 refinements=(refinement,),
@@ -1707,14 +2296,35 @@ class RuntimeArtifactsTests:
         assert updated_result.refinements == (replacement_refinement,)
         assert updated_report.refinements == (replacement_refinement,)
         assert updated_surface.refinements == (replacement_refinement,)
-        with pytest.raises(ValueError, match="observations candidate"):
+        with pytest.raises(ValueError, match="success request candidate"):
             _ = replace(result, refinements=(mismatched_refinement,))
-        with pytest.raises(ValueError, match="records candidate"):
+        with pytest.raises(ValueError, match="success request candidate"):
             _ = replace(report, refinements=(mismatched_refinement,))
-        with pytest.raises(ValueError, match="records candidate"):
+        with pytest.raises(ValueError, match="success request candidate"):
             _ = replace(surface, refinements=(mismatched_refinement,))
-        with pytest.raises(ValueError, match="records candidate"):
+        with pytest.raises(ValueError, match="success request candidate"):
             _ = replace(report, candidate_equal=reject_candidate_equal)
+
+    def test_run_result_projection_preserves_refinement_source_proposal(self) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=2,
+            value=4.0,
+            score=4.0,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=2,
+            changed_leaf_paths=((),),
+        )
+
+        result = RunResult[int].from_observations(
+            observations=(observation,),
+            refinements=(refinement,),
+        )
+
+        assert result.successes[0].request.candidate == 2
+        assert result.observations == (observation,)
 
     def test_unpickled_run_report_requires_candidate_equal_for_new_refinement(
         self,
@@ -1789,15 +2399,31 @@ class RuntimeArtifactsTests:
         assert updated_report.evaluation_count == 2
         assert updated_surface.evaluation_count == 2
         with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = replace(restored_result, refinements=(replacement_refinement,))
+        with pytest.raises(TypeError, match="candidate_equal is required"):
             _ = replace(restored_report, refinements=(replacement_refinement,))
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = replace(restored_surface, refinements=(replacement_refinement,))
 
+        revalidated_result = replace(
+            restored_result,
+            refinements=(replacement_refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
         revalidated_report = replace(
             restored_report,
             refinements=(replacement_refinement,),
             candidate_equal=space_owned_candidates_equal,
         )
+        revalidated_surface = replace(
+            restored_surface,
+            refinements=(replacement_refinement,),
+            candidate_equal=space_owned_candidates_equal,
+        )
 
+        assert revalidated_result.refinements == (replacement_refinement,)
         assert revalidated_report.refinements == (replacement_refinement,)
+        assert revalidated_surface.refinements == (replacement_refinement,)
 
     def test_nondominated_run_surface_rejects_truthy_non_scalar_refinement_equality(
         self,
@@ -1911,6 +2537,8 @@ class RuntimeArtifactsTests:
         surface = NondominatedRunSurface[int].from_report(report)
 
         assert surface.records == report.records
+        assert tuple(success.request.candidate for success in surface.successes) == (3, 2)
+        assert surface.successes[0].request.proposal_id == "p-1"
         assert surface.refinements == (refinement, None)
 
     def test_nondominated_run_surface_from_records_reuses_prevalidated_frontier(
@@ -1935,26 +2563,31 @@ class RuntimeArtifactsTests:
                 OptimizationDirection.MINIMIZE,
             ),
         )
-        collection_calls: list[tuple[ObjectiveVectorRecord[int], ...]] = []
-        original_collect_nondominated_records = (
-            terminal_artifacts.collect_nondominated_records
+        collection_calls: list[
+            tuple[EvaluationSuccess[int, ObjectiveVectorPayload], ...]
+        ] = []
+        original_collect_nondominated_successes = (
+            terminal_artifacts.collect_nondominated_successes
         )
 
         def collect_counting_frontier(
-            records: tuple[ObjectiveVectorRecord[int], ...],
-        ) -> tuple[ObjectiveVectorRecord[int], ...]:
-            collection_calls.append(records)
-            return original_collect_nondominated_records(records)
+            successes: tuple[EvaluationSuccess[int, ObjectiveVectorPayload], ...],
+        ) -> tuple[EvaluationSuccess[int, ObjectiveVectorPayload], ...]:
+            collection_calls.append(successes)
+            return original_collect_nondominated_successes(successes)
 
         monkeypatch.setattr(
             terminal_artifacts,
-            "collect_nondominated_records",
+            "collect_nondominated_successes",
             collect_counting_frontier,
         )
 
         surface = NondominatedRunSurface[int].from_records((record, dominated_record))
 
-        assert collection_calls == [(record, dominated_record)]
+        assert len(collection_calls) == 1
+        assert tuple(
+            success.payload.objective_scores for success in collection_calls[0]
+        ) == (record.objective_scores, dominated_record.objective_scores)
         assert surface.nondominated_records == (record,)
 
     def test_nondominated_run_surface_rejects_public_prevalidation_cache_injection(
@@ -2008,23 +2641,39 @@ class RuntimeArtifactsTests:
             ),
         )
         surface = NondominatedRunSurface[int].from_records((record,))
-        collection_calls: list[tuple[ObjectiveVectorRecord[int], ...]] = []
-
-        def collect_empty_frontier(
-            records: tuple[ObjectiveVectorRecord[int], ...],
-        ) -> tuple[ObjectiveVectorRecord[int], ...]:
-            collection_calls.append(records)
-            return ()
-
-        monkeypatch.setattr(
-            "variopt.artifacts.terminal.collect_nondominated_records",
-            collect_empty_frontier,
+        collection_calls: list[
+            tuple[EvaluationSuccess[int, ObjectiveVectorPayload], ...]
+        ] = []
+        original_collect_nondominated_successes = (
+            terminal_artifacts.collect_nondominated_successes
         )
 
-        with pytest.raises(ValueError, match="stable nondominated frontier"):
-            _ = replace(surface, records=(replacement_record,))
+        def collect_counting_frontier(
+            successes: tuple[EvaluationSuccess[int, ObjectiveVectorPayload], ...],
+        ) -> tuple[EvaluationSuccess[int, ObjectiveVectorPayload], ...]:
+            collection_calls.append(successes)
+            return original_collect_nondominated_successes(successes)
 
-        assert collection_calls == [(replacement_record,)]
+        monkeypatch.setattr(
+            "variopt.artifacts.terminal.collect_nondominated_successes",
+            collect_counting_frontier,
+        )
+
+        replaced = replace(surface, records=(replacement_record,))
+
+        assert len(collection_calls) == 2
+        assert tuple(
+            success.payload.objective_scores for success in collection_calls[0]
+        ) == (replacement_record.objective_scores,)
+        assert replaced.records == (replacement_record,)
+        assert replaced.nondominated_records == (replacement_record,)
+
+        with pytest.raises(ValueError, match="stable nondominated frontier"):
+            _ = NondominatedRunSurface[int](
+                records=(replacement_record,),
+                nondominated_records=(record,),
+                evaluation_count=1,
+            )
 
     def test_nondominated_run_surface_rejects_unaligned_refinements(self) -> None:
         record = ObjectiveVectorRecord.from_objective_values(
@@ -2209,3 +2858,23 @@ class RuntimeArtifactsTests:
         assert result.best_observation is not None
         assert result.best_observation.value == 16.0
         assert result.best_observation.score == -16.0
+
+    def test_run_result_replace_observations_recomputes_best_success(self) -> None:
+        original_observation = Observation(
+            proposal=Proposal(candidate=4, proposal_id="p-1"),
+            candidate=4,
+            value=16.0,
+            score=16.0,
+        )
+        replacement_observation = Observation(
+            proposal=Proposal(candidate=2, proposal_id="p-2"),
+            candidate=2,
+            value=4.0,
+            score=4.0,
+        )
+        result = RunResult[int].from_observations((original_observation,))
+
+        replaced = replace(result, observations=(replacement_observation,))
+
+        assert replaced.observations == (replacement_observation,)
+        assert replaced.best_observation == replacement_observation

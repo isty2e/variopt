@@ -76,3 +76,9 @@ batch and later return ordered `CompletionGroup` slices. `EvaluationBatchSession
 is the lifecycle object returned by that submission. `ResumableAsyncEvaluator`
 adds evaluator-owned suspend/resume handles for exact-async sessions without
 changing the run method's execution model.
+
+`AsyncJoblibEvaluator` also exposes attempt-aware session hooks used by `Study`
+to stream `EvaluationAttemptBatch` slots directly. In that path, ordinary
+objective `Exception`s become recorded `EvaluationFailure` attempts, while
+candidate validation, cancellation, and backend failures remain hard batch
+failures.

@@ -8,9 +8,8 @@ from typing import Generic, Literal, Protocol, TypeVar
 
 from typing_extensions import override
 
-from ...artifacts import EvaluationRequest, RequestAlignedEvaluationRecord
+from ...artifacts import EvaluationRequest
 from ...execution import ExecutionResources
-from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
 from ..async_evaluator.artifacts import (
@@ -21,17 +20,13 @@ from ..async_evaluator.artifacts import (
     EvaluationBatchSessionState,
 )
 from ..async_evaluator.sessions import PendingAwareBatchSession, ResumableBatchSession
-from .contracts import BoundaryT, JoblibEvaluationRecordT
+from .contracts import BoundaryT, JoblibEvaluationPayloadT
 
-SessionCandidateT = TypeVar("SessionCandidateT")
-SessionRecordT = TypeVar(
-    "SessionRecordT",
-    bound=RequestAlignedEvaluationRecord,
-)
+SessionEvaluationT = TypeVar("SessionEvaluationT")
 
 
 class AsyncJoblibBatchSessionEvaluator(
-    Protocol[SessionCandidateT, SessionRecordT]
+    Protocol[SessionEvaluationT]
 ):
     """Minimal evaluator surface required by one resumable joblib batch session.
 
@@ -45,10 +40,7 @@ class AsyncJoblibBatchSessionEvaluator(
     def poll(
         self,
         handle: EvaluationBatchHandle,
-    ) -> tuple[
-        CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]],
-        ...,
-    ]:
+    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
         """Poll one submitted batch handle without blocking.
 
         Parameters
@@ -58,9 +50,9 @@ class AsyncJoblibBatchSessionEvaluator(
 
         Returns
         -------
-        tuple[CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]], ...]
-            Newly completed outcome groups, or an empty tuple when none are
-            currently available.
+        tuple[CompletionGroup[SessionEvaluationT], ...]
+            Newly completed groups, or an empty tuple when none are currently
+            available.
         """
         ...
 
@@ -69,10 +61,7 @@ class AsyncJoblibBatchSessionEvaluator(
         handle: EvaluationBatchHandle,
         *,
         timeout: float | None = None,
-    ) -> tuple[
-        CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]],
-        ...,
-    ]:
+    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
         """Wait for at least one submitted-batch completion group.
 
         Parameters
@@ -84,9 +73,9 @@ class AsyncJoblibBatchSessionEvaluator(
 
         Returns
         -------
-        tuple[CompletionGroup[EvaluationOutcome[SessionCandidateT, SessionRecordT]], ...]
-            Newly completed outcome groups, or an empty tuple when ``timeout``
-            expires before a completion is available.
+        tuple[CompletionGroup[SessionEvaluationT], ...]
+            Newly completed groups, or an empty tuple when ``timeout`` expires
+            before a completion is available.
         """
         ...
 
@@ -146,19 +135,19 @@ class AsyncJoblibRequestInput(Generic[CandidateT]):
 
 
 @dataclass(frozen=True, slots=True)
-class AsyncJoblibCompletedResult(Generic[CandidateT, JoblibEvaluationRecordT]):
+class AsyncJoblibCompletedResult(Generic[SessionEvaluationT]):
     """One completed result emitted by a joblib result-drain worker.
 
     Parameters
     ----------
     index : int
         Logical request index completed by the joblib attempt.
-    outcome : EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
-        Evaluation outcome for ``index``.
+    outcome : SessionEvaluationT
+        Completed evaluation slot for ``index``.
     """
 
     index: int
-    outcome: EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
+    outcome: SessionEvaluationT
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,20 +169,22 @@ class AsyncJoblibExhaustedResult:
 
 
 @dataclass(slots=True)
-class ActiveAsyncJoblibBatch(Generic[BoundaryT, CandidateT, JoblibEvaluationRecordT]):
+class ActiveAsyncJoblibBatch(
+    Generic[BoundaryT, CandidateT, SessionEvaluationT, JoblibEvaluationPayloadT]
+):
     """In-flight async joblib batch state.
 
     Parameters
     ----------
-    problem : Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+    problem : Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
         Problem definition used to evaluate the batch.
     request_inputs : tuple[AsyncJoblibRequestInput[CandidateT], ...]
         Indexed requests that belong to the active batch.
     execution_resources : ExecutionResources
         Execution resources reserved for the batch.
-    result_generator : Generator[tuple[int, EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]], None, None]
-        Joblib-backed generator that yields indexed outcomes.
-    result_queue : Queue[AsyncJoblibCompletedResult[CandidateT, JoblibEvaluationRecordT] | AsyncJoblibFailedResult | AsyncJoblibExhaustedResult]
+    result_generator : Generator[tuple[int, SessionEvaluationT], None, None]
+        Joblib-backed generator that yields indexed evaluation slots.
+    result_queue : Queue[AsyncJoblibCompletedResult[SessionEvaluationT] | AsyncJoblibFailedResult | AsyncJoblibExhaustedResult]
         Non-blocking handoff queue populated by the drain worker.
     result_worker : Thread
         Daemon worker that drains the blocking joblib result stream.
@@ -205,16 +196,12 @@ class ActiveAsyncJoblibBatch(Generic[BoundaryT, CandidateT, JoblibEvaluationReco
         Number of infrastructure retries already consumed.
     """
 
-    problem: Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+    problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
     request_inputs: tuple[AsyncJoblibRequestInput[CandidateT], ...]
     execution_resources: ExecutionResources
-    result_generator: Generator[
-        tuple[int, EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]],
-        None,
-        None,
-    ]
+    result_generator: Generator[tuple[int, SessionEvaluationT], None, None]
     result_queue: Queue[
-        AsyncJoblibCompletedResult[CandidateT, JoblibEvaluationRecordT]
+        AsyncJoblibCompletedResult[SessionEvaluationT]
         | AsyncJoblibFailedResult
         | AsyncJoblibExhaustedResult
     ]
@@ -226,13 +213,13 @@ class ActiveAsyncJoblibBatch(Generic[BoundaryT, CandidateT, JoblibEvaluationReco
 
 @dataclass(slots=True)
 class SuspendedAsyncJoblibBatch(
-    Generic[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+    Generic[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
 ):
     """Suspended async joblib batch state kept by one evaluator instance.
 
     Parameters
     ----------
-    problem : Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+    problem : Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
         Problem definition used to evaluate the batch.
     request_inputs : tuple[AsyncJoblibRequestInput[CandidateT], ...]
         Indexed requests that belong to the suspended batch.
@@ -244,7 +231,7 @@ class SuspendedAsyncJoblibBatch(
         Number of infrastructure retries already consumed.
     """
 
-    problem: Problem[BoundaryT, CandidateT, JoblibEvaluationRecordT]
+    problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
     request_inputs: tuple[AsyncJoblibRequestInput[CandidateT], ...]
     execution_resources: ExecutionResources
     completed_indices: set[int] = field(default_factory=set)
@@ -253,19 +240,15 @@ class SuspendedAsyncJoblibBatch(
 
 @dataclass(slots=True)
 class ResumablePendingAwareAsyncJoblibBatchSession(
-    PendingAwareBatchSession[
-        EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
-    ],
-    ResumableBatchSession[
-        EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
-    ],
-    Generic[CandidateT, JoblibEvaluationRecordT],
+    PendingAwareBatchSession[SessionEvaluationT],
+    ResumableBatchSession[SessionEvaluationT],
+    Generic[SessionEvaluationT],
 ):
     """Pending-aware and resumable session for one async joblib logical batch.
 
     Parameters
     ----------
-    evaluator : AsyncJoblibBatchSessionEvaluator[CandidateT, JoblibEvaluationRecordT]
+    evaluator : AsyncJoblibBatchSessionEvaluator[SessionEvaluationT]
         Evaluator instance that owns the logical batch.
     _handle : EvaluationBatchHandle
         Logical batch handle associated with the session.
@@ -275,10 +258,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
         Current logical batch lifecycle.
     """
 
-    evaluator: AsyncJoblibBatchSessionEvaluator[
-        CandidateT,
-        JoblibEvaluationRecordT,
-    ]
+    evaluator: AsyncJoblibBatchSessionEvaluator[SessionEvaluationT]
     _handle: EvaluationBatchHandle
     _completed_count: int = 0
     _lifecycle: Literal[
@@ -304,16 +284,13 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
     @override
     def poll(
         self,
-    ) -> tuple[
-        CompletionGroup[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]],
-        ...,
-    ]:
-        """Poll newly completed outcomes for this logical batch.
+    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
+        """Poll newly completed evaluation slots for this logical batch.
 
         Returns
         -------
-        tuple[CompletionGroup[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]], ...]
-            Newly completed outcome groups.
+        tuple[CompletionGroup[SessionEvaluationT], ...]
+            Newly completed groups.
 
         Raises
         ------
@@ -342,11 +319,8 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
         self,
         *,
         timeout: float | None = None,
-    ) -> tuple[
-        CompletionGroup[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]],
-        ...,
-    ]:
-        """Wait for newly completed outcomes for this logical batch.
+    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
+        """Wait for newly completed evaluation slots for this logical batch.
 
         Parameters
         ----------
@@ -355,9 +329,9 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
 
         Returns
         -------
-        tuple[CompletionGroup[EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]], ...]
-            Newly completed outcome groups, or an empty tuple when ``timeout``
-            expires before a completion is available.
+        tuple[CompletionGroup[SessionEvaluationT], ...]
+            Newly completed groups, or an empty tuple when ``timeout`` expires
+            before a completion is available.
 
         Raises
         ------
@@ -403,12 +377,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
 
     def _record_completion_groups(
         self,
-        completion_groups: tuple[
-            CompletionGroup[
-                EvaluationOutcome[CandidateT, JoblibEvaluationRecordT]
-            ],
-            ...,
-        ],
+        completion_groups: tuple[CompletionGroup[SessionEvaluationT], ...],
     ) -> None:
         """Update lifecycle state after newly observed completion groups."""
         self._completed_count += sum(
