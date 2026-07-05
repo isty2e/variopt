@@ -101,58 +101,6 @@ def evaluate_request_success(
     )
 
 
-def evaluate_request_payload_attempt(
-    *,
-    problem: Problem[BoundaryT, CandidateT, PayloadT],
-    request: EvaluationRequest[CandidateT],
-) -> PayloadEvaluationAttemptBatch[CandidateT, PayloadT]:
-    """Execute one request into a payload success-or-failure attempt batch.
-
-    Parameters
-    ----------
-    problem : Problem[BoundaryT, CandidateT, PayloadT]
-        Problem that validates candidates and evaluates requests.
-    request : EvaluationRequest[CandidateT]
-        Request to execute.
-
-    Returns
-    -------
-    PayloadEvaluationAttemptBatch[CandidateT, PayloadT]
-        One-slot attempt batch containing either a request-owned success or a
-        recorded user-code evaluation failure.
-
-    Notes
-    -----
-    Candidate validation happens before the user-code call and remains a hard
-    failure. Only ``Exception`` raised while invoking the user evaluation
-    protocol is recorded; ``BaseException`` subclasses such as
-    ``KeyboardInterrupt`` and ``SystemExit`` escape.
-    """
-    candidate = request.candidate
-    problem.space.validate(candidate)
-    try:
-        payload = problem.evaluation_protocol.evaluate_request(request)
-    except Exception as exception:
-        return PayloadEvaluationAttemptBatch(
-            attempts=(
-                EvaluationFailure[CandidateT].from_exception(
-                    request=request,
-                    exception=exception,
-                ),
-            ),
-        )
-
-    return PayloadEvaluationAttemptBatch(
-        attempts=(
-            EvaluationSuccess(
-                request=request,
-                payload=payload,
-                evaluation_count=1,
-            ),
-        ),
-    )
-
-
 @overload
 def _compatibility_record_from_payload(
     *,

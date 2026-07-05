@@ -35,7 +35,6 @@ from variopt.evaluation_pipeline import (
     evaluate_request_attempt,
     evaluate_request_outcome,
     evaluate_request_payload,
-    evaluate_request_payload_attempt,
     evaluate_request_success,
 )
 from variopt.evaluators import SequentialEvaluator
@@ -292,7 +291,7 @@ class ProblemExecutionTests:
         )
         request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
 
-        attempts = evaluate_request_payload_attempt(problem=problem, request=request)
+        attempts = evaluate_request_attempt(problem=problem, request=request)
 
         assert attempts.successes == ()
         assert attempts.failure_indices == (0,)
@@ -341,7 +340,7 @@ class ProblemExecutionTests:
         request = EvaluationRequest(proposal=Proposal(candidate=11, proposal_id="p-1"))
 
         with pytest.raises(ValueError):
-            _ = evaluate_request_payload_attempt(problem=problem, request=request)
+            _ = evaluate_request_attempt(problem=problem, request=request)
 
     def test_payload_pipeline_attempt_does_not_record_base_exception(self) -> None:
         problem = Problem(
@@ -351,7 +350,7 @@ class ProblemExecutionTests:
         request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
 
         with pytest.raises(KeyboardInterrupt):
-            _ = evaluate_request_payload_attempt(problem=problem, request=request)
+            _ = evaluate_request_attempt(problem=problem, request=request)
 
     def test_payload_pipeline_supports_vector_payload_success(self) -> None:
         problem: Problem[int, int, ObjectiveVectorPayload] = Problem(
@@ -360,7 +359,7 @@ class ProblemExecutionTests:
         )
         request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
 
-        attempts = evaluate_request_payload_attempt(problem=problem, request=request)
+        attempts = evaluate_request_attempt(problem=problem, request=request)
 
         assert attempts.failure_indices == ()
         assert attempts.success_indices == (0,)
@@ -526,7 +525,7 @@ class ProblemExecutionTests:
             proposal=Proposal(candidate=EqualityHostileCandidate(stable_id=4)),
         )
 
-        attempts = evaluate_request_payload_attempt(problem=problem, request=request)
+        attempts = evaluate_request_attempt(problem=problem, request=request)
 
         assert attempts.success_indices == (0,)
         assert attempts.failures == ()

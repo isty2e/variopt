@@ -1,7 +1,7 @@
 """SciPy-backed kernel implementation for continuous local search."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 from typing_extensions import override
@@ -26,6 +26,7 @@ from ....kernel import (
     ProposalKernelHint,
     ProposalLocalSearchContext,
 )
+from ....spaces import SearchSpace
 from ....spaces.projections import ContinuousStructuredSpaceCodec
 from ....spaces.types import SpaceCandidateValue
 from .contracts import ScipyMinimizeMethod
@@ -89,6 +90,26 @@ def _as_local_search_context(
         raise TypeError(msg)
 
     return hint
+
+
+@dataclass(slots=True)
+class _ContinuousCodecProvider(Generic[BoundaryT, ContinuousCandidateT]):
+    space: SearchSpace[BoundaryT, ContinuousCandidateT]
+    _codec: ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT] | None = (
+        field(default=None, init=False, repr=False)
+    )
+
+    def codec(
+        self,
+    ) -> ContinuousStructuredSpaceCodec[BoundaryT, ContinuousCandidateT]:
+        codec = self._codec
+        if codec is None:
+            codec = ContinuousStructuredSpaceCodec[
+                BoundaryT,
+                ContinuousCandidateT,
+            ].from_space(self.space)
+            self._codec = codec
+        return codec
 
 
 @dataclass(frozen=True, slots=True)
@@ -691,25 +712,10 @@ class ScipyMinimizeKernel(
         EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]
             Locally improved attempts and recorded failed local-search trials.
         """
-        prepared_codec: (
-            ContinuousStructuredSpaceCodec[
-                BoundaryT,
-                ContinuousCandidateT,
-            ]
-            | None
-        ) = None
-
-        def codec_provider() -> ContinuousStructuredSpaceCodec[
+        codec_provider = _ContinuousCodecProvider[
             BoundaryT,
             ContinuousCandidateT,
-        ]:
-            nonlocal prepared_codec
-            if prepared_codec is None:
-                prepared_codec = ContinuousStructuredSpaceCodec[
-                    BoundaryT,
-                    ContinuousCandidateT,
-                ].from_space(query.problem.space)
-            return prepared_codec
+        ](space=query.problem.space)
 
         return EvaluationAttemptBatch[
             ContinuousCandidateT,
@@ -720,7 +726,7 @@ class ScipyMinimizeKernel(
                     query=query,
                     proposal_index=proposal_index,
                     proposal=proposal,
-                    codec_provider=codec_provider,
+                    codec_provider=codec_provider.codec,
                     runner=runner,
                     reserved_count=len(query.proposals) - proposal_index - 1,
                 )

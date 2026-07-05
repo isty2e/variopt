@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from numbers import Real
 from typing import Generic, Protocol, runtime_checkable
 
 import numpy as np
@@ -12,8 +13,6 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from ..direction import OptimizationDirection
 from .requests import (
     EvaluationRequest,
-    InteractionEvaluationSpec,
-    InteractionEvaluationUnit,
     Proposal,
     ProposalEvaluationSpec,
     normalize_evaluation_request,
@@ -25,13 +24,31 @@ RequestAlignedEvaluationRecordCandidateT = TypeVar(
     default=object,
     covariant=True,
 )
-InteractionEvaluationRecordCandidateT = TypeVar(
-    "InteractionEvaluationRecordCandidateT"
-)
 ObservationRecordCandidateT = TypeVar("ObservationRecordCandidateT")
 ObservationCandidateT = TypeVar("ObservationCandidateT")
 ObjectiveVectorRecordCandidateT = TypeVar("ObjectiveVectorRecordCandidateT")
 ObjectiveVectorCandidateT = TypeVar("ObjectiveVectorCandidateT")
+
+
+def _normalize_scalar_record_float(
+    value: object,
+    *,
+    field_name: str,
+) -> float:
+    """Return one finite canonical float for scalar record fields."""
+    if type(value) is bool or isinstance(value, np.bool_):
+        msg = f"{field_name} must be a real number"
+        raise TypeError(msg)
+
+    if not isinstance(value, Real):
+        msg = f"{field_name} must be a real number"
+        raise TypeError(msg)
+
+    normalized_value = float(value)
+    if not np.isfinite(normalized_value):
+        msg = f"{field_name} must be finite"
+        raise ValueError(msg)
+    return normalized_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,70 +320,6 @@ class EvaluationRecord(
         return self.request.proposal_evaluation_spec
 
 
-@dataclass(frozen=True, slots=True)
-class InteractionEvaluationRecord(
-    FrozenGenericSlotsCompat,
-    Generic[InteractionEvaluationRecordCandidateT],
-):
-    """Immutable semantic record over one interaction unit.
-
-    Parameters
-    ----------
-    interaction_unit : InteractionEvaluationUnit[InteractionEvaluationRecordCandidateT]
-        Canonical interaction unit that produced the record.
-    """
-
-    interaction_unit: InteractionEvaluationUnit[InteractionEvaluationRecordCandidateT]
-
-    @property
-    def requests(
-        self,
-    ) -> tuple[EvaluationRequest[InteractionEvaluationRecordCandidateT], ...]:
-        """Return the request participants.
-
-        Returns
-        -------
-        tuple[EvaluationRequest[InteractionEvaluationRecordCandidateT], ...]
-            Requests contained in the interaction unit.
-        """
-        return self.interaction_unit.requests
-
-    @property
-    def proposals(
-        self,
-    ) -> tuple[Proposal[InteractionEvaluationRecordCandidateT], ...]:
-        """Return the proposal compatibility view.
-
-        Returns
-        -------
-        tuple[Proposal[InteractionEvaluationRecordCandidateT], ...]
-            Proposals carried by the interaction unit.
-        """
-        return self.interaction_unit.proposals
-
-    @property
-    def candidates(self) -> tuple[InteractionEvaluationRecordCandidateT, ...]:
-        """Return the participating candidates.
-
-        Returns
-        -------
-        tuple[InteractionEvaluationRecordCandidateT, ...]
-            Candidates carried by the interaction unit.
-        """
-        return self.interaction_unit.candidates
-
-    @property
-    def interaction_evaluation_spec(self) -> InteractionEvaluationSpec | None:
-        """Return the interaction-spec compatibility view.
-
-        Returns
-        -------
-        InteractionEvaluationSpec | None
-            Shared metadata attached to the interaction unit.
-        """
-        return self.interaction_unit.interaction_evaluation_spec
-
-
 @dataclass(frozen=True, slots=True, init=False)
 class Observation(
     EvaluationRecord[ObservationRecordCandidateT],
@@ -423,24 +376,50 @@ class Observation(
         candidate : ObservationRecordCandidateT
             Candidate evaluated by the request.
         value : float
-            Raw scalar objective value.
+            Raw scalar objective value, normalized to a canonical Python
+            ``float``.
         score : float
-            Canonical minimization score used for ordering.
+            Canonical minimization score used for ordering, normalized to a
+            canonical Python ``float``.
         elapsed_seconds : float | None, optional
-            Optional wall-clock runtime for the evaluation.
+            Optional wall-clock runtime for the evaluation, normalized to a
+            canonical Python ``float`` when present.
         """
         normalized_request = normalize_evaluation_request(
             request=request,
             proposal=proposal,
             proposal_evaluation_spec=proposal_evaluation_spec,
         )
+        normalized_value = _normalize_scalar_record_float(
+            value,
+            field_name="value",
+        )
+        normalized_score = _normalize_scalar_record_float(
+            score,
+            field_name="score",
+        )
+        normalized_elapsed_seconds = (
+            None
+            if elapsed_seconds is None
+            else _normalize_scalar_record_float(
+                elapsed_seconds,
+                field_name="elapsed_seconds",
+            )
+        )
+        if (
+            normalized_elapsed_seconds is not None
+            and normalized_elapsed_seconds < 0.0
+        ):
+            msg = "elapsed_seconds must be non-negative"
+            raise ValueError(msg)
+
         super(Observation, self).__init__(
             request=normalized_request,
             candidate=candidate,
         )
-        object.__setattr__(self, "value", value)
-        object.__setattr__(self, "score", score)
-        object.__setattr__(self, "elapsed_seconds", elapsed_seconds)
+        object.__setattr__(self, "value", normalized_value)
+        object.__setattr__(self, "score", normalized_score)
+        object.__setattr__(self, "elapsed_seconds", normalized_elapsed_seconds)
         self.__post_init__()
 
     def __post_init__(self) -> None:

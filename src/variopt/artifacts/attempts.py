@@ -98,6 +98,8 @@ EvaluationSuccessPickleState: TypeAlias = tuple[
     bool,
     ValidatedRefinementCandidate[CandidateT],
     ValidatedRefinementCandidate[CandidateT],
+    ValidatedRefinementCandidate[CandidateT],
+    ValidatedRefinementCandidate[CandidateT],
 ]
 
 
@@ -315,6 +317,8 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
     evaluation_count: int = 1
     refinement: CandidateRefinement[CandidateT] | None = None
     kernel_diagnostics: KernelDiagnostics | None = None
+    # Keep this InitVar so dataclasses.replace(..., candidate_equal=...) can
+    # revalidate after pickle intentionally strips non-serializable predicates.
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
     _candidate_equal: CandidateEquality[CandidateT] | None = field(
         default=None,
@@ -336,6 +340,20 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         repr=False,
         compare=False,
     )
+    _validated_payload_request_candidate: ValidatedRefinementCandidate[
+        CandidateT
+    ] = field(
+        default=_UNVALIDATED_REFINEMENT_CANDIDATE,
+        repr=False,
+        compare=False,
+    )
+    _validated_refinement_source_candidate: ValidatedRefinementCandidate[
+        CandidateT
+    ] = field(
+        default=_UNVALIDATED_REFINEMENT_CANDIDATE,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
@@ -352,6 +370,12 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             CandidateT
         ] = _UNVALIDATED_REFINEMENT_CANDIDATE,
         _validated_refined_candidate: ValidatedRefinementCandidate[
+            CandidateT
+        ] = _UNVALIDATED_REFINEMENT_CANDIDATE,
+        _validated_payload_request_candidate: ValidatedRefinementCandidate[
+            CandidateT
+        ] = _UNVALIDATED_REFINEMENT_CANDIDATE,
+        _validated_refinement_source_candidate: ValidatedRefinementCandidate[
             CandidateT
         ] = _UNVALIDATED_REFINEMENT_CANDIDATE,
     ) -> None:
@@ -397,6 +421,16 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             self,
             "_validated_refined_candidate",
             _validated_refined_candidate,
+        )
+        object.__setattr__(
+            self,
+            "_validated_payload_request_candidate",
+            _validated_payload_request_candidate,
+        )
+        object.__setattr__(
+            self,
+            "_validated_refinement_source_candidate",
+            _validated_refinement_source_candidate,
         )
         self._validate(candidate_equal=effective_candidate_equal)
 
@@ -444,16 +478,12 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
 
         payload = self.payload
         if _is_request_aligned_payload(payload):
-            if payload.candidate is not self.request.candidate:
-                msg = "success payload candidate must match the success request candidate"
-                raise ValueError(msg)
-            if not _is_success_aligned_record_payload(
+            self._validate_record_payload_alignment(
                 payload,
-                self,
                 candidate_equal=candidate_equal,
-            ):
-                msg = "success payload request must match the success request"
-                raise ValueError(msg)
+            )
+        else:
+            self._clear_payload_source_alignment()
 
         if refinement is None:
             object.__setattr__(
@@ -503,15 +533,135 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             and self._validated_refined_candidate is self.refinement.refined_candidate
         )
 
-    def __post_init__(
+    def _payload_source_alignment_is_prevalidated(
         self,
-        candidate_equal: CandidateEquality[CandidateT] | None = None,
+        payload_request: EvaluationRequest[CandidateT],
+    ) -> bool:
+        """Return whether the current payload source pair was validated."""
+        return (
+            self.refinement is not None
+            and self._validated_payload_request_candidate
+            is not _UNVALIDATED_REFINEMENT_CANDIDATE
+            and self._validated_refinement_source_candidate
+            is not _UNVALIDATED_REFINEMENT_CANDIDATE
+            and self._validated_payload_request_candidate is payload_request.candidate
+            and self._validated_refinement_source_candidate
+            is self.refinement.source_candidate
+        )
+
+    def _store_payload_source_alignment(
+        self,
+        payload_request: EvaluationRequest[CandidateT],
     ) -> None:
-        """Validate success metadata after dataclass construction."""
-        effective_candidate_equal = candidate_equal
-        if effective_candidate_equal is None:
-            effective_candidate_equal = self._candidate_equal
-        self._validate(candidate_equal=effective_candidate_equal)
+        """Cache successful payload-source refinement validation."""
+        if self.refinement is None:
+            self._clear_payload_source_alignment()
+            return
+
+        object.__setattr__(
+            self,
+            "_validated_payload_request_candidate",
+            payload_request.candidate,
+        )
+        object.__setattr__(
+            self,
+            "_validated_refinement_source_candidate",
+            self.refinement.source_candidate,
+        )
+
+    def _clear_payload_source_alignment(self) -> None:
+        """Clear cached payload-source refinement validation."""
+        object.__setattr__(
+            self,
+            "_validated_payload_request_candidate",
+            _UNVALIDATED_REFINEMENT_CANDIDATE,
+        )
+        object.__setattr__(
+            self,
+            "_validated_refinement_source_candidate",
+            _UNVALIDATED_REFINEMENT_CANDIDATE,
+        )
+
+    def _validate_record_payload_alignment(
+        self,
+        payload: object,
+        *,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
+        """Require a request-aligned payload to belong to this success request."""
+        if not _is_request_aligned_payload(payload):
+            msg = "success payload must be request-aligned"
+            raise TypeError(msg)
+
+        if payload.candidate is not self.request.candidate:
+            msg = "success payload candidate must match the success request candidate"
+            raise ValueError(msg)
+
+        if payload.request is self.request:
+            self._clear_payload_source_alignment()
+            return
+
+        if not _is_evaluation_request_in_candidate_domain(
+            payload.request,
+            self.request.candidate,
+        ):
+            msg = "success payload request must match the success request"
+            raise ValueError(msg)
+
+        if not self._payload_request_metadata_matches(payload.request):
+            msg = "success payload request must match the success request"
+            raise ValueError(msg)
+
+        self._validate_payload_request_refinement_source(
+            payload.request,
+            candidate_equal=candidate_equal,
+        )
+
+    def _payload_request_metadata_matches(
+        self,
+        payload_request: EvaluationRequest[CandidateT],
+    ) -> bool:
+        """Return whether a payload source request matches this request metadata."""
+        if payload_request.proposal_id != self.request.proposal_id:
+            return False
+
+        if payload_request.proposal_evaluation_spec != self.request.proposal_evaluation_spec:
+            return False
+
+        return True
+
+    def _validate_payload_request_refinement_source(
+        self,
+        payload_request: EvaluationRequest[CandidateT],
+        *,
+        candidate_equal: CandidateEquality[CandidateT] | None,
+    ) -> None:
+        """Require payload source requests to match this refinement source."""
+        refinement = self.refinement
+        if refinement is None:
+            self._clear_payload_source_alignment()
+            return
+
+        if self._payload_source_alignment_is_prevalidated(payload_request):
+            return
+
+        if candidate_equal is None and self._candidate_equal_required:
+            msg = (
+                "candidate_equal is required to revalidate success payload "
+                "refinement source after changing an explicitly compared success"
+            )
+            raise TypeError(msg)
+
+        require_candidate_match(
+            left_candidate=refinement.source_candidate,
+            right_candidate=payload_request.candidate,
+            mismatch_message=(
+                "success payload request candidate must match refinement source "
+                "candidate"
+            ),
+            candidate_equal=candidate_equal,
+        )
+        self._store_payload_source_alignment(payload_request)
 
     @staticmethod
     def from_scalar_observation(
@@ -629,6 +779,8 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
     def with_payload(
         self,
         payload: ProjectedPayloadT,
+        *,
+        candidate_equal: CandidateEquality[CandidateT] | None = None,
     ) -> "EvaluationSuccess[CandidateT, ProjectedPayloadT]":
         """Return this success with a different payload representation.
 
@@ -638,6 +790,10 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             Replacement payload that still describes the same successful
             request. Metadata such as evaluation cost, refinement provenance,
             diagnostics, and cached refinement-validation state is preserved.
+        candidate_equal : CandidateEquality[CandidateT] | None, optional
+            Equality predicate used when the replacement payload requires
+            revalidating candidate alignment after a pickle round-trip stripped
+            the stored predicate.
 
         Returns
         -------
@@ -650,10 +806,17 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             evaluation_count=self.evaluation_count,
             refinement=self.refinement,
             kernel_diagnostics=self.kernel_diagnostics,
+            candidate_equal=candidate_equal,
             _candidate_equal=self._candidate_equal,
             _candidate_equal_required=self._candidate_equal_required,
             _validated_request_candidate=self._validated_request_candidate,
             _validated_refined_candidate=self._validated_refined_candidate,
+            _validated_payload_request_candidate=(
+                self._validated_payload_request_candidate
+            ),
+            _validated_refinement_source_candidate=(
+                self._validated_refinement_source_candidate
+            ),
         )
 
     def _pickle_state(self) -> EvaluationSuccessPickleState[CandidateT, PayloadT]:
@@ -667,6 +830,8 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             self._candidate_equal_required,
             self._validated_request_candidate,
             self._validated_refined_candidate,
+            self._validated_payload_request_candidate,
+            self._validated_refinement_source_candidate,
         )
 
     def _restore_pickle_state(
@@ -683,6 +848,8 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             candidate_equal_required,
             validated_request_candidate,
             validated_refined_candidate,
+            validated_payload_request_candidate,
+            validated_refinement_source_candidate,
         ) = state
         object.__setattr__(self, "__orig_class__", None)
         object.__setattr__(self, "request", request)
@@ -702,6 +869,17 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             "_validated_refined_candidate",
             validated_refined_candidate,
         )
+        object.__setattr__(
+            self,
+            "_validated_payload_request_candidate",
+            validated_payload_request_candidate,
+        )
+        object.__setattr__(
+            self,
+            "_validated_refinement_source_candidate",
+            validated_refinement_source_candidate,
+        )
+        self._validate(candidate_equal=None)
 
 
 def _success_from_scalar_observation(
@@ -795,28 +973,6 @@ def _is_request_aligned_payload(
     return type(payload.request) is EvaluationRequest
 
 
-def _is_success_aligned_record_payload(
-    payload: object,
-    success: EvaluationSuccess[CandidateT, object],
-    *,
-    candidate_equal: CandidateEquality[CandidateT] | None,
-) -> TypeGuard[RequestAlignedEvaluationRecord[CandidateT]]:
-    if not _is_request_aligned_payload(payload):
-        return False
-
-    if payload.candidate is not success.request.candidate:
-        return False
-
-    if payload.request is success.request:
-        return True
-
-    return _payload_request_projects_to_success_request(
-        payload.request,
-        success,
-        candidate_equal=candidate_equal,
-    )
-
-
 def _is_materializable_record_payload(
     payload: object,
     success: EvaluationSuccess[CandidateT, object],
@@ -841,47 +997,13 @@ def _is_materializable_record_payload(
     return payload.request.candidate is refinement.source_candidate
 
 
-def _is_evaluation_request_for_candidate(
+def _is_evaluation_request_in_candidate_domain(
     request: object,
     candidate: CandidateT,
 ) -> TypeGuard[EvaluationRequest[CandidateT]]:
-    """Bind a request object's candidate domain for immediate validation."""
+    """Narrow an erased request generic after caller-side candidate alignment."""
     _ = candidate
     return type(request) is EvaluationRequest
-
-
-def _payload_request_projects_to_success_request(
-    payload_request: object,
-    success: EvaluationSuccess[CandidateT, PayloadT],
-    *,
-    candidate_equal: CandidateEquality[CandidateT] | None,
-) -> bool:
-    if not _is_evaluation_request_for_candidate(
-        payload_request,
-        success.request.candidate,
-    ):
-        return False
-
-    if payload_request.proposal_id != success.request.proposal_id:
-        return False
-
-    if payload_request.proposal_evaluation_spec != success.request.proposal_evaluation_spec:
-        return False
-
-    refinement = success.refinement
-    if refinement is None:
-        return True
-
-    require_candidate_match(
-        left_candidate=refinement.source_candidate,
-        right_candidate=payload_request.candidate,
-        mismatch_message=(
-            "success payload request candidate must match refinement source "
-            "candidate"
-        ),
-        candidate_equal=candidate_equal,
-    )
-    return True
 
 
 def materialize_success_record(

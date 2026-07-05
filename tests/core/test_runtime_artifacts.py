@@ -5,6 +5,7 @@ from dataclasses import dataclass, fields, replace
 from inspect import signature
 from typing import cast
 
+import numpy as np
 import pytest
 from typing_extensions import override
 
@@ -64,6 +65,10 @@ class SpaceOwnedEqualityCandidate:
         raise ValueError("raw candidate equality is not the space contract")
 
 
+class FloatSubclass(float):
+    """Runtime float subclass used to verify scalar canonicalization."""
+
+
 def space_owned_candidates_equal(
     left_candidate: SpaceOwnedEqualityCandidate,
     right_candidate: SpaceOwnedEqualityCandidate,
@@ -80,6 +85,15 @@ def fail_if_candidate_equal_is_called(
     _ = left_candidate
     _ = right_candidate
     raise AssertionError("candidate equality should not be called")
+
+
+@dataclass(frozen=True, slots=True)
+class SpaceOwnedRecord:
+    """Picklable request-aligned payload for space-owned equality candidates."""
+
+    request: EvaluationRequest[SpaceOwnedEqualityCandidate]
+    candidate: SpaceOwnedEqualityCandidate
+    label: str
 
 
 def make_observation_payload(value: float = 1.0) -> ObservationPayload:
@@ -546,6 +560,129 @@ class RuntimeArtifactsTests:
 
         replaced = replace(success, request=matching_request)
         assert replaced.request is matching_request
+
+    def test_evaluation_success_with_payload_preserves_candidate_equality(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2))
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(value=1.0),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        projected = success.with_payload(make_observation_payload(value=3.0))
+        revalidated = replace(
+            projected,
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+        )
+
+        assert projected.payload.value == 3.0
+        assert revalidated.refinement is not projected.refinement
+
+    def test_evaluation_success_pickle_preserves_refined_record_payload_cache(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        refined_candidate = SpaceOwnedEqualityCandidate(2)
+        source_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(
+                proposal=Proposal(candidate=source_candidate, proposal_id="p-1")
+            )
+        )
+        refined_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(
+                proposal=Proposal(candidate=refined_candidate, proposal_id="p-1")
+            )
+        )
+        record = SpaceOwnedRecord(
+            request=source_request,
+            candidate=refined_candidate,
+            label="refined",
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            SpaceOwnedRecord,
+        ] = EvaluationSuccess(
+            request=refined_request,
+            payload=record,
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        restored = cast(
+            EvaluationSuccess[SpaceOwnedEqualityCandidate, SpaceOwnedRecord],
+            pickle.loads(pickle.dumps(success)),
+        )
+
+        assert restored.payload.request.candidate.stable_id == 1
+        assert restored.payload.candidate.stable_id == 2
+
+    def test_evaluation_success_with_payload_after_pickle_requires_candidate_equal(
+        self,
+    ) -> None:
+        source_candidate = SpaceOwnedEqualityCandidate(1)
+        refined_candidate = SpaceOwnedEqualityCandidate(2)
+        request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
+            proposal=Proposal(candidate=refined_candidate, proposal_id="p-1")
+        )
+        success: EvaluationSuccess[
+            SpaceOwnedEqualityCandidate,
+            ObservationPayload,
+        ] = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(value=1.0),
+            refinement=CandidateRefinement(
+                source_candidate=source_candidate,
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        restored = cast(
+            EvaluationSuccess[SpaceOwnedEqualityCandidate, ObservationPayload],
+            pickle.loads(pickle.dumps(success)),
+        )
+        refinement = restored.refinement
+        assert refinement is not None
+        source_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
+            EvaluationRequest(
+                proposal=Proposal(
+                    candidate=refinement.source_candidate,
+                    proposal_id=restored.proposal_id,
+                )
+            )
+        )
+        record = SpaceOwnedRecord(
+            request=source_request,
+            candidate=restored.request.candidate,
+            label="refined",
+        )
+
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = restored.with_payload(record)
+
+        repaired = restored.with_payload(
+            record,
+            candidate_equal=space_owned_candidates_equal,
+        )
+
+        assert repaired.payload is record
 
     def test_evaluation_success_pickle_strips_candidate_equal_safely(self) -> None:
         source_candidate = SpaceOwnedEqualityCandidate(1)
@@ -1952,6 +2089,92 @@ class RuntimeArtifactsTests:
                 value=16.0,
                 score=16.0,
                 elapsed_seconds=-0.1,
+            )
+
+    def test_observation_normalizes_numeric_fields_to_builtin_float(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=np.float64(16.0),
+            score=FloatSubclass(9.0),
+            elapsed_seconds=cast(float, cast(object, np.int64(1))),
+        )
+
+        assert observation.value == 16.0
+        assert type(observation.value) is float
+        assert observation.score == 9.0
+        assert type(observation.score) is float
+        assert observation.elapsed_seconds == 1.0
+        assert type(observation.elapsed_seconds) is float
+
+    def test_observation_normalizes_int_fields_to_builtin_float(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        observation = Observation(
+            proposal=proposal,
+            candidate=4,
+            value=16,
+            score=9,
+            elapsed_seconds=1,
+        )
+
+        assert observation.value == 16.0
+        assert type(observation.value) is float
+        assert observation.score == 9.0
+        assert type(observation.score) is float
+        assert observation.elapsed_seconds == 1.0
+        assert type(observation.elapsed_seconds) is float
+
+    def test_observation_rejects_bool_value(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        with pytest.raises(TypeError, match="value must be a real number"):
+            _ = Observation(
+                proposal=proposal,
+                candidate=4,
+                value=cast(float, True),
+                score=16.0,
+            )
+
+    def test_observation_rejects_bool_score(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        with pytest.raises(TypeError, match="score must be a real number"):
+            _ = Observation(
+                proposal=proposal,
+                candidate=4,
+                value=16.0,
+                score=cast(float, cast(object, np.bool_(True))),
+            )
+
+    def test_observation_rejects_bool_elapsed_seconds(self) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        with pytest.raises(TypeError, match="elapsed_seconds must be a real number"):
+            _ = Observation(
+                proposal=proposal,
+                candidate=4,
+                value=16.0,
+                score=16.0,
+                elapsed_seconds=cast(float, True),
+            )
+
+    @pytest.mark.parametrize("elapsed_seconds", (float("nan"), float("inf")))
+    def test_observation_rejects_non_finite_elapsed_seconds(
+        self,
+        elapsed_seconds: float,
+    ) -> None:
+        proposal = Proposal(candidate=4, proposal_id="p-1")
+
+        with pytest.raises(ValueError, match="elapsed_seconds must be finite"):
+            _ = Observation(
+                proposal=proposal,
+                candidate=4,
+                value=16.0,
+                score=16.0,
+                elapsed_seconds=elapsed_seconds,
             )
 
     def test_observation_rejects_nan_value(self) -> None:

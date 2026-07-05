@@ -690,7 +690,10 @@ def evaluate_step(
         proposal_kernel_hints=proposal_kernel_hints,
         evaluation_budget=evaluation_budget,
     )
-    top_level_requests: tuple[EvaluationRequest[CandidateT], ...] | None = None
+    top_level_requests = build_evaluation_requests(
+        top_level_query.proposals,
+        proposal_evaluation_specs=top_level_query.proposal_evaluation_specs,
+    )
 
     def requests_for_query(
         query: ProposalBatchQuery[
@@ -699,17 +702,13 @@ def evaluate_step(
             StudyPayloadT,
         ],
     ) -> tuple[EvaluationRequest[CandidateT], ...]:
-        nonlocal top_level_requests
-        if query is top_level_query and top_level_requests is not None:
+        if query is top_level_query:
             return top_level_requests
 
-        requests = build_evaluation_requests(
+        return build_evaluation_requests(
             query.proposals,
             proposal_evaluation_specs=query.proposal_evaluation_specs,
         )
-        if query is top_level_query:
-            top_level_requests = requests
-        return requests
 
     if execution_model == EXACT_ASYNC_EXECUTION_MODEL:
 
