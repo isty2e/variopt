@@ -361,5 +361,5 @@ class SpeciesConservingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         )
 
         return GenerationalGAGenerationCommit(
-            population=sort_generational_ga_population(next_population),
+            population=next_population,
         )

@@ -319,7 +319,7 @@ class RestrictedTournamentGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         next_population = list(sort_generational_ga_population(parents))
         for child_member in offspring:
             competitor_index = self._restricted_tournament_competitor_index(
-                population=tuple(next_population),
+                population=next_population,
                 child_member=child_member,
                 random_state=materialized_random_state,
             )
@@ -335,7 +335,7 @@ class RestrictedTournamentGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
     def _restricted_tournament_competitor_index(
         self,
         *,
-        population: tuple[GenerationalGAPopulationMember[CandidateT], ...],
+        population: Sequence[GenerationalGAPopulationMember[CandidateT]],
         child_member: GenerationalGAPopulationMember[CandidateT],
         random_state: np.random.RandomState,
     ) -> int:
