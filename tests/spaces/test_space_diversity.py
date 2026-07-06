@@ -31,6 +31,7 @@ from variopt.spaces.geometry import (
     StructuredSpaceGeometry,
     compile_structured_geometry,
     distance_parts,
+    generic_distance_parts,
 )
 from variopt.spaces.types import SpaceCandidateValue, SpaceScalarValue
 
@@ -387,6 +388,122 @@ class StructuredSpaceDiversityMetricTests:
         )
 
         assert approx_equal(distance, math.sqrt(0.5))
+
+    def test_permutation_space_distance_handles_diagonal_full_and_size_one(self) -> None:
+        metric = StructuredSpaceDiversityMetric(space=PermutationSpace(size=3))
+
+        assert metric.distance((0, 1, 2), (0, 1, 2)) == 0.0
+        assert metric.distance((0, 1, 2), (1, 2, 0)) == 1.0
+        assert StructuredSpaceDiversityMetric(
+            space=PermutationSpace(size=1),
+        ).distance((0,), (0,)) == 0.0
+
+    def test_permutation_space_distance_ignores_label_gap_magnitude(self) -> None:
+        space = PermutationSpace(size=5)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize((0, 1, 2, 3, 4))
+
+        adjacent_swap = metric.distance(left, space.normalize((1, 0, 2, 3, 4)))
+        far_swap = metric.distance(left, space.normalize((4, 1, 2, 3, 0)))
+
+        assert approx_equal(adjacent_swap, math.sqrt(2.0 / 5.0))
+        assert approx_equal(far_swap, adjacent_swap)
+
+    def test_permutation_generic_geometry_uses_position_mismatch_parts(self) -> None:
+        space = PermutationSpace(size=4)
+        left = space.normalize((0, 1, 2, 3))
+        right = space.normalize((3, 1, 0, 2))
+
+        parts = generic_distance_parts(space, left, right)
+
+        assert parts == StructuredDistanceParts(
+            overlap_squared_distance=3.0,
+            shared_leaf_count=4,
+        )
+
+    def test_permutation_compiled_and_generic_geometry_parts_match(self) -> None:
+        space = PermutationSpace(size=4)
+        geometry = compile_structured_geometry(space)
+        left = space.normalize((0, 1, 2, 3))
+        right = space.normalize((0, 3, 2, 1))
+
+        assert geometry is not None
+        assert geometry.distance_parts(left, right) == generic_distance_parts(
+            space,
+            left,
+            right,
+        )
+
+    def test_composite_permutation_generic_geometry_uses_child_mismatch_parts(self) -> None:
+        space = TupleSpace(PermutationSpace(size=3), CategoricalSpace(("x", "y")))
+        left = space.normalize(((0, 1, 2), "x"))
+        right = space.normalize(((2, 1, 0), "y"))
+
+        parts = generic_distance_parts(space, left, right)
+
+        assert parts == StructuredDistanceParts(
+            overlap_squared_distance=3.0,
+            shared_leaf_count=4,
+        )
+
+    def test_nested_permutation_generic_geometry_uses_child_mismatch_parts(self) -> None:
+        space = TupleSpace(
+            PermutationSpace(size=3),
+            TupleSpace(PermutationSpace(size=3), CategoricalSpace(("x", "y"))),
+        )
+        left = space.normalize(((0, 1, 2), ((0, 1, 2), "x")))
+        right = space.normalize(((2, 1, 0), ((1, 2, 0), "y")))
+
+        parts = generic_distance_parts(space, left, right)
+
+        assert parts == StructuredDistanceParts(
+            overlap_squared_distance=6.0,
+            shared_leaf_count=7,
+        )
+
+    def test_array_permutation_generic_geometry_uses_element_mismatch_parts(self) -> None:
+        space = ArraySpace(PermutationSpace(size=3), length=2)
+        left = space.normalize(((0, 1, 2), (0, 1, 2)))
+        right = space.normalize(((2, 1, 0), (1, 2, 0)))
+
+        parts = generic_distance_parts(space, left, right)
+
+        assert parts == StructuredDistanceParts(
+            overlap_squared_distance=5.0,
+            shared_leaf_count=6,
+        )
+
+    def test_array_permutation_compiled_and_generic_geometry_parts_match(self) -> None:
+        space = ArraySpace(PermutationSpace(size=3), length=2)
+        geometry = compile_structured_geometry(space)
+        left = space.normalize(((0, 1, 2), (0, 1, 2)))
+        right = space.normalize(((2, 1, 0), (1, 2, 0)))
+
+        assert geometry is not None
+        assert geometry.distance_parts(left, right) == generic_distance_parts(
+            space,
+            left,
+            right,
+        )
+
+    def test_non_permutation_integer_leaf_keeps_numeric_distance_law(self) -> None:
+        space = TupleSpace(IntegerSpace(0, 10), PermutationSpace(size=3))
+        left = space.normalize((0, (0, 1, 2)))
+        right = space.normalize((10, (2, 1, 0)))
+
+        parts = generic_distance_parts(space, left, right)
+
+        assert parts == StructuredDistanceParts(
+            overlap_squared_distance=3.0,
+            shared_leaf_count=4,
+        )
+
+    def test_permutation_distance_rejects_noncanonical_candidate(self) -> None:
+        space = PermutationSpace(size=3)
+        metric = StructuredSpaceDiversityMetric(space=space)
+
+        with pytest.raises(ValueError):
+            _ = metric.distance((0, 1, 1), (0, 2, 1))
 
     def test_custom_structured_space_uses_generic_geometry_fallback(self) -> None:
         space = WrappedPairSpace(

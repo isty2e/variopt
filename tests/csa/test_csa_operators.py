@@ -30,6 +30,9 @@ from variopt.algorithms.population.csa import (
     RandomResetMutation,
     UniformCrossover,
 )
+from variopt.algorithms.population.csa.operators.editing import (
+    sample_exchange_count,
+)
 from variopt.algorithms.population.csa.operators.mutation import (
     bounded_mutation_on_paths,
 )
@@ -165,6 +168,95 @@ class IntegerSquareObjective(Objective[int]):
 
 class OperatorTests:
     """Unit tests for built-in CSA operator behavior."""
+
+    def seed_for_exchange_count(
+        self,
+        *,
+        leaf_count: int,
+        max_exchange_fraction: float,
+        target: int,
+    ) -> int:
+        """Return one deterministic seed that samples the requested count."""
+        for seed in range(1000):
+            if (
+                sample_exchange_count(
+                    leaf_count=leaf_count,
+                    max_exchange_fraction=max_exchange_fraction,
+                    random_state=rng(seed),
+                )
+                == target
+            ):
+                return seed
+        msg = f"no seed sampled exchange count {target}"
+        raise AssertionError(msg)
+
+    def test_sample_exchange_count_can_attain_fractional_cap(self) -> None:
+        seed = self.seed_for_exchange_count(
+            leaf_count=6,
+            max_exchange_fraction=0.5,
+            target=3,
+        )
+
+        exchange_count = sample_exchange_count(
+            leaf_count=6,
+            max_exchange_fraction=0.5,
+            random_state=rng(seed),
+        )
+
+        assert exchange_count == 3
+
+    def test_sample_exchange_count_rejects_non_positive_leaf_count(self) -> None:
+        with pytest.raises(ValueError, match="leaf_count must be positive"):
+            _ = sample_exchange_count(
+                leaf_count=0,
+                max_exchange_fraction=1.0,
+                random_state=rng(0),
+            )
+
+    @pytest.mark.parametrize(
+        ("leaf_count", "max_exchange_fraction", "expected"),
+        (
+            (1, 1.0, 1),
+            (5, 0.01, 1),
+            (9, 0.111, 1),
+            (5, 1.0, 5),
+            (5, 0.5, 2),
+            (6, 0.5, 3),
+            (7, 0.5, 3),
+        ),
+    )
+    def test_sample_exchange_count_bounds_are_inclusive(
+        self,
+        leaf_count: int,
+        max_exchange_fraction: float,
+        expected: int,
+    ) -> None:
+        seed = self.seed_for_exchange_count(
+            leaf_count=leaf_count,
+            max_exchange_fraction=max_exchange_fraction,
+            target=expected,
+        )
+
+        exchange_count = sample_exchange_count(
+            leaf_count=leaf_count,
+            max_exchange_fraction=max_exchange_fraction,
+            random_state=rng(seed),
+        )
+
+        assert exchange_count == expected
+
+    def test_uniform_crossover_full_exchange_stays_valid(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=4)
+        operator = UniformCrossover(space=space, max_exchange_fraction=1.0)
+
+        child = operator.apply(
+            parents=((1, 2, 3, 4), (5, 6, 7, 8)),
+            random_state=rng(5),
+        )
+
+        assert len(child) == 4
+        assert all(value in {1, 2, 3, 4, 5, 6, 7, 8} for value in child)
+        space.validate(child)
 
     def test_uniform_crossover_copies_partner_coordinates(self) -> None:
         space = ArraySpace(IntegerSpace(0, 9), length=4)

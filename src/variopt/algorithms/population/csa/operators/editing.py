@@ -52,11 +52,11 @@ def sample_exchange_count(
     if leaf_count == 1:
         return 1
 
-    upper_exclusive = min(
-        leaf_count + 1,
-        max(2, int(leaf_count * max_exchange_fraction)),
+    max_exchange_count = min(
+        leaf_count,
+        max(1, int(leaf_count * max_exchange_fraction)),
     )
-    return random_state_randint(random_state, 1, upper_exclusive)
+    return random_state_randint(random_state, 1, max_exchange_count + 1)
 
 
 def choose_paths_without_replacement(
