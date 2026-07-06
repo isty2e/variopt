@@ -1,6 +1,7 @@
 """Tests for CSA seed selection and initial-routing semantics."""
 
 import numpy as np
+from typing_extensions import final, override
 
 from tests.csa_support import (
     AbsoluteDistance,
@@ -9,6 +10,7 @@ from tests.csa_support import (
     CSABankUpdatePolicy,
     CSACutoffState,
     CSAOptimizerTestCase,
+    DiversityMetric,
     EncodeBinaryParents,
     IntegerSpace,
     Observation,
@@ -29,6 +31,19 @@ from tests.csa_support import (
     select_partner_indices,
     should_use_reference_primary,
 )
+
+
+@final
+class CountingDistance(DiversityMetric[int]):
+    """Distance metric that counts concrete distance evaluations."""
+
+    def __init__(self) -> None:
+        self.call_count: int = 0
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.call_count += 1
+        return float(abs(left - right))
 
 
 class CSASelectionTests(CSAOptimizerTestCase):
@@ -105,6 +120,32 @@ class CSASelectionTests(CSAOptimizerTestCase):
         proposal_batch = optimizer.ask(batch_size=2)
 
         assert len({proposal.candidate for proposal in proposal_batch}) == 2
+
+    def test_generation_seed_selection_reuses_pair_distances(self) -> None:
+        distance = CountingDistance()
+        optimizer = make_optimizer(
+            space=IntegerSpace(low=0, high=100),
+            diversity_metric=distance,
+            variation_operator=RepeatParent(),
+            bank_capacity=4,
+            seed_count=3,
+            random_seed_mode=0,
+            random_state=0,
+        )
+        optimizer.bank = Bank(
+            capacity=4,
+            entries=(
+                BankEntry(candidate=0, value=0.0),
+                BankEntry(candidate=10, value=10.0),
+                BankEntry(candidate=20, value=20.0),
+                BankEntry(candidate=30, value=30.0),
+            ),
+        )
+
+        proposals = optimizer.ask(batch_size=1)
+
+        assert len(proposals) == 1
+        assert distance.call_count <= 5
 
     def test_random_seed_mode_one_is_reproducible_and_prefers_unused_seed_first(
         self,

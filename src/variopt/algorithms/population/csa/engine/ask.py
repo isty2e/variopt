@@ -16,6 +16,7 @@ from .....spaces.structured import require_space_candidate_value
 from .....spaces.types import SpaceCandidateValue
 from .....typevars import CandidateT
 from ..banking.bank import BankEntry
+from ..banking.queries import BankDistanceWorkspace
 from ..generation.proposal import CSAProposalState
 from ..generation.proposal.covariance import (
     build_numeric_subspace_attribution,
@@ -313,14 +314,6 @@ def materialize_generation(
             for family_key in family_keys
         )
 
-    def distance_between_entry_indices(left_index: int, right_index: int) -> float:
-        return require_valid_distance(
-            diversity_metric.distance(
-                bank.entries[left_index].candidate,
-                bank.entries[right_index].candidate,
-            )
-        )
-
     def select_partner_indices_from_entries(
         *,
         entries: tuple[BankEntry[CandidateT], ...],
@@ -504,6 +497,14 @@ def materialize_generation(
         return tuple(candidates)
 
     if not selection_state.has_active_seed:
+        bank_distance_workspace = BankDistanceWorkspace(
+            entries=bank.entries,
+            diversity_metric=diversity_metric,
+        )
+
+        def distance_between_entry_indices(left_index: int, right_index: int) -> float:
+            return bank_distance_workspace.distance(left_index, right_index)
+
         selection_state_before = selection_state
         selection_state = prepare_seed_batch(
             current_state=selection_state,
