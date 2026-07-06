@@ -159,7 +159,7 @@ def emit_structured_mutation_candidate(
             )
 
     if covariance_candidate is None:
-        candidate = operator.apply_space_candidate_on_paths(
+        candidate = operator.apply_validated_space_candidate_on_paths(
             candidate=seed_candidate,
             selected_paths=selected_paths,
             random_state=random_state,
