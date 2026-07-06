@@ -263,6 +263,41 @@ class GeneticAlgorithmOptimizerTests:
             "ga-7",
         )
 
+    def test_optimizer_compacts_mostly_consumed_generation_queue(self) -> None:
+        optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+
+        proposals, state = optimizer.ask(state, batch_size=3)
+
+        assert tuple(proposal.proposal_id for proposal in proposals) == (
+            "ga-4",
+            "ga-5",
+            "ga-6",
+        )
+        assert state.queued_proposal_index == 0
+        assert tuple(proposal.proposal_id for proposal in state.queued_proposals) == (
+            "ga-7",
+        )
+
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        proposals, state = optimizer.ask(state, batch_size=1)
+
+        assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-7",)
+
     def test_optimizer_rejects_ask_while_proposals_are_pending(self) -> None:
         optimizer = GeneticAlgorithmOptimizer(
             space=IntegerSpace(0, 10),

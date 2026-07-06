@@ -241,10 +241,24 @@ def ask_generational_ga(
     queued_stop = min(batch_size + queued_start, len(next_state.queued_proposals))
     proposals = next_state.queued_proposals[queued_start:queued_stop]
     remaining_queue_is_empty = queued_stop == len(next_state.queued_proposals)
+    compact_queue = (
+        not remaining_queue_is_empty
+        and queued_stop * 2 >= len(next_state.queued_proposals)
+    )
+    if remaining_queue_is_empty:
+        queued_proposals: tuple[Proposal[CandidateT], ...] = ()
+        queued_proposal_index = 0
+    elif compact_queue:
+        queued_proposals = next_state.queued_proposals[queued_stop:]
+        queued_proposal_index = 0
+    else:
+        queued_proposals = next_state.queued_proposals
+        queued_proposal_index = queued_stop
+
     return proposals, replace(
         next_state,
-        queued_proposals=() if remaining_queue_is_empty else next_state.queued_proposals,
-        queued_proposal_index=0 if remaining_queue_is_empty else queued_stop,
+        queued_proposals=queued_proposals,
+        queued_proposal_index=queued_proposal_index,
         pending_proposals=proposals,
     )
 
