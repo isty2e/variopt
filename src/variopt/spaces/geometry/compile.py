@@ -7,7 +7,7 @@ from ..composites.record_space import RecordSpace
 from ..composites.tuple_space import TupleSpace
 from ..permutation import PermutationSpace
 from ..scalar import CategoricalSpace, IntegerSpace, RealSpace
-from ..structured import StructuredLeafSpace, StructuredSearchSpace
+from ..structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
 from ..types import SpaceBoundaryValue, SpaceCandidateValue, SpaceScalarValue
 from .composites import (
     ArraySpaceGeometry,
@@ -36,6 +36,12 @@ BuiltinGeometrySpace: TypeAlias = (
     | RecordSpace
     | ArraySpace[SpaceBoundaryValue, SpaceCandidateValue]
 )
+_ArrayGeometrySpace: TypeAlias = ArraySpace[SpaceBoundaryValue, SpaceCandidateValue]
+
+
+def _is_array_geometry_space(space: object) -> TypeGuard[_ArrayGeometrySpace]:
+    """Return whether ``space`` is an array geometry owner."""
+    return isinstance(space, ArraySpace)
 
 
 def _is_builtin_geometry_space(
@@ -126,8 +132,9 @@ def generic_distance_parts(
         right_active = path in right_active_leaf_paths
         if left_active and right_active:
             shared_leaf_count += 1
-            squared_distance += normalized_squared_leaf_distance(
-                space=space.leaf_space_at_path(path),
+            squared_distance += _normalized_squared_leaf_distance_at_path(
+                space=space,
+                path=path,
                 left=space.leaf_value_at_validated_path(left, path),
                 right=space.leaf_value_at_validated_path(right, path),
             )
@@ -143,6 +150,26 @@ def generic_distance_parts(
         overlap_squared_distance=squared_distance,
         shared_leaf_count=shared_leaf_count,
         topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+    )
+
+
+def _normalized_squared_leaf_distance_at_path(
+    *,
+    space: StructuredSearchSpace[BoundaryT, CandidateT],
+    path: LeafPath,
+    left: SpaceCandidateValue,
+    right: SpaceCandidateValue,
+) -> float:
+    """Return a leaf distance using any stronger owner-space law at ``path``."""
+    if _path_has_permutation_owner(space, path):
+        if left == right:
+            return 0.0
+        return 1.0
+
+    return normalized_squared_leaf_distance(
+        space=space.leaf_space_at_path(path),
+        left=left,
+        right=right,
     )
 
 
@@ -193,6 +220,42 @@ def normalized_squared_leaf_distance(
 
     msg = f"unsupported structured leaf space for diversity: {type(space)!r}"
     raise TypeError(msg)
+
+
+def _path_has_permutation_owner(space: object, path: LeafPath) -> bool:
+    """Return whether ``path`` is owned by a nested permutation space."""
+    if isinstance(space, PermutationSpace):
+        _ = space.leaf_space_at_path(path)
+        return True
+
+    if isinstance(space, TupleSpace):
+        if len(path) == 0 or type(path[0]) is not int:
+            return False
+        child_index = path[0]
+        child_spaces = space.child_spaces
+        if child_index < 0 or child_index >= len(child_spaces):
+            return False
+        return _path_has_permutation_owner(child_spaces[child_index], path[1:])
+
+    if isinstance(space, RecordSpace):
+        if len(path) == 0 or not isinstance(path[0], str):
+            return False
+        field_name = path[0]
+        for name, child_space in space.fields:
+            if name == field_name:
+                return _path_has_permutation_owner(child_space, path[1:])
+        return False
+
+    if _is_array_geometry_space(space):
+        if len(path) == 0 or type(path[0]) is not int:
+            return False
+        element_index = path[0]
+        if element_index < 0 or element_index >= space.length:
+            return False
+        element_space: object = space.element_space
+        return _path_has_permutation_owner(element_space, path[1:])
+
+    return False
 
 
 def compile_builtin_structured_geometry(
@@ -329,7 +392,7 @@ def compile_builtin_child_space_geometry(
             return None
         return RecordSpaceGeometry(field_geometries=field_geometries)
 
-    element_space = space.element_space
+    element_space: object = space.element_space
     if isinstance(element_space, IntegerSpace):
         if (
             element_space.low == 0
