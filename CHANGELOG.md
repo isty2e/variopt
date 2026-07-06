@@ -71,9 +71,25 @@ format. Stability guarantees for the public surface are documented in the
   assimilation hook is no longer adapted by `Study`; override
   `tell_attempts(...)` directly, especially when recorded failures require
   proposal cleanup or partial-generation handling.
+- Native GA, clearing GA, species-conserving GA, and restricted-tournament GA
+  manual `ask(...)` / `tell(...)` loops now share
+  `variopt.algorithms.population.GenerationalGAOptimizerState` instead of
+  variant-local state classes such as `GAOptimizerState`,
+  `ClearingGAOptimizerState`, `SpeciesGAOptimizerState`, and
+  `RestrictedTournamentGAOptimizerState`. Import state artifacts from
+  `variopt.algorithms.population`; deep variant `state` modules are no longer
+  present. Code that inspected state internals should use
+  `buffered_member_buffer` instead of `buffered_members`, and should read
+  remaining queued proposals through `queued_proposals[queued_proposal_index:]`.
 
 ### Added
 
+- `variopt.algorithms.population` now exposes
+  `GenerationalGAOptimizerState`, `GenerationalGAMemberBuffer`,
+  `GenerationalGAPopulationMember`, and `GenerationalGAVariant` as supported
+  type-hint/runtime state artifacts for manual generational-GA `ask(...)` /
+  `tell(...)` loops. The state uses a queued-proposal cursor and immutable
+  member buffer to avoid repeated split-batch tuple copies.
 - Added `stop_at_checkpoint_boundary=True` for `Study.run(...)` and
   `Study.optimize(...)` so CSA runs can return the latest checkpoint-safe state
   when the budget ends or is exhausted inside an unsafe generation segment.

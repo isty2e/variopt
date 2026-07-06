@@ -24,8 +24,8 @@ from variopt.algorithms import (
     SpeciesConservingGeneticAlgorithmOptimizer,
     SpeciesGAProfile,
 )
-from variopt.algorithms.population.species_ga.state import (
-    SpeciesGAPopulationMember,
+from variopt.algorithms.population.generational_ga.state import (
+    GenerationalGAPopulationMember,
 )
 from variopt.diversity import DiversityMetric
 from variopt.evaluators import SequentialEvaluator
@@ -183,10 +183,14 @@ class TestableSpeciesGA(SpeciesConservingGeneticAlgorithmOptimizer[int, int]):
     def build_next_population_for_test(
         self,
         *,
-        parents: tuple[SpeciesGAPopulationMember[int], ...],
-        offspring: tuple[SpeciesGAPopulationMember[int], ...],
-    ) -> tuple[SpeciesGAPopulationMember[int], ...]:
-        return self._build_next_population(parents=parents, offspring=offspring)
+        parents: tuple[GenerationalGAPopulationMember[int], ...],
+        offspring: tuple[GenerationalGAPopulationMember[int], ...],
+    ) -> tuple[GenerationalGAPopulationMember[int], ...]:
+        return self._build_next_population(
+            parents=parents,
+            offspring=offspring,
+            random_state=self.create_initial_state().random_state,
+        ).population
 
 
 class EqualityHostileTestableSpeciesGA(
@@ -200,10 +204,20 @@ class EqualityHostileTestableSpeciesGA(
     def build_next_population_for_test(
         self,
         *,
-        parents: tuple[SpeciesGAPopulationMember[EqualityHostileCandidate], ...],
-        offspring: tuple[SpeciesGAPopulationMember[EqualityHostileCandidate], ...],
-    ) -> tuple[SpeciesGAPopulationMember[EqualityHostileCandidate], ...]:
-        return self._build_next_population(parents=parents, offspring=offspring)
+        parents: tuple[
+            GenerationalGAPopulationMember[EqualityHostileCandidate],
+            ...,
+        ],
+        offspring: tuple[
+            GenerationalGAPopulationMember[EqualityHostileCandidate],
+            ...,
+        ],
+    ) -> tuple[GenerationalGAPopulationMember[EqualityHostileCandidate], ...]:
+        return self._build_next_population(
+            parents=parents,
+            offspring=offspring,
+            random_state=self.create_initial_state().random_state,
+        ).population
 
 
 class SpeciesConservingGeneticAlgorithmOptimizerTests:
@@ -321,7 +335,7 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
             ),
         )
         clone_pool = tuple(
-            SpeciesGAPopulationMember(candidate=0, value=0.0, score=0.0)
+            GenerationalGAPopulationMember(candidate=0, value=0.0, score=0.0)
             for _ in range(8)
         )
 
@@ -347,7 +361,7 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
             ),
         )
         clone_pool = tuple(
-            SpeciesGAPopulationMember(
+            GenerationalGAPopulationMember(
                 candidate=EqualityHostileCandidate(0),
                 value=0.0,
                 score=0.0,
@@ -414,7 +428,7 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
             ),
         )
         pool = tuple(
-            SpeciesGAPopulationMember(candidate=candidate, value=score, score=score)
+            GenerationalGAPopulationMember(candidate=candidate, value=score, score=score)
             for candidate, score in ((0, 0.0), (1, 1.0), (2, 2.0), (10, 10.0))
         )
 

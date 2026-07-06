@@ -27,11 +27,8 @@ from variopt.algorithms import (
     SpeciesConservingGeneticAlgorithmOptimizer,
     SpeciesGAProfile,
 )
-from variopt.algorithms.population.clearing_ga.state import (
-    ClearingGAPopulationMember,
-)
-from variopt.algorithms.population.species_ga.state import (
-    SpeciesGAPopulationMember,
+from variopt.algorithms.population.generational_ga.state import (
+    GenerationalGAPopulationMember,
 )
 from variopt.diversity import DiversityMetric
 from variopt.evaluators import SequentialEvaluator
@@ -210,18 +207,22 @@ class TestableClearingGA(ClearingGeneticAlgorithmOptimizer[int, int]):
     def build_next_population_for_test(
         self,
         *,
-        parents: tuple[ClearingGAPopulationMember[int], ...],
-        offspring: tuple[ClearingGAPopulationMember[int], ...],
-    ) -> tuple[ClearingGAPopulationMember[int], ...]:
-        return self._build_next_population(parents=parents, offspring=offspring)
+        parents: tuple[GenerationalGAPopulationMember[int], ...],
+        offspring: tuple[GenerationalGAPopulationMember[int], ...],
+    ) -> tuple[GenerationalGAPopulationMember[int], ...]:
+        return self._build_next_population(
+            parents=parents,
+            offspring=offspring,
+            random_state=self.create_initial_state().random_state,
+        ).population
 
     def build_diverse_backfill_for_test(
         self,
         *,
-        selected_members: tuple[ClearingGAPopulationMember[int], ...],
-        overflow_members: tuple[ClearingGAPopulationMember[int], ...],
+        selected_members: tuple[GenerationalGAPopulationMember[int], ...],
+        overflow_members: tuple[GenerationalGAPopulationMember[int], ...],
         count: int,
-    ) -> tuple[ClearingGAPopulationMember[int], ...]:
+    ) -> tuple[GenerationalGAPopulationMember[int], ...]:
         return self._build_diverse_backfill(
             selected_members=selected_members,
             overflow_members=overflow_members,
@@ -241,15 +242,15 @@ class TestableEqualityHostileClearingGA(
         self,
         *,
         selected_members: tuple[
-            ClearingGAPopulationMember[EqualityHostileCandidate],
+            GenerationalGAPopulationMember[EqualityHostileCandidate],
             ...,
         ],
         overflow_members: tuple[
-            ClearingGAPopulationMember[EqualityHostileCandidate],
+            GenerationalGAPopulationMember[EqualityHostileCandidate],
             ...,
         ],
         count: int,
-    ) -> tuple[ClearingGAPopulationMember[EqualityHostileCandidate], ...]:
+    ) -> tuple[GenerationalGAPopulationMember[EqualityHostileCandidate], ...]:
         return self._build_diverse_backfill(
             selected_members=selected_members,
             overflow_members=overflow_members,
@@ -263,10 +264,14 @@ class TestableSpeciesGA(SpeciesConservingGeneticAlgorithmOptimizer[int, int]):
     def build_next_population_for_test(
         self,
         *,
-        parents: tuple[SpeciesGAPopulationMember[int], ...],
-        offspring: tuple[SpeciesGAPopulationMember[int], ...],
-    ) -> tuple[SpeciesGAPopulationMember[int], ...]:
-        return self._build_next_population(parents=parents, offspring=offspring)
+        parents: tuple[GenerationalGAPopulationMember[int], ...],
+        offspring: tuple[GenerationalGAPopulationMember[int], ...],
+    ) -> tuple[GenerationalGAPopulationMember[int], ...]:
+        return self._build_next_population(
+            parents=parents,
+            offspring=offspring,
+            random_state=self.create_initial_state().random_state,
+        ).population
 
 
 class ClearingGeneticAlgorithmOptimizerTests:
@@ -398,11 +403,11 @@ class ClearingGeneticAlgorithmOptimizerTests:
         )
 
         clearing_pool = tuple(
-            ClearingGAPopulationMember(candidate=value, value=float(value), score=float(value))
+            GenerationalGAPopulationMember(candidate=value, value=float(value), score=float(value))
             for value in (0, 1, 2, 6, 7, 10)
         )
         species_pool = tuple(
-            SpeciesGAPopulationMember(candidate=value, value=float(value), score=float(value))
+            GenerationalGAPopulationMember(candidate=value, value=float(value), score=float(value))
             for value in (0, 1, 2, 6, 7, 10)
         )
 
@@ -427,7 +432,7 @@ class ClearingGeneticAlgorithmOptimizerTests:
             mutation_operator=StepTowardZeroMutation(),
         )
         selected_members = tuple(
-            ClearingGAPopulationMember(
+            GenerationalGAPopulationMember(
                 candidate=value,
                 value=float(value),
                 score=float(value),
@@ -435,7 +440,7 @@ class ClearingGeneticAlgorithmOptimizerTests:
             for value in (0, 100)
         )
         overflow_members = tuple(
-            ClearingGAPopulationMember(
+            GenerationalGAPopulationMember(
                 candidate=value,
                 value=float(value),
                 score=float(value),
@@ -460,14 +465,14 @@ class ClearingGeneticAlgorithmOptimizerTests:
             mutation_operator=EqualityHostileMutation(),
         )
         selected_members = (
-            ClearingGAPopulationMember(
+            GenerationalGAPopulationMember(
                 candidate=EqualityHostileCandidate(coordinate=0, stable_id=0),
                 value=0.0,
                 score=0.0,
             ),
         )
         overflow_members = tuple(
-            ClearingGAPopulationMember(
+            GenerationalGAPopulationMember(
                 candidate=candidate,
                 value=float(candidate.coordinate),
                 score=float(candidate.coordinate),
@@ -495,9 +500,9 @@ class ClearingGeneticAlgorithmOptimizerTests:
             mutation_operator=StepTowardZeroMutation(),
         )
         overflow_members = (
-            ClearingGAPopulationMember(candidate=0, value=0.0, score=10.0),
-            ClearingGAPopulationMember(candidate=100, value=100.0, score=0.0),
-            ClearingGAPopulationMember(candidate=40, value=40.0, score=5.0),
+            GenerationalGAPopulationMember(candidate=0, value=0.0, score=10.0),
+            GenerationalGAPopulationMember(candidate=100, value=100.0, score=0.0),
+            GenerationalGAPopulationMember(candidate=40, value=40.0, score=5.0),
         )
 
         backfill = optimizer.build_diverse_backfill_for_test(
@@ -517,11 +522,11 @@ class ClearingGeneticAlgorithmOptimizerTests:
             profile=ClearingGAProfile(tournament_size=1),
         )
         selected_members = (
-            ClearingGAPopulationMember(candidate=100, value=100.0, score=0.0),
+            GenerationalGAPopulationMember(candidate=100, value=100.0, score=0.0),
         )
         overflow_members = (
-            ClearingGAPopulationMember(candidate=90, value=90.0, score=1.0),
-            ClearingGAPopulationMember(candidate=110, value=110.0, score=2.0),
+            GenerationalGAPopulationMember(candidate=90, value=90.0, score=1.0),
+            GenerationalGAPopulationMember(candidate=110, value=110.0, score=2.0),
         )
 
         backfill = optimizer.build_diverse_backfill_for_test(
@@ -540,11 +545,11 @@ class ClearingGeneticAlgorithmOptimizerTests:
             mutation_operator=StepTowardZeroMutation(),
         )
         selected_members = (
-            ClearingGAPopulationMember(candidate=0, value=0.0, score=0.0),
+            GenerationalGAPopulationMember(candidate=0, value=0.0, score=0.0),
         )
         overflow_members = (
-            ClearingGAPopulationMember(candidate=10, value=10.0, score=10.0),
-            ClearingGAPopulationMember(candidate=30, value=30.0, score=30.0),
+            GenerationalGAPopulationMember(candidate=10, value=10.0, score=10.0),
+            GenerationalGAPopulationMember(candidate=30, value=30.0, score=30.0),
         )
 
         backfill = optimizer.build_diverse_backfill_for_test(

@@ -1,7 +1,8 @@
 """Tests for the native genetic algorithm optimizer."""
 
+import copy
 from collections.abc import Sequence
-from typing import TypeVar
+from typing import TypeGuard, TypeVar
 
 import numpy as np
 import pytest
@@ -19,8 +20,9 @@ from variopt import (
     Proposal,
     UnsupportedEvaluationFailureError,
 )
-from variopt.algorithms.population.ga import (
+from variopt.algorithms.population import (
     GAProfile,
+    GenerationalGAOptimizerState,
     GeneticAlgorithmOptimizer,
 )
 from variopt.evaluators import SequentialEvaluator
@@ -35,6 +37,25 @@ def _requests(
 ) -> tuple[EvaluationRequest[CandidateT], ...]:
     """Lower proposal fixtures into canonical evaluation requests."""
     return tuple(EvaluationRequest(proposal=proposal) for proposal in proposals)
+
+
+def _is_integer_ga_state(
+    value: object,
+) -> TypeGuard[GenerationalGAOptimizerState[int]]:
+    """Return whether ``value`` is the integer GA state used in tests."""
+    return type(value) is GenerationalGAOptimizerState
+
+
+def _deepcopy_round_trip_state(
+    state: GenerationalGAOptimizerState[int],
+) -> GenerationalGAOptimizerState[int]:
+    """Round-trip a GA state through a detached object graph."""
+    round_tripped = copy.deepcopy(state)
+    if not _is_integer_ga_state(round_tripped):
+        msg = "round trip did not restore a generational GA state"
+        raise AssertionError(msg)
+
+    return round_tripped
 
 
 class SquareObjective(Objective[int]):
@@ -199,14 +220,124 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
 
         assert len(state.population) == 0
-        assert tuple(member.candidate for member in state.buffered_members) == (5, 4)
+        assert tuple(
+            member.candidate for member in state.buffered_member_buffer.materialize()
+        ) == (5, 4)
 
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
         state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
 
         assert tuple(member.candidate for member in state.population) == (2, 3, 4, 5)
-        assert len(state.buffered_members) == 0
+        assert state.buffered_member_buffer.member_count == 0
+
+    def test_optimizer_preserves_proposal_id_continuity_across_queue_slices(self) -> None:
+        optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=2)
+        assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-0", "ga-1")
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+
+        proposals, state = optimizer.ask(state, batch_size=2)
+        assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-2", "ga-3")
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+
+        proposals, state = optimizer.ask(state, batch_size=1)
+        assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-4",)
+        remaining_proposals = state.queued_proposals[state.queued_proposal_index :]
+        assert tuple(proposal.proposal_id for proposal in remaining_proposals) == (
+            "ga-5",
+            "ga-6",
+            "ga-7",
+        )
+
+    def test_optimizer_compacts_mostly_consumed_generation_queue(self) -> None:
+        optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+
+        proposals, state = optimizer.ask(state, batch_size=3)
+
+        assert tuple(proposal.proposal_id for proposal in proposals) == (
+            "ga-4",
+            "ga-5",
+            "ga-6",
+        )
+        assert state.queued_proposal_index == 0
+        assert tuple(proposal.proposal_id for proposal in state.queued_proposals) == (
+            "ga-7",
+        )
+
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        proposals, state = optimizer.ask(state, batch_size=1)
+
+        assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-7",)
+
+    def test_optimizer_rejects_ask_while_proposals_are_pending(self) -> None:
+        optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=1)
+
+        with pytest.raises(RuntimeError, match="cannot ask while proposals are still pending"):
+            _ = optimizer.ask(state, batch_size=1)
+
+        assert state.pending_proposals == proposals
+
+    def test_optimizer_rejects_reordered_observations_without_consuming_pending(self) -> None:
+        optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=2)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        reordered_observations = tuple(
+            outcome.observation
+            for outcome in reversed(outcomes)
+        )
+
+        with pytest.raises(ValueError, match="observations must align with pending proposal order"):
+            _ = optimizer.tell(state, reordered_observations)
+
+        assert state.pending_proposals == proposals
 
     def test_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
         optimizer = GeneticAlgorithmOptimizer(
@@ -231,6 +362,134 @@ class GeneticAlgorithmOptimizerTests:
             _ = optimizer.tell_attempts(state, attempts)
 
         assert state.pending_proposals == proposals
+
+    def test_optimizer_split_generation_matches_full_generation_rng_and_order(self) -> None:
+        split_optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=13,
+        )
+        full_optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=13,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        split_state = split_optimizer.create_initial_state()
+        full_state = full_optimizer.create_initial_state()
+        proposals, split_state = split_optimizer.ask(split_state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        split_state = split_optimizer.tell(
+            split_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+        proposals, full_state = full_optimizer.ask(full_state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        full_state = full_optimizer.tell(
+            full_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        split_proposals: list[Proposal[int]] = []
+        proposals, split_state = split_optimizer.ask(split_state, batch_size=1)
+        split_proposals.extend(proposals)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        split_state = split_optimizer.tell(
+            split_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+        proposals, split_state = split_optimizer.ask(split_state, batch_size=3)
+        split_proposals.extend(proposals)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        split_state = split_optimizer.tell(
+            split_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        full_proposals, full_state = full_optimizer.ask(full_state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(full_proposals))
+        full_state = full_optimizer.tell(
+            full_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        assert tuple(split_proposals) == full_proposals
+        assert split_state.random_state == full_state.random_state
+        assert split_state.proposal_index == full_state.proposal_index
+        assert split_state.generation_index == full_state.generation_index
+        assert split_state.population == full_state.population
+
+    def test_optimizer_partial_generation_round_trip_preserves_continuation(self) -> None:
+        split_optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=13,
+        )
+        full_optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            profile=GAProfile(mutation_probability=1.0, elite_count=0),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=13,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        split_state = split_optimizer.create_initial_state()
+        full_state = full_optimizer.create_initial_state()
+        proposals, split_state = split_optimizer.ask(split_state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        split_state = split_optimizer.tell(
+            split_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+        proposals, full_state = full_optimizer.ask(full_state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        full_state = full_optimizer.tell(
+            full_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        proposals, split_state = split_optimizer.ask(split_state, batch_size=1)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        split_state = split_optimizer.tell(
+            split_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+        assert split_state.queued_proposal_index == 1
+        assert split_state.buffered_member_buffer.member_count == 1
+
+        split_state = _deepcopy_round_trip_state(split_state)
+        proposals, split_state = split_optimizer.ask(split_state, batch_size=3)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        split_state = split_optimizer.tell(
+            split_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        full_proposals, full_state = full_optimizer.ask(full_state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(full_proposals))
+        full_state = full_optimizer.tell(
+            full_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        assert split_state.random_state == full_state.random_state
+        assert split_state.proposal_index == full_state.proposal_index
+        assert split_state.generation_index == full_state.generation_index
+        assert split_state.population == full_state.population
 
     def test_optimizer_applies_elitism_after_one_generation(self) -> None:
         optimizer = GeneticAlgorithmOptimizer(
@@ -258,7 +517,8 @@ class GeneticAlgorithmOptimizerTests:
         proposals, state = optimizer.ask(state, batch_size=1)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
         state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
-        assert tuple(proposal.candidate for proposal in state.queued_proposals) == (3,)
+        remaining_proposals = state.queued_proposals[state.queued_proposal_index :]
+        assert tuple(proposal.candidate for proposal in remaining_proposals) == (3,)
 
         proposals, state = optimizer.ask(state, batch_size=1)
         outcomes = evaluator.evaluate(problem, _requests(proposals))

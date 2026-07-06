@@ -1,10 +1,9 @@
 """Clearing genetic algorithm optimizer."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
-import numpy as np
 from typing_extensions import override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
@@ -12,24 +11,30 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from ....artifacts import Observation, Proposal
 from ....diversity import DiversityMetric
 from ....execution import (
-    EXACT_ASYNC_EXECUTION_MODEL,
-    SEQUENTIAL_EXECUTION_MODEL,
-    SYNC_BATCH_EXECUTION_MODEL,
     ExecutionModel,
 )
 from ....methods import RunMethod
 from ....operators import VariationOperator
-from ....randomness import (
-    RandomSeed,
-    RandomStateSnapshot,
-    random_state_choice_indices_without_replacement,
-)
+from ....randomness import RandomSeed, RandomStateSnapshot
 from ....sampling import CandidateSampler, SearchSpaceSampler
 from ....spaces import PermutationSpace, SearchSpace
 from ....typevars import CandidateT
+from ..generational_ga.lifecycle import (
+    GENERATIONAL_GA_EXECUTION_MODELS,
+    GenerationalGAGenerationCommit,
+    ask_generational_ga,
+    create_initial_generational_ga_state,
+    require_generational_ga_variant_state,
+    sort_generational_ga_population,
+    tell_generational_ga,
+)
+from ..generational_ga.state import (
+    GenerationalGAOptimizerState,
+    GenerationalGAPopulationMember,
+    GenerationalGAVariant,
+)
 from ..permutation.defaults import derive_permutation_variation_defaults
 from .profile import ClearingGAProfile, ClearingGAResolvedProfile
-from .state import ClearingGAOptimizerState, ClearingGAPopulationMember
 
 BoundaryT = TypeVar("BoundaryT")
 
@@ -37,7 +42,7 @@ BoundaryT = TypeVar("BoundaryT")
 @dataclass(frozen=True, slots=True)
 class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
     RunMethod[
-        ClearingGAOptimizerState[CandidateT],
+        GenerationalGAOptimizerState[CandidateT],
         Proposal[CandidateT],
         Observation[CandidateT],
     ],
@@ -177,16 +182,17 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         )
 
     @override
-    def create_initial_state(self) -> ClearingGAOptimizerState[CandidateT]:
+    def create_initial_state(self) -> GenerationalGAOptimizerState[CandidateT]:
         """Create the initial immutable optimizer state.
 
         Returns
         -------
-        ClearingGAOptimizerState[CandidateT]
+        GenerationalGAOptimizerState[CandidateT]
             State with initialized randomness and no observed population.
         """
-        return ClearingGAOptimizerState(
-            random_state=RandomStateSnapshot.from_seed(self.random_state),
+        return create_initial_generational_ga_state(
+            self.random_state,
+            variant=GenerationalGAVariant.CLEARING,
         )
 
     @override
@@ -198,21 +204,15 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         frozenset[ExecutionModel]
             Execution models accepted by the clearing-GA ask/tell contract.
         """
-        return frozenset(
-            {
-                SEQUENTIAL_EXECUTION_MODEL,
-                SYNC_BATCH_EXECUTION_MODEL,
-                EXACT_ASYNC_EXECUTION_MODEL,
-            },
-        )
+        return GENERATIONAL_GA_EXECUTION_MODELS
 
     @override
-    def is_exhausted(self, state: ClearingGAOptimizerState[CandidateT]) -> bool:
+    def is_exhausted(self, state: GenerationalGAOptimizerState[CandidateT]) -> bool:
         """Report whether the optimizer can emit more proposals.
 
         Parameters
         ----------
-        state : ClearingGAOptimizerState[CandidateT]
+        state : GenerationalGAOptimizerState[CandidateT]
             Optimizer state to inspect.
 
         Returns
@@ -220,27 +220,33 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         bool
             Always ``False`` for the current unbounded implementation.
         """
-        _ = state
+        require_generational_ga_variant_state(
+            state,
+            variant=GenerationalGAVariant.CLEARING,
+        )
         return False
 
     @override
     def ask(
         self,
-        state: ClearingGAOptimizerState[CandidateT],
+        state: GenerationalGAOptimizerState[CandidateT],
         batch_size: int = 1,
-    ) -> tuple[tuple[Proposal[CandidateT], ...], ClearingGAOptimizerState[CandidateT]]:
+    ) -> tuple[
+        tuple[Proposal[CandidateT], ...],
+        GenerationalGAOptimizerState[CandidateT],
+    ]:
         """Emit the next proposal batch and advanced optimizer state.
 
         Parameters
         ----------
-        state : ClearingGAOptimizerState[CandidateT]
+        state : GenerationalGAOptimizerState[CandidateT]
             Current immutable optimizer state.
         batch_size : int, default=1
             Maximum number of proposals to emit.
 
         Returns
         -------
-        tuple[tuple[Proposal[CandidateT], ...], ClearingGAOptimizerState[CandidateT]]
+        tuple[tuple[Proposal[CandidateT], ...], GenerationalGAOptimizerState[CandidateT]]
             Proposal batch together with the advanced immutable state.
 
         Raises
@@ -250,173 +256,32 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         RuntimeError
             Raised when outstanding proposals have not yet been observed.
         """
-        if batch_size <= 0:
-            msg = "batch_size must be positive"
-            raise ValueError(msg)
-
-        if len(state.pending_proposals) > 0:
-            msg = "cannot ask while proposals are still pending"
-            raise RuntimeError(msg)
-
-        if len(state.population) == 0:
-            return self._ask_initial_population(state, batch_size=batch_size)
-
-        next_state = state
-        if len(next_state.queued_proposals) == 0:
-            next_state = self._materialize_generation(next_state)
-
-        proposal_count = min(batch_size, len(next_state.queued_proposals))
-        proposals = next_state.queued_proposals[:proposal_count]
-        return proposals, replace(
-            next_state,
-            queued_proposals=next_state.queued_proposals[proposal_count:],
-            pending_proposals=proposals,
-        )
-
-    def _ask_initial_population(
-        self,
-        state: ClearingGAOptimizerState[CandidateT],
-        *,
-        batch_size: int,
-    ) -> tuple[tuple[Proposal[CandidateT], ...], ClearingGAOptimizerState[CandidateT]]:
-        remaining_population = self.population_size - len(state.buffered_members)
-        proposal_count = min(batch_size, remaining_population)
-        random_state = state.random_state.materialize()
-        candidates = tuple(
-            self.resolved_sampler.sample(random_state)
-            for _ in range(proposal_count)
-        )
-        next_random_state = RandomStateSnapshot.from_random_state(random_state)
-        proposals = tuple(
-            Proposal(
-                candidate=self._validated_candidate(candidate),
-                proposal_id=f"clearing-ga-{state.proposal_index + offset}",
-            )
-            for offset, candidate in enumerate(candidates)
-        )
-        return proposals, replace(
+        return ask_generational_ga(
+            self,
             state,
-            random_state=next_random_state,
-            proposal_index=state.proposal_index + len(proposals),
-            pending_proposals=proposals,
+            batch_size=batch_size,
+            proposal_id_prefix="clearing-ga-",
+            variant=GenerationalGAVariant.CLEARING,
         )
-
-    def _materialize_generation(
-        self,
-        state: ClearingGAOptimizerState[CandidateT],
-    ) -> ClearingGAOptimizerState[CandidateT]:
-        random_state = state.random_state.materialize()
-        proposals = tuple(
-            Proposal(
-                candidate=self._generate_child(
-                    population=state.population,
-                    random_state=random_state,
-                ),
-                proposal_id=f"clearing-ga-{state.proposal_index + offset}",
-            )
-            for offset in range(self.population_size)
-        )
-        next_random_state = RandomStateSnapshot.from_random_state(random_state)
-        return replace(
-            state,
-            random_state=next_random_state,
-            proposal_index=state.proposal_index + len(proposals),
-            queued_proposals=proposals,
-        )
-
-    def _generate_child(
-        self,
-        *,
-        population: tuple[ClearingGAPopulationMember[CandidateT], ...],
-        random_state: np.random.RandomState,
-    ) -> CandidateT:
-        child_candidate: CandidateT
-        crossover_operator = self.crossover_operator
-        if (
-            crossover_operator is not None
-            and float(random_state.random_sample())
-            < self.resolved_profile.crossover_probability
-        ):
-            parent_candidates = tuple(
-                population[index].candidate
-                for index in self._select_parent_indices(
-                    random_state=random_state,
-                    population=population,
-                    count=crossover_operator.arity,
-                )
-            )
-            child_candidate = crossover_operator.apply(parent_candidates, random_state)
-        else:
-            parent_index = self._select_parent_indices(
-                random_state=random_state,
-                population=population,
-                count=1,
-            )[0]
-            child_candidate = population[parent_index].candidate
-
-        mutation_operator = self.mutation_operator
-        if (
-            mutation_operator is not None
-            and float(random_state.random_sample())
-            < self.resolved_profile.mutation_probability
-        ):
-            child_candidate = mutation_operator.apply((child_candidate,), random_state)
-
-        return self._validated_candidate(child_candidate)
-
-    def _select_parent_indices(
-        self,
-        *,
-        random_state: np.random.RandomState,
-        population: tuple[ClearingGAPopulationMember[CandidateT], ...],
-        count: int,
-    ) -> tuple[int, ...]:
-        return tuple(
-            self._select_tournament_parent_index(
-                random_state=random_state,
-                population=population,
-            )
-            for _ in range(count)
-        )
-
-    def _select_tournament_parent_index(
-        self,
-        *,
-        random_state: np.random.RandomState,
-        population: tuple[ClearingGAPopulationMember[CandidateT], ...],
-    ) -> int:
-        tournament_indices = random_state_choice_indices_without_replacement(
-            random_state,
-            population_size=len(population),
-            count=self.resolved_profile.tournament_size,
-        )
-        return min(
-            tournament_indices,
-            key=lambda index: population[index].score,
-        )
-
-    def _validated_candidate(self, candidate: CandidateT) -> CandidateT:
-        self.space.validate(candidate)
-        return candidate
 
     @override
     def tell(
         self,
-        state: ClearingGAOptimizerState[CandidateT],
+        state: GenerationalGAOptimizerState[CandidateT],
         observations: Sequence[Observation[CandidateT]],
-    ) -> ClearingGAOptimizerState[CandidateT]:
+    ) -> GenerationalGAOptimizerState[CandidateT]:
         """Advance the optimizer state with one observed proposal batch.
 
         Parameters
         ----------
-        state : ClearingGAOptimizerState[CandidateT]
+        state : GenerationalGAOptimizerState[CandidateT]
             Current immutable optimizer state.
         observations : Sequence[Observation[CandidateT]]
             Observations aligned with the currently pending proposals.
 
         Returns
         -------
-        ClearingGAOptimizerState[CandidateT]
+        GenerationalGAOptimizerState[CandidateT]
             Updated immutable optimizer state after buffering or committing the
             observed members.
 
@@ -426,89 +291,25 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
             Raised when observation count or ordering does not match the
             pending proposals.
         """
-        observation_tuple = tuple(observations)
-        if len(observation_tuple) != len(state.pending_proposals):
-            msg = "observation count must match the number of pending proposals"
-            raise ValueError(msg)
-
-        for proposal, observation in zip(
-            state.pending_proposals,
-            observation_tuple,
-            strict=True,
-        ):
-            if observation.proposal != proposal:
-                msg = "observations must align with pending proposal order"
-                raise ValueError(msg)
-
-        new_members = tuple(
-            ClearingGAPopulationMember(
-                candidate=observation.candidate,
-                value=observation.value,
-                score=observation.score,
-            )
-            for observation in observation_tuple
-        )
-
-        buffered_members = state.buffered_members + new_members
-        next_state = replace(
+        return tell_generational_ga(
             state,
-            pending_proposals=(),
-            buffered_members=buffered_members,
-        )
-
-        if len(state.population) == 0:
-            return self._tell_initial_population(next_state)
-
-        return self._tell_generation(next_state)
-
-    def _tell_initial_population(
-        self,
-        state: ClearingGAOptimizerState[CandidateT],
-    ) -> ClearingGAOptimizerState[CandidateT]:
-        if len(state.buffered_members) < self.population_size:
-            return state
-
-        if len(state.buffered_members) != self.population_size:
-            msg = "initial population buffer exceeded population_size"
-            raise RuntimeError(msg)
-
-        return replace(
-            state,
-            population=self._sort_population(state.buffered_members),
-            buffered_members=(),
-        )
-
-    def _tell_generation(
-        self,
-        state: ClearingGAOptimizerState[CandidateT],
-    ) -> ClearingGAOptimizerState[CandidateT]:
-        if len(state.buffered_members) < self.population_size:
-            return state
-
-        if len(state.buffered_members) != self.population_size:
-            msg = "offspring buffer exceeded population_size"
-            raise RuntimeError(msg)
-
-        next_population = self._build_next_population(
-            parents=state.population,
-            offspring=state.buffered_members,
-        )
-        return replace(
-            state,
-            generation_index=state.generation_index + 1,
-            population=next_population,
-            buffered_members=(),
+            observations,
+            population_size=self.population_size,
+            build_next_population=self._build_next_population,
+            variant=GenerationalGAVariant.CLEARING,
         )
 
     def _build_next_population(
         self,
         *,
-        parents: tuple[ClearingGAPopulationMember[CandidateT], ...],
-        offspring: tuple[ClearingGAPopulationMember[CandidateT], ...],
-    ) -> tuple[ClearingGAPopulationMember[CandidateT], ...]:
-        candidate_pool = self._sort_population(parents + offspring)
-        selected_members: list[ClearingGAPopulationMember[CandidateT]] = []
-        cleared_members: list[ClearingGAPopulationMember[CandidateT]] = []
+        parents: tuple[GenerationalGAPopulationMember[CandidateT], ...],
+        offspring: tuple[GenerationalGAPopulationMember[CandidateT], ...],
+        random_state: RandomStateSnapshot,
+    ) -> GenerationalGAGenerationCommit[CandidateT]:
+        _ = random_state
+        candidate_pool = sort_generational_ga_population(parents + offspring)
+        selected_members: list[GenerationalGAPopulationMember[CandidateT]] = []
+        cleared_members: list[GenerationalGAPopulationMember[CandidateT]] = []
         for member in candidate_pool:
             if self._clearing_occupancy(member, selected_members) < self.resolved_profile.clearing_capacity:
                 selected_members.append(member)
@@ -516,19 +317,23 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
                 cleared_members.append(member)
 
         if len(selected_members) >= self.population_size:
-            return tuple(selected_members[: self.population_size])
+            return GenerationalGAGenerationCommit(
+                population=tuple(selected_members[: self.population_size]),
+            )
 
         next_population = tuple(selected_members) + self._build_diverse_backfill(
             selected_members=tuple(selected_members),
             overflow_members=tuple(cleared_members),
             count=self.population_size - len(selected_members),
         )
-        return self._sort_population(next_population)
+        return GenerationalGAGenerationCommit(
+            population=sort_generational_ga_population(next_population),
+        )
 
     def _clearing_occupancy(
         self,
-        member: ClearingGAPopulationMember[CandidateT],
-        selected_members: Sequence[ClearingGAPopulationMember[CandidateT]],
+        member: GenerationalGAPopulationMember[CandidateT],
+        selected_members: Sequence[GenerationalGAPopulationMember[CandidateT]],
     ) -> int:
         return sum(
             1
@@ -542,10 +347,10 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
     def _build_diverse_backfill(
         self,
         *,
-        selected_members: tuple[ClearingGAPopulationMember[CandidateT], ...],
-        overflow_members: tuple[ClearingGAPopulationMember[CandidateT], ...],
+        selected_members: tuple[GenerationalGAPopulationMember[CandidateT], ...],
+        overflow_members: tuple[GenerationalGAPopulationMember[CandidateT], ...],
         count: int,
-    ) -> tuple[ClearingGAPopulationMember[CandidateT], ...]:
+    ) -> tuple[GenerationalGAPopulationMember[CandidateT], ...]:
         if count <= 0 or len(overflow_members) == 0:
             return ()
 
@@ -585,8 +390,8 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
 
     def _minimum_distance_to_population(
         self,
-        member: ClearingGAPopulationMember[CandidateT],
-        population: Sequence[ClearingGAPopulationMember[CandidateT]],
+        member: GenerationalGAPopulationMember[CandidateT],
+        population: Sequence[GenerationalGAPopulationMember[CandidateT]],
     ) -> float:
         if len(population) == 0:
             return float("inf")
@@ -597,15 +402,4 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
                 other_member.candidate,
             )
             for other_member in population
-        )
-
-    @staticmethod
-    def _sort_population(
-        members: tuple[ClearingGAPopulationMember[CandidateT], ...],
-    ) -> tuple[ClearingGAPopulationMember[CandidateT], ...]:
-        return tuple(
-            sorted(
-                members,
-                key=lambda member: member.score,
-            )
         )
