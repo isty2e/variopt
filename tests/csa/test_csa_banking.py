@@ -1,5 +1,6 @@
 """Tests for CSA banking, score-model, and admission semantics."""
 
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal, cast
 
@@ -48,17 +49,27 @@ from variopt.algorithms.population.csa.banking.queries import (
     BankDistanceWorkspace,
     best_mean_niche_scores,
     crowding_aware_scores,
+    crowding_counts,
+    nearest_entry,
 )
 from variopt.algorithms.population.csa.banking.update.logic import (
     apply_bank_update_batch,
 )
+from variopt.algorithms.population.csa.optimizer import CSAOptimizer
 from variopt.algorithms.population.csa.progression.state import CSAProgressionState
 from variopt.algorithms.population.csa.scoring.acceptance_state import (
     CSAAcceptanceState,
 )
 from variopt.algorithms.population.csa.scoring.model_state import CSAScoreModelState
 from variopt.algorithms.population.csa.selection.state import SeedSelectionState
+from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.json_types import JSONValue
+from variopt.spaces import (
+    CategoricalSpace,
+    RecordCandidate,
+    RecordSpace,
+    SpaceBoundaryValue,
+)
 
 
 class CountingDistance(DiversityMetric[int]):
@@ -73,6 +84,20 @@ class CountingDistance(DiversityMetric[int]):
     def distance(self, left: int, right: int) -> float:
         self.call_count += 1
         return float(abs(left - right))
+
+
+class RejectingStructuredRecordMetric(
+    StructuredSpaceDiversityMetric[
+        Mapping[str, SpaceBoundaryValue] | RecordCandidate,
+        RecordCandidate,
+    ],
+):
+    """Structured metric subclass whose public distance path must be respected."""
+
+    @override
+    def distance(self, left: RecordCandidate, right: RecordCandidate) -> float:
+        """Raise when a caller bypasses the subclass distance contract."""
+        raise RuntimeError("custom structured distance used")
 
 
 class BankUpdatePolicyTests:
@@ -135,6 +160,141 @@ class BankUpdatePolicyTests:
         assert first_distance == 3.0
         assert second_distance == 3.0
         assert metric.call_count == 1
+
+    def test_distance_workspace_uses_structured_metric_for_canonical_entries(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        space = RecordSpace(
+            mode=CategoricalSpace(("a", "b")),
+            tier=CategoricalSpace((1, 2)),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        entries = (
+            BankEntry(
+                candidate=space.normalize({"mode": "a", "tier": 1}),
+                value=1.0,
+            ),
+            BankEntry(
+                candidate=space.normalize({"mode": "b", "tier": 2}),
+                value=2.0,
+            ),
+        )
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        def reject_public_distance(
+            _metric: StructuredSpaceDiversityMetric[
+                Mapping[str, SpaceBoundaryValue] | RecordCandidate,
+                RecordCandidate,
+            ],
+            _left: RecordCandidate,
+            _right: RecordCandidate,
+        ) -> float:
+            raise AssertionError("public distance path should not be called")
+
+        monkeypatch.setattr(
+            StructuredSpaceDiversityMetric,
+            "distance",
+            reject_public_distance,
+        )
+
+        distance = workspace.distance(0, 1)
+
+        assert distance == 1.0
+
+    def test_standalone_banking_queries_use_structured_metric_for_canonical_entries(
+        self,
+    ) -> None:
+        space = RecordSpace(
+            mode=CategoricalSpace(("a", "b")),
+            tier=CategoricalSpace((1, 2)),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        entries = (
+            BankEntry(
+                candidate=space.normalize({"mode": "a", "tier": 1}),
+                value=1.0,
+            ),
+            BankEntry(
+                candidate=space.normalize({"mode": "b", "tier": 1}),
+                value=2.0,
+            ),
+            BankEntry(
+                candidate=space.normalize({"mode": "b", "tier": 2}),
+                value=3.0,
+            ),
+        )
+        candidate = space.normalize({"mode": "b", "tier": 1})
+
+        counts = crowding_counts(
+            entries=entries,
+            diversity_metric=metric,
+            distance_cutoff=0.75,
+        )
+        nearest_index, nearest_distance = nearest_entry(
+            entries=entries,
+            candidate=candidate,
+            diversity_metric=metric,
+        )
+
+        assert counts == (1, 2, 1)
+        assert nearest_index == 1
+        assert nearest_distance == 0.0
+
+    def test_structured_metric_subclass_uses_public_distance_contract(self) -> None:
+        space = RecordSpace(
+            mode=CategoricalSpace(("a", "b")),
+            tier=CategoricalSpace((1, 2)),
+        )
+        metric = RejectingStructuredRecordMetric(space=space)
+        entries = (
+            BankEntry(
+                candidate=space.normalize({"mode": "a", "tier": 1}),
+                value=1.0,
+            ),
+            BankEntry(
+                candidate=space.normalize({"mode": "b", "tier": 2}),
+                value=2.0,
+            ),
+        )
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+        with pytest.raises(RuntimeError, match="custom structured distance"):
+            _ = workspace.distance(0, 1)
+
+    def test_csa_rejects_mismatched_builtin_structured_metric_space(self) -> None:
+        space = RecordSpace(mode=CategoricalSpace(("a", "b")))
+        metric = StructuredSpaceDiversityMetric(
+            space=RecordSpace(other=CategoricalSpace(("a", "b"))),
+        )
+
+        with pytest.raises(ValueError, match="diversity_metric space must match"):
+            _ = CSAOptimizer.from_space_defaults(
+                space=space,
+                diversity_metric=metric,
+                bank_capacity=2,
+                random_state=0,
+            )
+
+    def test_csa_tell_rejects_noncanonical_structured_observation_candidate(self) -> None:
+        space = RecordSpace(mode=CategoricalSpace((1, 2)))
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=2,
+            random_state=0,
+        )
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state)
+        proposal = proposals[0]
+        invalid_observation = Observation(
+            proposal=proposal,
+            candidate=RecordCandidate(entries=(("mode", True),)),
+            value=1.0,
+            score=1.0,
+        )
+
+        with pytest.raises(TypeError, match="declared choice type"):
+            _ = optimizer.tell(state, (invalid_observation,))
 
     def test_distance_workspace_self_distance_skips_metric(self) -> None:
         entries = (BankEntry(candidate=1, value=1.0),)

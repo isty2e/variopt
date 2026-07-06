@@ -65,8 +65,22 @@ class PermutationSpaceGeometry:
         left_permutation = normalize_permutation_values(left_tuple, size=self.space.size)
         right_permutation = normalize_permutation_values(right_tuple, size=self.space.size)
 
+        return self.distance_part_values_for_validated_candidates(
+            left_permutation,
+            right_permutation,
+        )
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical permutation candidates."""
+        if not isinstance(left, tuple) or not isinstance(right, tuple):
+            return self.distance_part_values(left, right)
+
         mismatch_count = 0.0
         for index in range(self.space.size):
-            if left_permutation[index] != right_permutation[index]:
+            if left[index] != right[index]:
                 mismatch_count += 1.0
         return (mismatch_count, self.space.size, 0)

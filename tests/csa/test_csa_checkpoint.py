@@ -1169,6 +1169,51 @@ class CSAOptimizerCheckpointTests:
         space.validate(restored_candidate)
         assert optimizer.state_to_dict(restored) == snapshot
 
+    def test_custom_checkpoint_decoder_must_return_valid_space_candidate(self) -> None:
+        space = RecordSpace(
+            x=RealSpace(0.0, 1.0),
+            depth=IntegerSpace(0, 5),
+        )
+        candidate = space.normalize({"x": 0.5, "depth": 2})
+        optimizer: CSAOptimizer[
+            Mapping[str, SpaceBoundaryValue] | RecordCandidate,
+            RecordCandidate,
+        ] = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            profile=CSAProfile(seed_count=1),
+            random_state=7,
+        )
+        entries = (
+            BankEntry(
+                candidate=candidate,
+                value=1.25,
+                proposal_id="csa-0",
+            ),
+        )
+        initial_state = optimizer.create_initial_state()
+        state = replace(
+            initial_state,
+            banking_state=replace(
+                initial_state.banking_state,
+                bank=Bank[RecordCandidate](capacity=4, entries=entries),
+                reference_bank=ReferenceBank[RecordCandidate](
+                    capacity=4,
+                    entries=entries,
+                ),
+            ),
+        )
+        snapshot = optimizer.state_to_dict(state)
+
+        def invalid_candidate_from_dict(_data: JSONValue) -> RecordCandidate:
+            return RecordCandidate(entries=(("depth", 2), ("x", 0.5)))
+
+        with pytest.raises(ValueError, match="record candidate keys"):
+            _ = optimizer.state_from_dict(
+                snapshot,
+                candidate_from_dict=invalid_candidate_from_dict,
+            )
+
     def test_nested_record_space_checkpoint_restore_preserves_record_candidates(
         self,
     ) -> None:

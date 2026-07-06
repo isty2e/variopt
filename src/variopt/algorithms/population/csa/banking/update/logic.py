@@ -22,7 +22,12 @@ from ..growth.logic import (
     should_attempt_remove_top,
     try_append_growth_entry,
 )
-from ..queries import BankDistanceWorkspace, crowded_indices, crowding_aware_scores
+from ..queries import (
+    BankDistanceWorkspace,
+    crowded_indices,
+    crowding_aware_scores,
+    validated_candidate_distance,
+)
 from .admission import admit_observation, replace_bank_entry
 from .policy import CSABankUpdatePolicy
 from .result import BankUpdateResult, changed_indices, significant_update_indices
@@ -322,7 +327,11 @@ def admit_full_bank_observation(
 
     entry_distances = tuple(
         require_valid_distance(
-            diversity_metric.distance(observation.candidate, entry.candidate),
+            validated_candidate_distance(
+                diversity_metric,
+                observation.candidate,
+                entry.candidate,
+            ),
         )
         for entry in bank.entries
     )

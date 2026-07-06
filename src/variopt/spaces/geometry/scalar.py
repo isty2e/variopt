@@ -86,6 +86,16 @@ class RealSpaceGeometry:
         """Return raw distance-part values for one real leaf."""
         return (self.squared_distance(left, right), 1, 0)
 
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical real candidates."""
+        if type(left) is not float or type(right) is not float:
+            return self.distance_part_values(left, right)
+        return (self.squared_distance_for_validated_candidates(left, right), 1, 0)
+
     def squared_distance(
         self,
         left: SpaceCandidateValue,
@@ -107,15 +117,27 @@ class RealSpaceGeometry:
             msg = "real candidate is outside the declared bounds"
             raise ValueError(msg)
 
+        return self.squared_distance_for_validated_candidates(
+            left_value,
+            right_value,
+        )
+
+    def squared_distance_for_validated_candidates(
+        self,
+        left: float,
+        right: float,
+    ) -> float:
+        """Return normalized squared distance for canonical real values."""
+
         if self.space.low == self.space.high:
             return 0.0
 
         if self.space.scale == "log":
             coordinate_span = log(self.space.high) - log(self.space.low)
-            leaf_distance = abs(log(left_value) - log(right_value)) / coordinate_span
+            leaf_distance = abs(log(left) - log(right)) / coordinate_span
         else:
             coordinate_span = self.space.high - self.space.low
-            leaf_distance = abs(left_value - right_value) / coordinate_span
+            leaf_distance = abs(left - right) / coordinate_span
 
         return leaf_distance * leaf_distance
 
@@ -175,6 +197,16 @@ class IntegerSpaceGeometry:
         """Return raw distance-part values for one integer leaf."""
         return (self.squared_distance(left, right), 1, 0)
 
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical integer candidates."""
+        if type(left) is not int or type(right) is not int:
+            return self.distance_part_values(left, right)
+        return (self.squared_distance_for_validated_candidates(left, right), 1, 0)
+
     def squared_distance(
         self,
         left: SpaceCandidateValue,
@@ -196,15 +228,27 @@ class IntegerSpaceGeometry:
             msg = "integer candidate is outside the declared bounds"
             raise ValueError(msg)
 
+        return self.squared_distance_for_validated_candidates(
+            left_value,
+            right_value,
+        )
+
+    def squared_distance_for_validated_candidates(
+        self,
+        left: int,
+        right: int,
+    ) -> float:
+        """Return normalized squared distance for canonical integer values."""
+
         if self.space.low == self.space.high:
             return 0.0
 
         if self.space.scale == "log":
             coordinate_span = log(float(self.space.high)) - log(float(self.space.low))
-            leaf_distance = abs(log(float(left_value)) - log(float(right_value))) / coordinate_span
+            leaf_distance = abs(log(float(left)) - log(float(right))) / coordinate_span
         else:
             coordinate_span = float(self.space.high - self.space.low)
-            leaf_distance = abs(float(left_value - right_value)) / coordinate_span
+            leaf_distance = abs(float(left - right)) / coordinate_span
 
         return leaf_distance * leaf_distance
 
@@ -299,9 +343,7 @@ class CategoricalSpaceGeometry:
                         raise TypeError(msg)
                     msg = "categorical candidate is not in the declared choices"
                     raise ValueError(msg)
-                if left_key == right_key:
-                    return 0.0
-                return 1.0
+                return self.squared_distance_for_validated_candidates(left, right)
 
         require_geometry_categorical_choice(
             space=self.space,
@@ -315,6 +357,14 @@ class CategoricalSpaceGeometry:
             equal_choice_values=equal_choice_values,
             value=right,
         )
+        return self.squared_distance_for_validated_candidates(left, right)
+
+    def squared_distance_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> float:
+        """Return categorical mismatch distance for canonical choices."""
         if left == right:
             return 0.0
         return 1.0
@@ -326,6 +376,14 @@ class CategoricalSpaceGeometry:
     ) -> tuple[float, int, int]:
         """Return raw distance-part values for one categorical leaf."""
         return (self.squared_distance(left, right), 1, 0)
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical categorical choices."""
+        return (self.squared_distance_for_validated_candidates(left, right), 1, 0)
 
 
 def categorical_choice_key(value: SpaceCandidateValue) -> CategoricalChoiceKey | None:

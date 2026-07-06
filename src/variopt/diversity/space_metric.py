@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic, TypeGuard, TypeVar
 
 from typing_extensions import override
 
@@ -16,14 +16,17 @@ from ..spaces.geometry.compile import (
 )
 from ..spaces.geometry.composites import (
     DistancePartValuesGeometry,
+    ValidatedDistancePartValuesGeometry,
     geometry_has_distance_part_values,
+    geometry_has_validated_distance_part_values,
 )
 from ..spaces.geometry.contracts import StructuredSpaceGeometry
-from ..spaces.types import SpaceCandidateValue
+from ..spaces.types import SpaceBoundaryValue, SpaceCandidateValue
 from .base import DiversityMetric
 
 BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
+MetricCandidateT = TypeVar("MetricCandidateT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +48,11 @@ class StructuredSpaceDiversityMetric(FrozenGenericSlotsCompat,
         init=False,
         repr=False,
     )
+    validated_part_values_geometry: ValidatedDistancePartValuesGeometry | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __post_init__(self) -> None:
         """Compile and cache any built-in structured geometry once."""
@@ -56,6 +64,16 @@ class StructuredSpaceDiversityMetric(FrozenGenericSlotsCompat,
             (
                 geometry
                 if geometry is not None and geometry_has_distance_part_values(geometry)
+                else None
+            ),
+        )
+        object.__setattr__(
+            self,
+            "validated_part_values_geometry",
+            (
+                geometry
+                if geometry is not None
+                and geometry_has_validated_distance_part_values(geometry)
                 else None
             ),
         )
@@ -106,6 +124,43 @@ class StructuredSpaceDiversityMetric(FrozenGenericSlotsCompat,
             shared_leaf_count=parts.shared_leaf_count,
             topology_mismatch_leaf_count=parts.topology_mismatch_leaf_count,
         )
+
+
+def supports_validated_structured_distance(
+    metric: DiversityMetric[MetricCandidateT],
+) -> TypeGuard[StructuredSpaceDiversityMetric[SpaceBoundaryValue, SpaceCandidateValue]]:
+    """Return whether ``metric`` exposes the internal validated path."""
+    return type(metric) is StructuredSpaceDiversityMetric
+
+
+def structured_distance_between_validated_candidates(
+    metric: StructuredSpaceDiversityMetric[BoundaryT, CandidateT],
+    left: CandidateT,
+    right: CandidateT,
+) -> float:
+    """Return structured distance for candidates validated by ``metric.space``.
+
+    This internal algebra is intentionally not part of the facade-level
+    diversity contract. Callers must own evidence that both candidates have
+    already crossed the matching space validation boundary.
+    """
+    validated_part_values_geometry = metric.validated_part_values_geometry
+    if validated_part_values_geometry is not None:
+        (
+            overlap_squared_distance,
+            shared_leaf_count,
+            topology_mismatch_leaf_count,
+        ) = validated_part_values_geometry.distance_part_values_for_validated_candidates(
+            left,
+            right,
+        )
+        return _distance_from_part_values(
+            overlap_squared_distance=overlap_squared_distance,
+            shared_leaf_count=shared_leaf_count,
+            topology_mismatch_leaf_count=topology_mismatch_leaf_count,
+        )
+
+    return metric.distance(left, right)
 
 
 def _distance_from_part_values(
