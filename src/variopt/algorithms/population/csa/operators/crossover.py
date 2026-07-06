@@ -22,6 +22,7 @@ def uniform_crossover(
     partner_parent: CandidateT,
     max_exchange_fraction: float,
     random_state: np.random.RandomState,
+    validate_parents: bool = True,
 ) -> CandidateT:
     """Copy a sampled subset of partner leaves into the primary parent.
 
@@ -37,6 +38,11 @@ def uniform_crossover(
         Maximum fraction of active leaves that may be copied from the partner.
     random_state : np.random.RandomState
         Random state used for leaf selection.
+    validate_parents : bool, default=True
+        Whether to validate parent candidates before using validated-space
+        accessors. CSA generation can disable this when parents come from its
+        already validated bank state and the caller still validates the emitted
+        child at the generation boundary.
 
     Returns
     -------
@@ -48,8 +54,9 @@ def uniform_crossover(
     ValueError
         If the parents do not expose matching active leaf topology.
     """
-    space.validate(primary_parent)
-    space.validate(partner_parent)
+    if validate_parents:
+        space.validate(primary_parent)
+        space.validate(partner_parent)
     editable_paths = space.active_leaf_paths_for_validated_candidate(primary_parent)
     partner_editable_paths = space.active_leaf_paths_for_validated_candidate(
         partner_parent,

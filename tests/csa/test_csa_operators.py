@@ -30,6 +30,9 @@ from variopt.algorithms.population.csa import (
     RandomResetMutation,
     UniformCrossover,
 )
+from variopt.algorithms.population.csa.engine.ask import (
+    apply_variation_operator_from_validated_parents,
+)
 from variopt.algorithms.population.csa.operators.editing import (
     sample_exchange_count,
 )
@@ -274,6 +277,33 @@ class OperatorTests:
         assert all(value in {1, 9} for value in child)
         assert child != (1, 1, 1, 1)
 
+    def test_uniform_crossover_validated_parent_fast_path_matches_apply(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=4)
+        operator = UniformCrossover(space=space, max_exchange_fraction=1.0)
+        parents = ((1, 2, 3, 4), (5, 6, 7, 8))
+
+        public_child = operator.apply(parents=parents, random_state=rng(5))
+        fast_child = operator.apply_from_validated_parents(
+            parents=parents,
+            random_state=rng(5),
+        )
+
+        assert fast_child == public_child
+
+    def test_csa_validated_parent_dispatch_matches_apply(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=4)
+        operator = UniformCrossover(space=space, max_exchange_fraction=1.0)
+        parents = ((1, 2, 3, 4), (5, 6, 7, 8))
+
+        public_child = operator.apply(parents=parents, random_state=rng(5))
+        dispatched_child = apply_variation_operator_from_validated_parents(
+            operator=operator,
+            parents=parents,
+            random_state=rng(5),
+        )
+
+        assert dispatched_child == public_child
+
     def test_bounded_mutation_on_paths_does_not_revalidate_per_leaf_read(self) -> None:
         validate_count = 0
 
@@ -317,6 +347,19 @@ class OperatorTests:
                 random_state=rng(0),
             )
 
+    def test_uniform_crossover_fast_path_rejects_active_topology_mismatch(self) -> None:
+        space = ConditionalNumericPairSpace(
+            head_space=IntegerSpace(0, 9),
+            tail_space=IntegerSpace(0, 9),
+        )
+        operator = UniformCrossover(space=space, max_exchange_fraction=1.0)
+
+        with pytest.raises(ValueError, match="matching active topology"):
+            _ = operator.apply_from_validated_parents(
+                parents=((0, 1), (1, 9)),
+                random_state=rng(0),
+            )
+
     def test_random_reset_mutation_resamples_within_bounds(self) -> None:
         space = ArraySpace(RealSpace(-1.0, 1.0), length=3)
         operator = RandomResetMutation(
@@ -333,6 +376,19 @@ class OperatorTests:
         assert all(-1.0 <= value <= 1.0 for value in child)
         assert child != (0.0, 0.0, 0.0)
 
+    def test_random_reset_validated_parent_fast_path_matches_apply(self) -> None:
+        space = ArraySpace(RealSpace(-1.0, 1.0), length=3)
+        operator = RandomResetMutation(space=space, max_exchange_fraction=1.0)
+        parents = ((0.0, 0.0, 0.0),)
+
+        public_child = operator.apply(parents=parents, random_state=rng(0))
+        fast_child = operator.apply_from_validated_parents(
+            parents=parents,
+            random_state=rng(0),
+        )
+
+        assert fast_child == public_child
+
     def test_bounded_mutation_stays_inside_declared_bounds(self) -> None:
         space = ArraySpace(RealSpace(-2.0, 2.0), length=3)
         operator = BoundedMutation(
@@ -347,6 +403,19 @@ class OperatorTests:
 
         assert len(child) == 3
         assert all(-2.0 <= value <= 2.0 for value in child)
+
+    def test_bounded_mutation_validated_parent_fast_path_matches_apply(self) -> None:
+        space = ArraySpace(RealSpace(-2.0, 2.0), length=3)
+        operator = BoundedMutation(space=space, max_perturbation_fraction=0.25)
+        parents = ((1.5, -1.5, 0.5),)
+
+        public_child = operator.apply(parents=parents, random_state=rng(1))
+        fast_child = operator.apply_from_validated_parents(
+            parents=parents,
+            random_state=rng(1),
+        )
+
+        assert fast_child == public_child
 
     def test_differential_evolution_variation_matches_expected_numeric_donor(self) -> None:
         space = ArraySpace(RealSpace(-10.0, 10.0), length=2)
