@@ -24,6 +24,20 @@ Every name exported through the `__all__` of one of these modules is part of
 the supported surface. See [API Surface](api.md) for the generated reference
 pages.
 
+### Population optimizer state artifacts
+
+`variopt.algorithms.population` exposes
+`GenerationalGAOptimizerState`, `GenerationalGAPopulationMember`, and
+`GenerationalGAVariant` as supported type-hint/runtime state artifacts for the
+native GA, clearing GA, species-conserving GA, and restricted-tournament GA
+manual `ask(...)` / `tell(...)` contracts. The concrete state is public because
+those optimizer methods return and accept it directly.
+
+The shared lifecycle implementation package
+`variopt.algorithms.population.generational_ga` remains an implementation
+module. Importing lifecycle helpers, generation-commit hooks, or execution
+model constants from that deep path is not part of the supported surface.
+
 ### Advanced CSA policy types
 
 `variopt.algorithms.population.csa` additionally exposes the concrete CSA

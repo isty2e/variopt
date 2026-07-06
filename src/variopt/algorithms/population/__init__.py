@@ -9,6 +9,11 @@ from .clearing_ga import ClearingGAProfile, ClearingGeneticAlgorithmOptimizer
 from .csa import CSAOptimizer, CSAProfile
 from .de import DEProfile, DifferentialEvolutionOptimizer
 from .ga import GAProfile, GeneticAlgorithmOptimizer
+from .generational_ga.state import (
+    GenerationalGAOptimizerState,
+    GenerationalGAPopulationMember,
+    GenerationalGAVariant,
+)
 from .permutation import InversionMutation, OrderCrossover, SwapMutation
 from .restricted_tournament_ga import (
     RestrictedTournamentGAProfile,
@@ -28,6 +33,9 @@ __all__ = [
     "DifferentialEvolutionOptimizer",
     "GAProfile",
     "GeneticAlgorithmOptimizer",
+    "GenerationalGAOptimizerState",
+    "GenerationalGAPopulationMember",
+    "GenerationalGAVariant",
     "InversionMutation",
     "OrderCrossover",
     "RestrictedTournamentGAProfile",
