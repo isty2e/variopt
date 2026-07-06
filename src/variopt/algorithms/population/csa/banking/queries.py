@@ -6,6 +6,11 @@ from typing import ClassVar, Generic, Protocol, TypeVar
 
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
+from .....diversity.space_metric import (
+    structured_distance_between_validated_candidates,
+    supports_validated_structured_distance,
+)
+from .....spaces.structured import require_space_candidate_value
 from .....typevars import CandidateT
 from .update.policy import CSANicheQualityPolicy
 
@@ -156,7 +161,8 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         left_entry = self.entries[key[0]]
         right_entry = self.entries[key[1]]
         distance = require_valid_distance(
-            self.diversity_metric.distance(
+            validated_candidate_distance(
+                self.diversity_metric,
                 left_entry.candidate,
                 right_entry.candidate,
             ),
@@ -225,7 +231,11 @@ def nearest_entry(
 
     for index, entry in enumerate(entries):
         distance = require_valid_distance(
-            diversity_metric.distance(candidate, entry.candidate)
+            validated_candidate_distance(
+                diversity_metric,
+                candidate,
+                entry.candidate,
+            )
         )
         if nearest_distance is None or distance < nearest_distance:
             nearest_index = index
@@ -351,13 +361,46 @@ def crowding_counts(
     for left_index, left_entry in enumerate(entries[:-1]):
         for right_index, right_entry in enumerate(entries[left_index + 1 :], start=left_index + 1):
             distance = require_valid_distance(
-                diversity_metric.distance(left_entry.candidate, right_entry.candidate),
+                validated_candidate_distance(
+                    diversity_metric,
+                    left_entry.candidate,
+                    right_entry.candidate,
+                ),
             )
             if distance < distance_cutoff:
                 counts[left_index] += 1
                 counts[right_index] += 1
 
     return tuple(counts)
+
+
+def validated_candidate_distance(
+    diversity_metric: DiversityMetric[CandidateT],
+    left: CandidateT,
+    right: CandidateT,
+) -> float:
+    """Return distance for candidates already admitted through CSA validation.
+
+    CSA bank candidates originate from pending proposals that were validated
+    when emitted or restored. Structured metrics can therefore use their
+    validated-candidate geometry path here; non-structured metrics keep the
+    public ``DiversityMetric`` contract.
+    """
+    if supports_validated_structured_distance(diversity_metric):
+        left_value = require_space_candidate_value(
+            left,
+            operation="CSA validated structured distance",
+        )
+        right_value = require_space_candidate_value(
+            right,
+            operation="CSA validated structured distance",
+        )
+        return structured_distance_between_validated_candidates(
+            diversity_metric,
+            left_value,
+            right_value,
+        )
+    return diversity_metric.distance(left, right)
 
 
 def crowding_aware_scores(

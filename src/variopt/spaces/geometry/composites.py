@@ -1,9 +1,10 @@
 """Built-in composite structured-space geometry implementations."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import log
 from typing import Protocol, TypeGuard
 
+from ..composites import RecordCandidate
 from ..scalar import IntegerSpace, RealSpace
 from ..types import SpaceCandidateValue
 from .contracts import StructuredSpaceGeometry
@@ -35,6 +36,18 @@ class DistancePartValuesGeometry(StructuredSpaceGeometry, Protocol):
         ...
 
 
+class ValidatedDistancePartValuesGeometry(DistancePartValuesGeometry, Protocol):
+    """Internal geometry shape for already validated canonical candidates."""
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw distance-part values without repeating public validation."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class TupleSpaceGeometry:
     """Fast geometry for one heterogeneous tuple space.
@@ -49,6 +62,19 @@ class TupleSpaceGeometry:
 
     arity: int
     child_geometries: tuple[StructuredSpaceGeometry, ...]
+    categorical_child_geometries: tuple[CategoricalSpaceGeometry, ...] | None = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Cache the closed all-categorical child geometry view, when present."""
+        object.__setattr__(
+            self,
+            "categorical_child_geometries",
+            collect_categorical_geometries(self.child_geometries),
+        )
 
     def distance_parts(
         self,
@@ -121,7 +147,70 @@ class TupleSpaceGeometry:
                     child_squared_distance,
                     child_shared_leaf_count,
                     child_topology_mismatch_leaf_count,
-                ) = child_geometry.distance_part_values(left_value, right_value)
+                ) = child_geometry.distance_part_values(
+                    left_value,
+                    right_value,
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+                continue
+            child_parts = child_geometry.distance_parts(
+                left_value,
+                right_value,
+            )
+            squared_distance += child_parts.overlap_squared_distance
+            shared_leaf_count += child_parts.shared_leaf_count
+            topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
+        return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical tuple candidates."""
+        if not isinstance(left, tuple) or not isinstance(right, tuple):
+            return self.distance_part_values(left, right)
+
+        categorical_child_geometries = self.categorical_child_geometries
+        if categorical_child_geometries is not None:
+            mismatch_count = 0.0
+            for index, child_geometry in enumerate(categorical_child_geometries):
+                mismatch_count += child_geometry.squared_distance_for_validated_candidates(
+                    left[index],
+                    right[index],
+                )
+            return (mismatch_count, self.arity, 0)
+
+        squared_distance = 0.0
+        shared_leaf_count = 0
+        topology_mismatch_leaf_count = 0
+        for index, child_geometry in enumerate(self.child_geometries):
+            left_value = left[index]
+            right_value = right[index]
+            if isinstance(child_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = child_geometry.distance_part_values_for_validated_candidates(
+                    left_value,
+                    right_value,
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+                continue
+            if geometry_has_validated_distance_part_values(child_geometry):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = child_geometry.distance_part_values_for_validated_candidates(
+                    left_value,
+                    right_value,
+                )
                 squared_distance += child_squared_distance
                 shared_leaf_count += child_shared_leaf_count
                 topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
@@ -147,6 +236,21 @@ class RecordSpaceGeometry:
     """
 
     field_geometries: tuple[tuple[str, StructuredSpaceGeometry], ...]
+    categorical_field_geometries: (
+        tuple[tuple[str, CategoricalSpaceGeometry], ...] | None
+    ) = field(
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Cache the closed all-categorical field geometry view, when present."""
+        object.__setattr__(
+            self,
+            "categorical_field_geometries",
+            collect_categorical_field_geometries(self.field_geometries),
+        )
 
     def distance_parts(
         self,
@@ -205,16 +309,19 @@ class RecordSpaceGeometry:
         ):
             msg = "record candidate keys must exactly match the declared fields"
             raise ValueError(msg)
+        for index, (name, _child_geometry) in enumerate(self.field_geometries):
+            left_name = left_entries[index][0]
+            right_name = right_entries[index][0]
+            if left_name != name or right_name != name:
+                msg = "record candidate keys must exactly match the declared fields"
+                raise ValueError(msg)
 
         squared_distance = 0.0
         shared_leaf_count = 0
         topology_mismatch_leaf_count = 0
-        for index, (name, child_geometry) in enumerate(self.field_geometries):
-            left_name, left_value = left_entries[index]
-            right_name, right_value = right_entries[index]
-            if left_name != name or right_name != name:
-                msg = "record candidate keys must exactly match the declared fields"
-                raise ValueError(msg)
+        for index, (_name, child_geometry) in enumerate(self.field_geometries):
+            left_value = left_entries[index][1]
+            right_value = right_entries[index][1]
             if isinstance(child_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
                 squared_distance += child_geometry.squared_distance(
                     left_value,
@@ -227,7 +334,74 @@ class RecordSpaceGeometry:
                     child_squared_distance,
                     child_shared_leaf_count,
                     child_topology_mismatch_leaf_count,
-                ) = child_geometry.distance_part_values(left_value, right_value)
+                ) = child_geometry.distance_part_values(
+                    left_value,
+                    right_value,
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+                continue
+            child_parts = child_geometry.distance_parts(
+                left_value,
+                right_value,
+            )
+            squared_distance += child_parts.overlap_squared_distance
+            shared_leaf_count += child_parts.shared_leaf_count
+            topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
+        return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical record candidates."""
+        if not isinstance(left, RecordCandidate) or not isinstance(right, RecordCandidate):
+            return self.distance_part_values(left, right)
+
+        left_entries = left.entries
+        right_entries = right.entries
+        categorical_field_geometries = self.categorical_field_geometries
+        if categorical_field_geometries is not None:
+            mismatch_count = 0.0
+            for index, (_name, child_geometry) in enumerate(
+                categorical_field_geometries
+            ):
+                mismatch_count += child_geometry.squared_distance_for_validated_candidates(
+                    left_entries[index][1],
+                    right_entries[index][1],
+                )
+            return (mismatch_count, len(categorical_field_geometries), 0)
+
+        squared_distance = 0.0
+        shared_leaf_count = 0
+        topology_mismatch_leaf_count = 0
+        for index, (_name, child_geometry) in enumerate(self.field_geometries):
+            left_value = left_entries[index][1]
+            right_value = right_entries[index][1]
+            if isinstance(child_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = child_geometry.distance_part_values_for_validated_candidates(
+                    left_value,
+                    right_value,
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+                continue
+            if geometry_has_validated_distance_part_values(child_geometry):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = child_geometry.distance_part_values_for_validated_candidates(
+                    left_value,
+                    right_value,
+                )
                 squared_distance += child_squared_distance
                 shared_leaf_count += child_shared_leaf_count
                 topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
@@ -348,6 +522,59 @@ class ArraySpaceGeometry:
             topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
         return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
 
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical homogeneous array candidates."""
+        if not isinstance(left, tuple) or not isinstance(right, tuple):
+            return self.distance_part_values(left, right)
+
+        squared_distance = 0.0
+        shared_leaf_count = 0
+        topology_mismatch_leaf_count = 0
+        element_geometry = self.element_geometry
+        if isinstance(element_geometry, _SCALAR_LEAF_GEOMETRY_TYPES):
+            for index in range(self.length):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = element_geometry.distance_part_values_for_validated_candidates(
+                    left[index],
+                    right[index],
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+            return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
+
+        if geometry_has_validated_distance_part_values(element_geometry):
+            for index in range(self.length):
+                (
+                    child_squared_distance,
+                    child_shared_leaf_count,
+                    child_topology_mismatch_leaf_count,
+                ) = element_geometry.distance_part_values_for_validated_candidates(
+                    left[index],
+                    right[index],
+                )
+                squared_distance += child_squared_distance
+                shared_leaf_count += child_shared_leaf_count
+                topology_mismatch_leaf_count += child_topology_mismatch_leaf_count
+            return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
+
+        for index in range(self.length):
+            child_parts = element_geometry.distance_parts(
+                left[index],
+                right[index],
+            )
+            squared_distance += child_parts.overlap_squared_distance
+            shared_leaf_count += child_parts.shared_leaf_count
+            topology_mismatch_leaf_count += child_parts.topology_mismatch_leaf_count
+        return (squared_distance, shared_leaf_count, topology_mismatch_leaf_count)
+
 
 @dataclass(frozen=True, slots=True)
 class BinaryArraySpaceGeometry:
@@ -428,10 +655,24 @@ class BinaryArraySpaceGeometry:
             msg = "binary array candidate length does not match the declared length"
             raise ValueError(msg)
 
+        return self.distance_part_values_for_validated_candidates(
+            left_tuple,
+            right_tuple,
+        )
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical binary integer arrays."""
+        if not isinstance(left, tuple) or not isinstance(right, tuple):
+            return self.distance_part_values(left, right)
+
         mismatch_count = 0.0
         for index in range(self.length):
-            left_value = left_tuple[index]
-            right_value = right_tuple[index]
+            left_value = left[index]
+            right_value = right[index]
             if type(left_value) is not int or type(right_value) is not int:
                 msg = "binary-array diversity requires canonical integer candidates"
                 raise TypeError(msg)
@@ -512,11 +753,25 @@ class IntegerArraySpaceGeometry:
             msg = "integer array candidate length does not match the declared length"
             raise ValueError(msg)
 
+        return self.distance_part_values_for_validated_candidates(
+            left_tuple,
+            right_tuple,
+        )
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical integer arrays."""
+        if not isinstance(left, tuple) or not isinstance(right, tuple):
+            return self.distance_part_values(left, right)
+
         element_space = self.element_space
         if element_space.low == element_space.high:
             for index in range(self.length):
-                left_value = left_tuple[index]
-                right_value = right_tuple[index]
+                left_value = left[index]
+                right_value = right[index]
                 if type(left_value) is not int or type(right_value) is not int:
                     msg = "integer-array diversity requires canonical integer candidates"
                     raise TypeError(msg)
@@ -534,8 +789,8 @@ class IntegerArraySpaceGeometry:
         if element_space.scale == "log":
             coordinate_span = log(float(element_space.high)) - log(float(element_space.low))
             for index in range(self.length):
-                left_value = left_tuple[index]
-                right_value = right_tuple[index]
+                left_value = left[index]
+                right_value = right[index]
                 if type(left_value) is not int or type(right_value) is not int:
                     msg = "integer-array diversity requires canonical integer candidates"
                     raise TypeError(msg)
@@ -553,8 +808,8 @@ class IntegerArraySpaceGeometry:
 
         coordinate_span = float(element_space.high - element_space.low)
         for index in range(self.length):
-            left_value = left_tuple[index]
-            right_value = right_tuple[index]
+            left_value = left[index]
+            right_value = right[index]
             if type(left_value) is not int or type(right_value) is not int:
                 msg = "integer-array diversity requires canonical integer candidates"
                 raise TypeError(msg)
@@ -640,15 +895,29 @@ class RealArraySpaceGeometry:
             msg = "real array candidate length does not match the declared length"
             raise ValueError(msg)
 
+        return self.distance_part_values_for_validated_candidates(
+            left_tuple,
+            right_tuple,
+        )
+
+    def distance_part_values_for_validated_candidates(
+        self,
+        left: SpaceCandidateValue,
+        right: SpaceCandidateValue,
+    ) -> tuple[float, int, int]:
+        """Return raw part values for canonical real arrays."""
+        if not isinstance(left, tuple) or not isinstance(right, tuple):
+            return self.distance_part_values(left, right)
+
         element_space = self.element_space
         if element_space.low == element_space.high:
             for index in range(self.length):
                 left_value = require_geometry_real_candidate(
-                    value=left_tuple[index],
+                    value=left[index],
                     message="real-array diversity requires numeric left leaf values",
                 )
                 right_value = require_geometry_real_candidate(
-                    value=right_tuple[index],
+                    value=right[index],
                     message="real-array diversity requires numeric right leaf values",
                 )
                 if (
@@ -666,11 +935,11 @@ class RealArraySpaceGeometry:
             coordinate_span = log(element_space.high) - log(element_space.low)
             for index in range(self.length):
                 left_value = require_geometry_real_candidate(
-                    value=left_tuple[index],
+                    value=left[index],
                     message="real-array diversity requires numeric left leaf values",
                 )
                 right_value = require_geometry_real_candidate(
-                    value=right_tuple[index],
+                    value=right[index],
                     message="real-array diversity requires numeric right leaf values",
                 )
                 if (
@@ -688,11 +957,11 @@ class RealArraySpaceGeometry:
         coordinate_span = element_space.high - element_space.low
         for index in range(self.length):
             left_value = require_geometry_real_candidate(
-                value=left_tuple[index],
+                value=left[index],
                 message="real-array diversity requires numeric left leaf values",
             )
             right_value = require_geometry_real_candidate(
-                value=right_tuple[index],
+                value=right[index],
                 message="real-array diversity requires numeric right leaf values",
             )
             if (
@@ -723,12 +992,45 @@ _DISTANCE_PART_VALUES_GEOMETRY_TYPES = (
     PermutationSpaceGeometry,
 )
 
+_VALIDATED_DISTANCE_PART_VALUES_GEOMETRY_TYPES = _DISTANCE_PART_VALUES_GEOMETRY_TYPES
+
 
 def geometry_has_distance_part_values(
     geometry: StructuredSpaceGeometry,
 ) -> TypeGuard[DistancePartValuesGeometry]:
     """Return whether a concrete built-in geometry exposes raw part values."""
     return isinstance(geometry, _DISTANCE_PART_VALUES_GEOMETRY_TYPES)
+
+
+def geometry_has_validated_distance_part_values(
+    geometry: StructuredSpaceGeometry,
+) -> TypeGuard[ValidatedDistancePartValuesGeometry]:
+    """Return whether a built-in geometry exposes a validated-candidate path."""
+    return isinstance(geometry, _VALIDATED_DISTANCE_PART_VALUES_GEOMETRY_TYPES)
+
+
+def collect_categorical_geometries(
+    geometries: tuple[StructuredSpaceGeometry, ...],
+) -> tuple[CategoricalSpaceGeometry, ...] | None:
+    """Return categorical geometries when every child is categorical."""
+    collected: list[CategoricalSpaceGeometry] = []
+    for geometry in geometries:
+        if not isinstance(geometry, CategoricalSpaceGeometry):
+            return None
+        collected.append(geometry)
+    return tuple(collected)
+
+
+def collect_categorical_field_geometries(
+    geometries: tuple[tuple[str, StructuredSpaceGeometry], ...],
+) -> tuple[tuple[str, CategoricalSpaceGeometry], ...] | None:
+    """Return categorical field geometries when every record field is categorical."""
+    collected: list[tuple[str, CategoricalSpaceGeometry]] = []
+    for name, geometry in geometries:
+        if not isinstance(geometry, CategoricalSpaceGeometry):
+            return None
+        collected.append((name, geometry))
+    return tuple(collected)
 
 
 def collect_child_geometries(

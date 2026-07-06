@@ -19,6 +19,9 @@ from variopt import (
     TupleSpace,
 )
 from variopt.diversity import StructuredSpaceDiversityMetric
+from variopt.diversity.space_metric import (
+    structured_distance_between_validated_candidates,
+)
 from variopt.spaces import (
     LeafPath,
     RecordCandidate,
@@ -539,9 +542,14 @@ class StructuredSpaceDiversityMetricTests:
         assert geometry is not None
         assert metric.geometry == geometry
         assert metric.part_values_geometry is None
+        assert metric.validated_part_values_geometry is None
         assert distance_parts(space, left, right) == compiled_parts
         assert approx_equal(
             math.sqrt(0.125),
+            metric.distance(left, right),
+        )
+        assert approx_equal(
+            structured_distance_between_validated_candidates(metric, left, right),
             metric.distance(left, right),
         )
 
@@ -554,12 +562,170 @@ class StructuredSpaceDiversityMetricTests:
 
         assert metric.geometry is not None
         assert metric.part_values_geometry is metric.geometry
+        assert metric.validated_part_values_geometry is metric.geometry
         left = space.normalize({"depth": 1, "mode": "a"})
         right = space.normalize({"depth": 3, "mode": "b"})
         assert approx_equal(
             metric.distance(left, right),
             math.sqrt((0.25 + 1.0) / 2.0),
         )
+
+    def test_validated_record_distance_matches_public_distance(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 5),
+            mode=CategoricalSpace(("a", "b")),
+            rate=RealSpace(0.0, 10.0),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize({"depth": 1, "mode": "a", "rate": 0.0})
+        right = space.normalize({"depth": 3, "mode": "b", "rate": 5.0})
+
+        public_distance = metric.distance(left, right)
+        validated_distance = structured_distance_between_validated_candidates(
+            metric,
+            left,
+            right,
+        )
+
+        assert approx_equal(validated_distance, public_distance)
+
+    def test_validated_tuple_distance_matches_public_nested_distance(self) -> None:
+        space = TupleSpace(
+            CategoricalSpace(("left", "right")),
+            TupleSpace(IntegerSpace(0, 4), CategoricalSpace((b"a", b"b"))),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize(("left", (0, b"a")))
+        right = space.normalize(("right", (2, b"b")))
+
+        public_distance = metric.distance(left, right)
+        validated_distance = structured_distance_between_validated_candidates(
+            metric,
+            left,
+            right,
+        )
+
+        assert approx_equal(validated_distance, public_distance)
+
+    def test_validated_mixed_tuple_distance_matches_public_distance(self) -> None:
+        space = TupleSpace(
+            TupleSpace(CategoricalSpace(("a", "b")), CategoricalSpace(("a", "b"))),
+            RealSpace(0.0, 10.0),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize((("a", "a"), 0.0))
+        right = space.normalize((("b", "a"), 5.0))
+
+        public_distance = metric.distance(left, right)
+        validated_distance = structured_distance_between_validated_candidates(
+            metric,
+            left,
+            right,
+        )
+
+        assert approx_equal(validated_distance, public_distance)
+
+    def test_all_categorical_record_validated_distance_preserves_exact_types(self) -> None:
+        space = RecordSpace(
+            integer_choice=CategoricalSpace((1, 2)),
+            float_choice=CategoricalSpace((1.0, 2.0)),
+            bytes_choice=CategoricalSpace((b"a", b"b")),
+            bool_choice=CategoricalSpace((False, True)),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize(
+            {
+                "integer_choice": 1,
+                "float_choice": 1.0,
+                "bytes_choice": b"a",
+                "bool_choice": False,
+            },
+        )
+        right = space.normalize(
+            {
+                "integer_choice": 2,
+                "float_choice": 2.0,
+                "bytes_choice": b"a",
+                "bool_choice": True,
+            },
+        )
+
+        public_distance = metric.distance(left, right)
+        validated_distance = structured_distance_between_validated_candidates(
+            metric,
+            left,
+            right,
+        )
+
+        assert approx_equal(public_distance, math.sqrt(3.0 / 4.0))
+        assert approx_equal(validated_distance, public_distance)
+
+    def test_all_categorical_tuple_validated_distance_handles_one_field(self) -> None:
+        space = TupleSpace(CategoricalSpace(("only", "other")))
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize(("only",))
+        right = space.normalize(("other",))
+
+        validated_distance = structured_distance_between_validated_candidates(
+            metric,
+            left,
+            right,
+        )
+
+        assert validated_distance == 1.0
+
+    def test_public_all_categorical_distance_rejects_noncanonical_types(self) -> None:
+        space = RecordSpace(
+            integer_choice=CategoricalSpace((1, 2)),
+            float_choice=CategoricalSpace((1.0, 2.0)),
+            bytes_choice=CategoricalSpace((b"a", b"b")),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        canonical = space.normalize(
+            {
+                "integer_choice": 1,
+                "float_choice": 1.0,
+                "bytes_choice": b"a",
+            },
+        )
+        bool_for_integer = RecordCandidate(
+            entries=(
+                ("integer_choice", True),
+                ("float_choice", 1.0),
+                ("bytes_choice", b"a"),
+            ),
+        )
+        int_for_float = RecordCandidate(
+            entries=(
+                ("integer_choice", 1),
+                ("float_choice", 1),
+                ("bytes_choice", b"a"),
+            ),
+        )
+        bytearray_for_bytes = RecordCandidate(
+            entries=(
+                ("integer_choice", 1),
+                ("float_choice", 1.0),
+                ("bytes_choice", bytearray(b"a")),
+            ),
+        )
+
+        with pytest.raises(TypeError, match="declared choice type"):
+            _ = metric.distance(bool_for_integer, canonical)
+        with pytest.raises(TypeError, match="declared choice type"):
+            _ = metric.distance(int_for_float, canonical)
+        with pytest.raises(TypeError, match="declared choice type"):
+            _ = metric.distance(bytearray_for_bytes, canonical)
+
+    def test_categorical_space_rejects_equal_choices_with_different_types(self) -> None:
+        with pytest.raises(ValueError, match="choices must be unique"):
+            _ = CategoricalSpace((1, 1.0))
+
+    def test_empty_composite_spaces_are_rejected_before_geometry_compilation(self) -> None:
+        with pytest.raises(ValueError, match="TupleSpace requires at least one"):
+            _ = TupleSpace()
+        with pytest.raises(ValueError, match="RecordSpace requires at least one"):
+            _ = RecordSpace()
 
     def test_generic_geometry_returns_distance_parts_for_active_topology_mismatch(self) -> None:
         space = ConditionalBranchSpace(

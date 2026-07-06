@@ -791,6 +791,9 @@ class CSAOptimizer(
         ) = None,
     ) -> CSAEngineState[CandidateT]:
         """Advance CSA state with optional explicit local-displacement paths."""
+        for observation in observations:
+            self.space.validate(observation.candidate)
+
         local_displacement_leaf_path_inference: (
             Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
         ) = None

@@ -132,6 +132,10 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- CSA bank distance queries now use the structured validated-candidate geometry
+  path after the optimizer validates observed candidates at the `tell(...)`
+  boundary, avoiding repeated public distance validation in canonical bank hot
+  loops.
 - `Trace(events=...)` now copies mutable event sequences into the immutable
   tuple form used by terminal artifacts, matching the other run-artifact
   constructors.
