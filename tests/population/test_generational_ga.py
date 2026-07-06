@@ -13,6 +13,7 @@ from variopt import (
     Problem,
     Proposal,
 )
+from variopt.algorithms.population.clearing_ga import ClearingGeneticAlgorithmOptimizer
 from variopt.algorithms.population.ga import GAProfile, GeneticAlgorithmOptimizer
 from variopt.algorithms.population.generational_ga.lifecycle import (
     GenerationalGAGenerationCommit,
@@ -25,6 +26,14 @@ from variopt.algorithms.population.generational_ga.state import (
     GenerationalGAPopulationMember,
     GenerationalGAVariant,
 )
+from variopt.algorithms.population.restricted_tournament_ga import (
+    RestrictedTournamentGAProfile,
+    RestrictedTournamentGeneticAlgorithmOptimizer,
+)
+from variopt.algorithms.population.species_ga import (
+    SpeciesConservingGeneticAlgorithmOptimizer,
+)
+from variopt.diversity import DiversityMetric
 from variopt.evaluators import SequentialEvaluator
 from variopt.operators import VariationOperator
 from variopt.randomness import RandomStateSnapshot
@@ -83,6 +92,14 @@ class StepTowardZeroMutation(VariationOperator[int]):
         if parent <= 0:
             return 0
         return parent - 1
+
+
+class IntegerDistance(DiversityMetric[int]):
+    """Absolute integer distance for GA variant ownership tests."""
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        return float(abs(left - right))
 
 
 class TruncatingGenerationCommitter:
@@ -232,6 +249,64 @@ class GenerationalGALifecycleTests:
                 clearing_state,
                 (),
             )
+
+    def test_is_exhausted_rejects_state_owned_by_another_ga_variant(self) -> None:
+        native_optimizer = GeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        clearing_optimizer = ClearingGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        species_optimizer = SpeciesConservingGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+        restricted_optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=RestrictedTournamentGAProfile(
+                restricted_tournament_window_size=4,
+            ),
+            sampler=CyclingIntegerSampler((5, 4, 3, 2)),
+            random_state=0,
+        )
+
+        native_state = native_optimizer.create_initial_state()
+        clearing_state = clearing_optimizer.create_initial_state()
+        species_state = species_optimizer.create_initial_state()
+        restricted_state = restricted_optimizer.create_initial_state()
+
+        assert native_optimizer.is_exhausted(native_state) is False
+        assert clearing_optimizer.is_exhausted(clearing_state) is False
+        assert species_optimizer.is_exhausted(species_state) is False
+        assert restricted_optimizer.is_exhausted(restricted_state) is False
+
+        with pytest.raises(ValueError, match="state variant does not match"):
+            _ = native_optimizer.is_exhausted(clearing_state)
+
+        with pytest.raises(ValueError, match="state variant does not match"):
+            _ = clearing_optimizer.is_exhausted(native_state)
+
+        with pytest.raises(ValueError, match="state variant does not match"):
+            _ = species_optimizer.is_exhausted(native_state)
+
+        with pytest.raises(ValueError, match="state variant does not match"):
+            _ = restricted_optimizer.is_exhausted(native_state)
 
     def test_tell_rejects_wrong_size_generation_commit(self) -> None:
         optimizer = GeneticAlgorithmOptimizer(

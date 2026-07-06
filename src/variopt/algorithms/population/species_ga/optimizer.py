@@ -24,6 +24,7 @@ from ..generational_ga.lifecycle import (
     GenerationalGAGenerationCommit,
     ask_generational_ga,
     create_initial_generational_ga_state,
+    require_generational_ga_variant_state,
     sort_generational_ga_population,
     tell_generational_ga,
 )
@@ -219,7 +220,10 @@ class SpeciesConservingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         bool
             Always ``False`` for the current unbounded implementation.
         """
-        _ = state
+        require_generational_ga_variant_state(
+            state,
+            variant=GenerationalGAVariant.SPECIES,
+        )
         return False
 
     @override
