@@ -23,8 +23,8 @@ from variopt.algorithms import (
     RestrictedTournamentGAProfile,
     RestrictedTournamentGeneticAlgorithmOptimizer,
 )
-from variopt.algorithms.population.restricted_tournament_ga.state import (
-    RestrictedTournamentGAPopulationMember,
+from variopt.algorithms.population.generational_ga.state import (
+    GenerationalGAPopulationMember,
 )
 from variopt.artifacts import Observation, Proposal
 from variopt.diversity import DiversityMetric
@@ -153,10 +153,10 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
         state = replace(
             initial_state,
             population=(
-                RestrictedTournamentGAPopulationMember(candidate=0, value=0.0, score=0.0),
-                RestrictedTournamentGAPopulationMember(candidate=10, value=100.0, score=100.0),
-                RestrictedTournamentGAPopulationMember(candidate=20, value=400.0, score=400.0),
-                RestrictedTournamentGAPopulationMember(candidate=30, value=900.0, score=900.0),
+                GenerationalGAPopulationMember(candidate=0, value=0.0, score=0.0),
+                GenerationalGAPopulationMember(candidate=10, value=100.0, score=100.0),
+                GenerationalGAPopulationMember(candidate=20, value=400.0, score=400.0),
+                GenerationalGAPopulationMember(candidate=30, value=900.0, score=900.0),
             ),
             pending_proposals=(
                 Proposal(candidate=9, proposal_id="rt-ga-0"),
@@ -179,6 +179,103 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
 
         assert next_state.generation_index == 1
         assert tuple(member.candidate for member in next_state.population) == (0, 9, 15, 29)
+
+    def test_optimizer_preserves_proposal_ids_and_queue_slicing(self) -> None:
+        optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=RestrictedTournamentGAProfile(
+                mutation_probability=1.0,
+                restricted_tournament_window_size=4,
+            ),
+            sampler=CyclingIntegerSampler((9, 8, 1, 0)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=4)
+        assert tuple(proposal.proposal_id for proposal in proposals) == (
+            "restricted-tournament-ga-0",
+            "restricted-tournament-ga-1",
+            "restricted-tournament-ga-2",
+            "restricted-tournament-ga-3",
+        )
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+
+        proposals, state = optimizer.ask(state, batch_size=1)
+        assert tuple(proposal.proposal_id for proposal in proposals) == (
+            "restricted-tournament-ga-4",
+        )
+        assert tuple(proposal.proposal_id for proposal in state.queued_proposals) == (
+            "restricted-tournament-ga-5",
+            "restricted-tournament-ga-6",
+            "restricted-tournament-ga-7",
+        )
+
+    def test_optimizer_rejects_pending_and_misaligned_observations(self) -> None:
+        optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=RestrictedTournamentGAProfile(restricted_tournament_window_size=4),
+            sampler=CyclingIntegerSampler((9, 8, 1, 0)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=2)
+        with pytest.raises(RuntimeError, match="cannot ask while proposals are still pending"):
+            _ = optimizer.ask(state, batch_size=1)
+
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        reversed_observations = tuple(
+            outcome.observation
+            for outcome in reversed(outcomes)
+        )
+        with pytest.raises(ValueError, match="observations must align with pending proposal order"):
+            _ = optimizer.tell(state, reversed_observations)
+
+        assert state.pending_proposals == proposals
+
+    def test_generation_commit_advances_replacement_rng_stream(self) -> None:
+        optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(
+            space=IntegerSpace(0, 10),
+            population_size=4,
+            diversity_metric=IntegerDistance(),
+            mutation_operator=StepTowardZeroMutation(),
+            profile=RestrictedTournamentGAProfile(
+                mutation_probability=1.0,
+                restricted_tournament_window_size=4,
+            ),
+            sampler=CyclingIntegerSampler((9, 8, 1, 0)),
+            random_state=0,
+        )
+        problem = Problem(space=IntegerSpace(0, 10), objective=SquareObjective())
+        evaluator = SequentialEvaluator[int, int]()
+
+        state = optimizer.create_initial_state()
+        proposals, state = optimizer.ask(state, batch_size=4)
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+
+        proposals, issued_state = optimizer.ask(state, batch_size=4)
+        issued_random_state = issued_state.random_state
+        outcomes = evaluator.evaluate(problem, _requests(proposals))
+        next_state = optimizer.tell(
+            issued_state,
+            tuple(outcome.observation for outcome in outcomes),
+        )
+
+        assert next_state.generation_index == 1
+        assert next_state.random_state != issued_random_state
 
     def test_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
         optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(

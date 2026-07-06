@@ -7,6 +7,7 @@ import variopt.algorithms.population.clearing_ga as clearing_ga_algorithms
 import variopt.algorithms.population.csa as csa_algorithms
 import variopt.algorithms.population.de as de_algorithms
 import variopt.algorithms.population.ga as ga_algorithms
+import variopt.algorithms.population.generational_ga as generational_ga_algorithms
 import variopt.algorithms.population.permutation as permutation_algorithms
 import variopt.algorithms.population.restricted_tournament_ga as restricted_tournament_ga_algorithms
 import variopt.algorithms.population.species_ga as species_ga_algorithms
@@ -31,6 +32,20 @@ class PopulationFacadeExportTests:
         assert population_algorithms.ClearingGeneticAlgorithmOptimizer is clearing_ga_algorithms.ClearingGeneticAlgorithmOptimizer
         assert population_algorithms.RestrictedTournamentGAProfile is restricted_tournament_ga_algorithms.RestrictedTournamentGAProfile
         assert population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer is restricted_tournament_ga_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+
+        internal_names = (
+            "GENERATIONAL_GA_EXECUTION_MODELS",
+            "GenerationalGAGenerationCommit",
+            "GenerationalGAOptimizerState",
+            "GenerationalGAPopulationMember",
+            "ask_generational_ga",
+            "create_initial_generational_ga_state",
+            "sort_generational_ga_population",
+            "tell_generational_ga",
+        )
+        assert not hasattr(generational_ga_algorithms, "__all__")
+        assert all(name not in population_algorithms.__all__ for name in internal_names)
+        assert all(not hasattr(population_algorithms, name) for name in internal_names)
 
     def test_root_algorithms_facade_remains_convenience_reexport(self) -> None:
         assert root_algorithms.DEProfile is population_algorithms.DEProfile
