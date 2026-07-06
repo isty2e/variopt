@@ -12,6 +12,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .....json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_finite_float,
     require_json_int,
     require_json_list,
@@ -99,14 +100,14 @@ class BankEntry(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        value = data.get("value")
+        value = require_json_field(data, "value")
         finite_value = require_json_finite_float(value, field_name="value")
         proposal_id = require_json_optional_str(
-            data.get("proposal_id"),
+            require_json_field(data, "proposal_id"),
             field_name="proposal_id",
         )
         return cls(
-            candidate=candidate_from_dict(data.get("candidate")),
+            candidate=candidate_from_dict(require_json_field(data, "candidate")),
             value=finite_value,
             proposal_id=proposal_id,
         )
@@ -189,8 +190,14 @@ class Bank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        capacity = require_json_int(data.get("capacity"), field_name="capacity")
-        raw_entries = require_json_list(data.get("entries"), field_name="entries")
+        capacity = require_json_int(
+            require_json_field(data, "capacity"),
+            field_name="capacity",
+        )
+        raw_entries = require_json_list(
+            require_json_field(data, "entries"),
+            field_name="entries",
+        )
         entries: list[BankEntry[CandidateT]] = []
         for raw_position, raw_entry in enumerate(raw_entries):
             entry_data = require_json_mapping(

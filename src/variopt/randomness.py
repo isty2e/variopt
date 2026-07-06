@@ -13,6 +13,7 @@ from typing_extensions import Self
 from .json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_finite_float,
     require_json_int,
     require_json_str,
@@ -346,15 +347,24 @@ class RandomStateSnapshot:
         TypeError
             If the supplied mapping carries invalid field types.
         """
-        algorithm = require_json_str(data.get("algorithm"), field_name="algorithm")
-        key_hex = require_json_str(data.get("key_hex"), field_name="key_hex")
-        position = require_json_int(data.get("position"), field_name="position")
+        algorithm = require_json_str(
+            require_json_field(data, "algorithm"),
+            field_name="algorithm",
+        )
+        key_hex = require_json_str(
+            require_json_field(data, "key_hex"),
+            field_name="key_hex",
+        )
+        position = require_json_int(
+            require_json_field(data, "position"),
+            field_name="position",
+        )
         has_gaussian = require_json_int(
-            data.get("has_gaussian"),
+            require_json_field(data, "has_gaussian"),
             field_name="has_gaussian",
         )
         cached_gaussian = require_json_finite_float(
-            data.get("cached_gaussian"),
+            require_json_field(data, "cached_gaussian"),
             field_name="cached_gaussian",
         )
         try:

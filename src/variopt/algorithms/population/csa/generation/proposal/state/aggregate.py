@@ -9,6 +9,7 @@ from typing_extensions import Self
 from .......json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_int,
     require_json_list,
     require_json_mapping,
@@ -140,30 +141,30 @@ class CSAProposalState:
             If the snapshot attempts to restore pending attributions.
         """
         raw_pending_attributions = require_json_list(
-            data.get("pending_attributions"),
+            require_json_field(data, "pending_attributions"),
             field_name="pending_attributions",
         )
         if len(raw_pending_attributions) != 0:
             msg = "proposal-state checkpoints require an empty pending attribution queue"
             raise ValueError(msg)
         raw_family_stats = require_json_list(
-            data.get("family_stats"),
+            require_json_field(data, "family_stats"),
             field_name="family_stats",
         )
         raw_leaf_stats = require_json_list(
-            data.get("leaf_stats"),
+            require_json_field(data, "leaf_stats"),
             field_name="leaf_stats",
         )
         raw_local_displacement_leaf_stats = require_json_list(
-            data.get("local_displacement_leaf_stats"),
+            require_json_field(data, "local_displacement_leaf_stats"),
             field_name="local_displacement_leaf_stats",
         )
         raw_numeric_covariance_stats = require_json_list(
-            data.get("numeric_covariance_stats"),
+            require_json_field(data, "numeric_covariance_stats"),
             field_name="numeric_covariance_stats",
         )
         update_index = require_json_int(
-            data.get("update_index"),
+            require_json_field(data, "update_index"),
             field_name="update_index",
         )
         family_stats: list[ProposalFamilyStat] = []

@@ -15,6 +15,7 @@ from .....diversity import DiversityMetric
 from .....json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_mapping,
     require_json_optional_finite_float,
 )
@@ -94,7 +95,9 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
     def __post_init__(self) -> None:
         """Normalize the optional adaptive-potential state at ingress."""
-        if self.biased_potential_max is not None and not isfinite(self.biased_potential_max):
+        if self.biased_potential_max is not None and not isfinite(
+            self.biased_potential_max
+        ):
             msg = "biased_potential_max must be finite"
             raise ValueError(msg)
 
@@ -153,10 +156,13 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             If the snapshot carries invalid field types.
         """
         biased_potential_max = require_json_optional_finite_float(
-            data.get("biased_potential_max"),
+            require_json_field(data, "biased_potential_max"),
             field_name="biased_potential_max",
         )
-        raw_adaptive_potential_state = data.get("adaptive_potential_state")
+        raw_adaptive_potential_state = require_json_field(
+            data,
+            "adaptive_potential_state",
+        )
 
         adaptive_potential_state = None
         if raw_adaptive_potential_state is not None:
@@ -312,7 +318,9 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         )
         if biased_sigma2 is not None and self.biased_potential_max is not None:
             bias_sum = 0.0
-            for entry_score, distance in zip(bank_real_scores, entry_distances, strict=False):
+            for entry_score, distance in zip(
+                bank_real_scores, entry_distances, strict=False
+            ):
                 if entry_score <= observation.score:
                     bias_sum += exp(-(distance**2) / biased_sigma2)
             shaped_score += self.biased_potential_max * bias_sum
@@ -357,10 +365,7 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Comparison-ready bank scores after injecting the trial-specific
             biased-potential term.
         """
-        if (
-            scored_bank.biased_sigma2 is None
-            or self.biased_potential_max is None
-        ):
+        if scored_bank.biased_sigma2 is None or self.biased_potential_max is None:
             return scored_bank.shaped_scores
 
         adjusted_scores = list(scored_bank.shaped_scores)
@@ -412,8 +417,7 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             return base_score
 
         return base_score + (
-            self.biased_potential_max
-            * exp(-(entry_distance**2) / biased_sigma2)
+            self.biased_potential_max * exp(-(entry_distance**2) / biased_sigma2)
         )
 
     def bump_trial(self, trial: ScoredTrial[CandidateT]) -> Self:

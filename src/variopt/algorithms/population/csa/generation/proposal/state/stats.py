@@ -9,6 +9,7 @@ from typing_extensions import Self
 from .......json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_finite_float,
     require_json_int,
     require_json_int_or_str,
@@ -175,25 +176,25 @@ class ProposalNumericSubspaceCovarianceStat:
         TypeError
             If the snapshot carries invalid field types.
         """
-        raw_leaf_paths = data.get("leaf_paths")
+        raw_leaf_paths = require_json_field(data, "leaf_paths")
         observation_count = require_json_int(
-            data.get("observation_count"),
+            require_json_field(data, "observation_count"),
             field_name="observation_count",
         )
         discounted_weight = require_json_finite_float(
-            data.get("discounted_weight"),
+            require_json_field(data, "discounted_weight"),
             field_name="discounted_weight",
         )
         raw_displacement_sum = require_json_list(
-            data.get("discounted_displacement_sum"),
+            require_json_field(data, "discounted_displacement_sum"),
             field_name="discounted_displacement_sum",
         )
         raw_outer_product_sum = require_json_list(
-            data.get("discounted_outer_product_sum"),
+            require_json_field(data, "discounted_outer_product_sum"),
             field_name="discounted_outer_product_sum",
         )
         last_update_index = require_json_int(
-            data.get("last_update_index"),
+            require_json_field(data, "last_update_index"),
             field_name="last_update_index",
         )
 
@@ -549,17 +550,20 @@ class ProposalFamilyStat:
         TypeError
             If the snapshot carries invalid field types.
         """
-        family_key = require_json_str(data.get("family_key"), field_name="family_key")
+        family_key = require_json_str(
+            require_json_field(data, "family_key"),
+            field_name="family_key",
+        )
         observation_count = require_json_int(
-            data.get("observation_count"),
+            require_json_field(data, "observation_count"),
             field_name="observation_count",
         )
         discounted_score_credit = require_json_finite_float(
-            data.get("discounted_score_credit"),
+            require_json_field(data, "discounted_score_credit"),
             field_name="discounted_score_credit",
         )
         last_update_index = require_json_int(
-            data.get("last_update_index"),
+            require_json_field(data, "last_update_index"),
             field_name="last_update_index",
         )
         return cls(
@@ -721,23 +725,26 @@ class ProposalLeafStat:
             If the snapshot carries invalid field types.
         """
         observation_count = require_json_int(
-            data.get("observation_count"),
+            require_json_field(data, "observation_count"),
             field_name="observation_count",
         )
         discounted_score_credit = require_json_finite_float(
-            data.get("discounted_score_credit"),
+            require_json_field(data, "discounted_score_credit"),
             field_name="discounted_score_credit",
         )
         last_update_index = require_json_int(
-            data.get("last_update_index"),
+            require_json_field(data, "last_update_index"),
             field_name="last_update_index",
         )
         recent_failure_streak = require_json_int(
-            data.get("recent_failure_streak"),
+            require_json_field(data, "recent_failure_streak"),
             field_name="recent_failure_streak",
         )
         return cls(
-            path=_leaf_path_from_json(data.get("path"), field_name="path"),
+            path=_leaf_path_from_json(
+                require_json_field(data, "path"),
+                field_name="path",
+            ),
             observation_count=observation_count,
             discounted_score_credit=discounted_score_credit,
             last_update_index=last_update_index,

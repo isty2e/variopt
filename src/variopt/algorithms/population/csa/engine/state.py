@@ -13,6 +13,7 @@ from .....artifacts import Proposal
 from .....json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_int,
     require_json_mapping,
     require_json_str,
@@ -274,8 +275,14 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ValueError
             If the snapshot format or version is unsupported.
         """
-        format_name = require_json_str(data.get("format"), field_name="format")
-        version = require_json_int(data.get("version"), field_name="version")
+        format_name = require_json_str(
+            require_json_field(data, "format"),
+            field_name="format",
+        )
+        version = require_json_int(
+            require_json_field(data, "version"),
+            field_name="version",
+        )
         if format_name != _CSA_ENGINE_STATE_FORMAT:
             msg = "unsupported CSA checkpoint format"
             raise ValueError(msg)
@@ -283,31 +290,31 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "unsupported CSA checkpoint version"
             raise ValueError(msg)
         proposal_index = require_json_int(
-            data.get("proposal_index"),
+            require_json_field(data, "proposal_index"),
             field_name="proposal_index",
         )
         random_state_data = require_json_mapping(
-            data.get("random_state"),
+            require_json_field(data, "random_state"),
             field_name="random_state",
         )
         banking_state_data = require_json_mapping(
-            data.get("banking_state"),
+            require_json_field(data, "banking_state"),
             field_name="banking_state",
         )
         progression_state_data = require_json_mapping(
-            data.get("progression_state"),
+            require_json_field(data, "progression_state"),
             field_name="progression_state",
         )
         selection_state_data = require_json_mapping(
-            data.get("selection_state"),
+            require_json_field(data, "selection_state"),
             field_name="selection_state",
         )
         proposal_state_data = require_json_mapping(
-            data.get("proposal_state"),
+            require_json_field(data, "proposal_state"),
             field_name="proposal_state",
         )
         scoring_state_data = require_json_mapping(
-            data.get("scoring_state"),
+            require_json_field(data, "scoring_state"),
             field_name="scoring_state",
         )
         return cls(

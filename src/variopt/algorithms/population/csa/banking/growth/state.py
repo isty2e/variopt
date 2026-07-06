@@ -12,6 +12,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from ......json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_finite_float,
     require_json_int,
 )
@@ -122,11 +123,11 @@ class CSABankGrowthState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             If the snapshot carries invalid field types.
         """
         active_energy_gap_limit = require_json_finite_float(
-            data.get("active_energy_gap_limit"),
+            require_json_field(data, "active_energy_gap_limit"),
             field_name="active_energy_gap_limit",
         )
         generation_growth_count = require_json_int(
-            data.get("generation_growth_count"),
+            require_json_field(data, "generation_growth_count"),
             field_name="generation_growth_count",
         )
         return cls(

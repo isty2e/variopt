@@ -815,6 +815,23 @@ class CSABankingTests(CSAOptimizerTestCase):
         assert full_reference.initialized
         assert not partial_reference.initialized
 
+    def test_reference_bank_from_dict_rejects_null_initialized_field(self) -> None:
+        def candidate_from_dict(value: JSONValue) -> int:
+            if type(value) is not int:
+                msg = "candidate must be an integer"
+                raise TypeError(msg)
+            return value
+
+        with pytest.raises(TypeError, match="initialized must be a JSON boolean"):
+            _ = ReferenceBank[int].from_dict(
+                {
+                    "capacity": 1,
+                    "entries": [],
+                    "initialized": None,
+                },
+                candidate_from_dict=candidate_from_dict,
+            )
+
     def test_significant_update_threshold_ignores_small_score_changes(self) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
