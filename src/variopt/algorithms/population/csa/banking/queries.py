@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
-from typing import ClassVar, Generic, Protocol, TypeVar
+from typing import ClassVar, Generic, Protocol, TypeVar, cast
 
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
@@ -10,7 +10,7 @@ from .....diversity.space_metric import (
     structured_distance_between_validated_candidates,
     supports_validated_structured_distance,
 )
-from .....spaces.structured import require_space_candidate_value
+from .....spaces.types import SpaceCandidateValue
 from .....typevars import CandidateT
 from .update.policy import CSANicheQualityPolicy
 
@@ -384,21 +384,15 @@ def validated_candidate_distance(
     CSA bank candidates originate from pending proposals that were validated
     when emitted or restored. Structured metrics can therefore use their
     validated-candidate geometry path here; non-structured metrics keep the
-    public ``DiversityMetric`` contract.
+    public ``DiversityMetric`` contract. This function intentionally does not
+    revalidate structured candidate shape; callers own the bank-admission
+    validation boundary.
     """
     if supports_validated_structured_distance(diversity_metric):
-        left_value = require_space_candidate_value(
-            left,
-            operation="CSA validated structured distance",
-        )
-        right_value = require_space_candidate_value(
-            right,
-            operation="CSA validated structured distance",
-        )
         return structured_distance_between_validated_candidates(
             diversity_metric,
-            left_value,
-            right_value,
+            cast(SpaceCandidateValue, left),
+            cast(SpaceCandidateValue, right),
         )
     return diversity_metric.distance(left, right)
 

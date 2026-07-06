@@ -68,6 +68,15 @@ class StructuredPathMutationOperator(Protocol):
         """Return a child by editing explicit paths on a canonical candidate value."""
         ...
 
+    def apply_validated_space_candidate_on_paths(
+        self,
+        candidate: SpaceCandidateValue,
+        selected_paths: Sequence[LeafPath],
+        random_state: np.random.RandomState,
+    ) -> SpaceCandidateValue:
+        """Return a child by editing paths on an already validated candidate."""
+        ...
+
 
 class CovarianceGuidedStructuredMutationOperator(
     StructuredPathMutationOperator,
@@ -81,18 +90,48 @@ class CovarianceGuidedStructuredMutationOperator(
         ...
 
 
+class ValidatedParentVariationOperator(Protocol):
+    """Capability protocol for applying built-in operators to validated parents."""
+
+    @property
+    def arity(self) -> int:
+        """Return the required number of parent candidates."""
+        ...
+
+    def apply_from_validated_parents(
+        self,
+        parents: Sequence[SpaceCandidateValue],
+        random_state: np.random.RandomState,
+    ) -> SpaceCandidateValue:
+        """Return a child without revalidating already validated parents."""
+        ...
+
+
 def is_structured_path_mutation_operator(
     operator: object,
 ) -> TypeGuard[StructuredPathMutationOperator]:
-    """Return whether one operator supports explicit structured leaf-path editing."""
-    return isinstance(operator, (RandomResetMutation, BoundedMutation))
+    """Return whether one exact built-in operator supports leaf-path editing."""
+    operator_type = type(operator)
+    return operator_type is RandomResetMutation or operator_type is BoundedMutation
 
 
 def is_covariance_guided_structured_mutation_operator(
     operator: object,
 ) -> TypeGuard[CovarianceGuidedStructuredMutationOperator]:
-    """Return whether one operator supports covariance-guided structured mutation."""
-    return isinstance(operator, BoundedMutation)
+    """Return whether one exact built-in operator supports covariance guidance."""
+    return type(operator) is BoundedMutation
+
+
+def is_validated_parent_variation_operator(
+    operator: object,
+) -> TypeGuard[ValidatedParentVariationOperator]:
+    """Return whether one exact built-in operator supports validated-parent application."""
+    operator_type = type(operator)
+    return (
+        operator_type is UniformCrossover
+        or operator_type is RandomResetMutation
+        or operator_type is BoundedMutation
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +212,22 @@ class UniformCrossover(FrozenGenericSlotsCompat,
         self.space.validate(child)
         return child
 
+    def apply_from_validated_parents(
+        self,
+        parents: Sequence[StructuredCandidateT],
+        random_state: np.random.RandomState,
+    ) -> StructuredCandidateT:
+        """Return a crossover child for parents already validated by CSA state."""
+        require_parent_count(parents, arity=self.arity)
+        return _uniform_crossover(
+            space=self.structured_space,
+            primary_parent=parents[0],
+            partner_parent=parents[1],
+            max_exchange_fraction=self.max_exchange_fraction,
+            random_state=random_state,
+            validate_parents=False,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class RandomResetMutation(FrozenGenericSlotsCompat,
@@ -251,6 +306,21 @@ class RandomResetMutation(FrozenGenericSlotsCompat,
         self.space.validate(child)
         return child
 
+    def apply_from_validated_parents(
+        self,
+        parents: Sequence[StructuredCandidateT],
+        random_state: np.random.RandomState,
+    ) -> StructuredCandidateT:
+        """Return a reset child for parents already validated by CSA state."""
+        require_parent_count(parents, arity=self.arity)
+        return _random_reset_mutation(
+            space=self.structured_space,
+            candidate=parents[0],
+            max_exchange_fraction=self.max_exchange_fraction,
+            random_state=random_state,
+            validate_candidate=False,
+        )
+
     def apply_on_paths(
         self,
         candidate: StructuredCandidateT,
@@ -310,14 +380,28 @@ class RandomResetMutation(FrozenGenericSlotsCompat,
         )
         structured_space = self.structured_candidate_space
         structured_space.validate(candidate_value)
-        child = _random_reset_mutation_on_paths(
-            space=structured_space,
+        child = self.apply_validated_space_candidate_on_paths(
             candidate=candidate_value,
             selected_paths=selected_paths,
             random_state=random_state,
         )
         structured_space.validate(child)
         return child
+
+    def apply_validated_space_candidate_on_paths(
+        self,
+        candidate: SpaceCandidateValue,
+        selected_paths: Sequence[LeafPath],
+        random_state: np.random.RandomState,
+    ) -> SpaceCandidateValue:
+        """Return one reset child from a validated structured candidate value."""
+        return _random_reset_mutation_on_paths(
+            space=self.structured_candidate_space,
+            candidate=candidate,
+            selected_paths=selected_paths,
+            random_state=random_state,
+            validate_candidate=False,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,6 +481,21 @@ class BoundedMutation(FrozenGenericSlotsCompat,
         self.space.validate(child)
         return child
 
+    def apply_from_validated_parents(
+        self,
+        parents: Sequence[StructuredCandidateT],
+        random_state: np.random.RandomState,
+    ) -> StructuredCandidateT:
+        """Return a bounded-mutation child for parents already validated by CSA state."""
+        require_parent_count(parents, arity=self.arity)
+        return _bounded_mutation(
+            space=self.structured_space,
+            candidate=parents[0],
+            max_perturbation_fraction=self.max_perturbation_fraction,
+            random_state=random_state,
+            validate_candidate=False,
+        )
+
     def apply_on_paths(
         self,
         candidate: StructuredCandidateT,
@@ -462,12 +561,26 @@ class BoundedMutation(FrozenGenericSlotsCompat,
         )
         structured_space = self.structured_candidate_space
         structured_space.validate(candidate_value)
-        child = _bounded_mutation_on_paths(
-            space=structured_space,
+        child = self.apply_validated_space_candidate_on_paths(
             candidate=candidate_value,
             selected_paths=selected_paths,
-            max_perturbation_fraction=self.max_perturbation_fraction,
             random_state=random_state,
         )
         structured_space.validate(child)
         return child
+
+    def apply_validated_space_candidate_on_paths(
+        self,
+        candidate: SpaceCandidateValue,
+        selected_paths: Sequence[LeafPath],
+        random_state: np.random.RandomState,
+    ) -> SpaceCandidateValue:
+        """Return one bounded child from a validated structured candidate value."""
+        return _bounded_mutation_on_paths(
+            space=self.structured_candidate_space,
+            candidate=candidate,
+            selected_paths=selected_paths,
+            max_perturbation_fraction=self.max_perturbation_fraction,
+            random_state=random_state,
+            validate_candidate=False,
+        )

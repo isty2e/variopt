@@ -9,12 +9,14 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
+from .....operators import VariationOperator
 from .....spaces import SearchSpace
 from .....spaces.projections import compile_homogeneous_numeric_subspace
 from .....spaces.structured import require_space_candidate_value
 from .....spaces.types import SpaceCandidateValue
 from .....typevars import CandidateT
 from ..banking.bank import BankEntry
+from ..banking.queries import BankDistanceWorkspace
 from ..generation.proposal import CSAProposalState
 from ..generation.proposal.covariance import (
     build_numeric_subspace_attribution,
@@ -33,6 +35,7 @@ from ..operators.structured import (
     StructuredPathMutationOperator,
     is_covariance_guided_structured_mutation_operator,
     is_structured_path_mutation_operator,
+    is_validated_parent_variation_operator,
 )
 from ..profile import CSAResolvedProfile
 from ..selection.policy import prepare_seed_batch, select_partner_indices
@@ -116,7 +119,6 @@ def emit_structured_mutation_candidate(
         Structured mutation child together with optional planned attribution.
     """
     structured_space = operator.structured_candidate_space
-    structured_space.validate(seed_candidate)
     editable_paths = structured_space.active_leaf_paths_for_validated_candidate(
         seed_candidate,
     )
@@ -157,7 +159,7 @@ def emit_structured_mutation_candidate(
             )
 
     if covariance_candidate is None:
-        candidate = operator.apply_space_candidate_on_paths(
+        candidate = operator.apply_validated_space_candidate_on_paths(
             candidate=seed_candidate,
             selected_paths=selected_paths,
             random_state=random_state,
@@ -173,6 +175,27 @@ def emit_structured_mutation_candidate(
             mutated_leaf_paths=selected_paths,
             numeric_subspace_attribution=numeric_subspace_attribution,
         ),
+    )
+
+
+def apply_variation_operator_from_validated_parents(
+    *,
+    operator: VariationOperator[CandidateT],
+    parents: tuple[CandidateT, ...],
+    random_state: np.random.RandomState,
+) -> CandidateT:
+    """Apply one operator to parents already validated by CSA bank state."""
+    if not is_validated_parent_variation_operator(operator):
+        return operator.apply(parents, random_state)
+
+    # Built-in structured operators are reached here only from CSA bank entries,
+    # which are validated on admission and checkpoint restore. Revalidating the
+    # recursive candidate shape here would duplicate the boundary invariant this
+    # fast path exists to avoid.
+    parent_values = cast(tuple[SpaceCandidateValue, ...], parents)
+    return cast(
+        CandidateT,
+        operator.apply_from_validated_parents(parent_values, random_state),
     )
 
 
@@ -291,14 +314,6 @@ def materialize_generation(
             for family_key in family_keys
         )
 
-    def distance_between_entry_indices(left_index: int, right_index: int) -> float:
-        return require_valid_distance(
-            diversity_metric.distance(
-                bank.entries[left_index].candidate,
-                bank.entries[right_index].candidate,
-            )
-        )
-
     def select_partner_indices_from_entries(
         *,
         entries: tuple[BankEntry[CandidateT], ...],
@@ -346,7 +361,11 @@ def materialize_generation(
                 parents = (bank.entries[seed_index].candidate,) + tuple(
                     bank.entries[index].candidate for index in partner_indices
                 )
-                candidate = spec.operator.apply(parents, random_state)
+                candidate = apply_variation_operator_from_validated_parents(
+                    operator=spec.operator,
+                    parents=parents,
+                    random_state=random_state,
+                )
                 space.validate(candidate)
                 if trace_state is not None:
                     trace_state = trace_state.record_emitted_child(
@@ -398,7 +417,11 @@ def materialize_generation(
                         reference_bank.entries[index].candidate
                         for index in partner_indices
                     )
-                    candidate = spec.operator.apply(parents, random_state)
+                    candidate = apply_variation_operator_from_validated_parents(
+                        operator=spec.operator,
+                        parents=parents,
+                        random_state=random_state,
+                    )
                     space.validate(candidate)
                     if trace_state is not None:
                         trace_state = trace_state.record_emitted_child(
@@ -445,7 +468,11 @@ def materialize_generation(
                     planned_attribution=structured_generated_candidate.planned_attribution,
                 )
             else:
-                candidate = mutation_operator.apply((seed_candidate,), random_state)
+                candidate = apply_variation_operator_from_validated_parents(
+                    operator=mutation_operator,
+                    parents=(seed_candidate,),
+                    random_state=random_state,
+                )
                 generated_candidate = GeneratedCandidate(
                     candidate=candidate,
                     planned_attribution=planned_mutation_attribution(
@@ -470,6 +497,14 @@ def materialize_generation(
         return tuple(candidates)
 
     if not selection_state.has_active_seed:
+        bank_distance_workspace = BankDistanceWorkspace(
+            entries=bank.entries,
+            diversity_metric=diversity_metric,
+        )
+
+        def distance_between_entry_indices(left_index: int, right_index: int) -> float:
+            return bank_distance_workspace.distance(left_index, right_index)
+
         selection_state_before = selection_state
         selection_state = prepare_seed_batch(
             current_state=selection_state,

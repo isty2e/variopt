@@ -25,6 +25,7 @@ def random_reset_mutation(
     candidate: CandidateT,
     max_exchange_fraction: float,
     random_state: np.random.RandomState,
+    validate_candidate: bool = True,
 ) -> CandidateT:
     """Resample a bounded subset of editable leaves.
 
@@ -38,13 +39,18 @@ def random_reset_mutation(
         Maximum fraction of active leaves that may be resampled.
     random_state : np.random.RandomState
         Random state used for path selection and leaf resampling.
+    validate_candidate : bool, default=True
+        Whether to validate ``candidate`` before using validated-space accessors.
+        CSA generation can disable this for candidates already sourced from its
+        validated bank state.
 
     Returns
     -------
     CandidateT
         Mutated child with selected leaves redrawn from their declared spaces.
     """
-    space.validate(candidate)
+    if validate_candidate:
+        space.validate(candidate)
     editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
@@ -69,6 +75,7 @@ def random_reset_mutation_on_paths(
     candidate: CandidateT,
     selected_paths: Sequence[LeafPath],
     random_state: np.random.RandomState,
+    validate_candidate: bool = True,
 ) -> CandidateT:
     """Resample one explicit set of leaves.
 
@@ -82,6 +89,10 @@ def random_reset_mutation_on_paths(
         Explicit leaf paths to resample.
     random_state : np.random.RandomState
         Random state used for leaf resampling.
+    validate_candidate : bool, default=True
+        Whether to validate ``candidate`` before using validated-space accessors.
+        CSA generation can disable this for candidates already sourced from its
+        validated bank state.
 
     Returns
     -------
@@ -98,7 +109,8 @@ def random_reset_mutation_on_paths(
         msg = "selected_paths must not be empty"
         raise ValueError(msg)
 
-    space.validate(candidate)
+    if validate_candidate:
+        space.validate(candidate)
     replacements = {
         path: sample_leaf_value(space.leaf_space_at_path(path), random_state)
         for path in selected_paths
@@ -112,6 +124,7 @@ def bounded_mutation(
     candidate: CandidateT,
     max_perturbation_fraction: float,
     random_state: np.random.RandomState,
+    validate_candidate: bool = True,
 ) -> CandidateT:
     """Perturb a bounded subset of editable leaves in place.
 
@@ -125,13 +138,18 @@ def bounded_mutation(
         Maximum fraction of active leaves that may be perturbed.
     random_state : np.random.RandomState
         Random state used for path selection and bounded perturbation.
+    validate_candidate : bool, default=True
+        Whether to validate ``candidate`` before using validated-space accessors.
+        CSA generation can disable this for candidates already sourced from its
+        validated bank state.
 
     Returns
     -------
     CandidateT
         Mutated child with selected leaves perturbed relative to the parent.
     """
-    space.validate(candidate)
+    if validate_candidate:
+        space.validate(candidate)
     editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
@@ -162,6 +180,7 @@ def bounded_mutation_on_paths(
     selected_paths: Sequence[LeafPath],
     max_perturbation_fraction: float,
     random_state: np.random.RandomState,
+    validate_candidate: bool = True,
 ) -> CandidateT:
     """Perturb one explicit set of leaves.
 
@@ -177,6 +196,10 @@ def bounded_mutation_on_paths(
         Maximum perturbation fraction passed to leaf-level mutation.
     random_state : np.random.RandomState
         Random state used for bounded perturbation.
+    validate_candidate : bool, default=True
+        Whether to validate ``candidate`` before using validated-space accessors.
+        CSA generation can disable this for candidates already sourced from its
+        validated bank state.
 
     Returns
     -------
@@ -192,7 +215,8 @@ def bounded_mutation_on_paths(
         msg = "selected_paths must not be empty"
         raise ValueError(msg)
 
-    space.validate(candidate)
+    if validate_candidate:
+        space.validate(candidate)
     replacements = {
         path: mutate_leaf_value(
             space=space.leaf_space_at_path(path),
