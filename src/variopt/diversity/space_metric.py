@@ -130,7 +130,7 @@ def supports_validated_structured_distance(
     metric: DiversityMetric[MetricCandidateT],
 ) -> TypeGuard[StructuredSpaceDiversityMetric[SpaceBoundaryValue, SpaceCandidateValue]]:
     """Return whether ``metric`` exposes the internal validated path."""
-    return isinstance(metric, StructuredSpaceDiversityMetric)
+    return type(metric) is StructuredSpaceDiversityMetric
 
 
 def structured_distance_between_validated_candidates(

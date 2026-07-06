@@ -17,6 +17,7 @@ from ....artifacts import (
 )
 from ....distance import require_valid_distance
 from ....diversity import DiversityMetric
+from ....diversity.space_metric import supports_validated_structured_distance
 from ....execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
     SEQUENTIAL_EXECUTION_MODEL,
@@ -180,6 +181,16 @@ class CSAOptimizer(
             resolved_profile.perturbation_schedule.initial_family,
         ):
             msg = "bank_capacity must be at least the initial family arity"
+            raise ValueError(msg)
+
+        if (
+            supports_validated_structured_distance(self.diversity_metric)
+            and self.diversity_metric.space is not self.space
+        ):
+            msg = (
+                "built-in structured diversity_metric space must match "
+                "the optimizer space"
+            )
             raise ValueError(msg)
 
     @staticmethod
@@ -465,9 +476,15 @@ class CSAOptimizer(
             if candidate_from_dict is None
             else candidate_from_dict
         )
+
+        def validated_candidate_from_dict(data: JSONValue) -> CandidateT:
+            candidate = deserializer(data)
+            self.space.validate(candidate)
+            return candidate
+
         return CSAEngineState[CandidateT].from_dict(
             data,
-            candidate_from_dict=deserializer,
+            candidate_from_dict=validated_candidate_from_dict,
             growth_policy=self.resolved_profile.growth_policy,
             clustering_policy=self.resolved_profile.clustering_policy,
             proposal_policy=self.resolved_profile.proposal_policy,
