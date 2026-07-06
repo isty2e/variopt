@@ -531,17 +531,21 @@ class TraceEvent:
             raise ValueError(msg)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class Trace:
     """Immutable append-only diagnostics trace.
 
     Parameters
     ----------
-    events : tuple[TraceEvent, ...], default=()
+    events : Sequence[TraceEvent], default=()
         Ordered events recorded during a run.
     """
 
     events: tuple[TraceEvent, ...] = ()
+
+    def __init__(self, events: Sequence[TraceEvent] = ()) -> None:
+        """Create a trace with a canonical immutable event sequence."""
+        object.__setattr__(self, "events", tuple(events))
 
     def append(self, event: TraceEvent) -> Self:
         """Return a new trace containing one additional event.
