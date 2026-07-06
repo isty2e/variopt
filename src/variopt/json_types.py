@@ -1,11 +1,47 @@
 """Shared JSON-safe type aliases and validators for snapshot codecs."""
 
+from collections.abc import Mapping
 from math import isfinite
 from typing import TypeAlias
 
 JSONScalar: TypeAlias = None | bool | int | float | str
 JSONValue: TypeAlias = JSONScalar | list["JSONValue"] | dict[str, "JSONValue"]
 JSONDict: TypeAlias = dict[str, JSONValue]
+
+
+def require_json_field(
+    data: Mapping[str, JSONValue],
+    key: str,
+    *,
+    field_name: str | None = None,
+) -> JSONValue:
+    """Return a required JSON object field or raise.
+
+    Parameters
+    ----------
+    data : Mapping[str, JSONValue]
+        JSON object to read.
+    key : str
+        Required field name.
+    field_name : str | None, default=None
+        Field path used in error messages. Defaults to ``key``.
+
+    Returns
+    -------
+    JSONValue
+        Present field value. Explicit ``None`` is returned so optional-value
+        validators can still distinguish null from a missing key.
+
+    Raises
+    ------
+    TypeError
+        If ``key`` is absent.
+    """
+    if key not in data:
+        display_name = key if field_name is None else field_name
+        msg = f"{display_name} is required"
+        raise TypeError(msg)
+    return data[key]
 
 
 def require_json_mapping(value: JSONValue, *, field_name: str) -> JSONDict:

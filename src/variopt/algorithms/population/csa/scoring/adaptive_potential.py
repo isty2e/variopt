@@ -17,6 +17,7 @@ from .....diversity import DiversityMetric
 from .....json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_finite_float,
     require_json_list,
 )
@@ -204,8 +205,7 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 diversity_metric.distance(candidate, axis.reference_candidate),
             )
             scaled_position = (
-                float(axis.bin_count)
-                / (axis.maximum_distance - axis.minimum_distance)
+                float(axis.bin_count) / (axis.maximum_distance - axis.minimum_distance)
             ) * (distance - axis.minimum_distance)
             scaled_index = int(float(scaled_position))
             if scaled_index < 0 or scaled_index >= axis.bin_count:
@@ -286,7 +286,7 @@ class AdaptivePotentialState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return cls(
             model=model,
             potential=_potential_from_json_value(
-                data.get("potential"),
+                require_json_field(data, "potential"),
                 shape=tuple(axis.bin_count for axis in model.axes),
             ),
         )

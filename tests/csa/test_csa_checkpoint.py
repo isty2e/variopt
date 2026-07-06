@@ -649,6 +649,98 @@ class CSAEngineCheckpointTests:
                 score_model=state.scoring_state.model_state.score_model,
             )
 
+    def test_checkpoint_snapshots_reject_missing_required_fields(self) -> None:
+        state = build_populated_engine_state()
+        engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        del engine_snapshot["random_state"]
+
+        with pytest.raises(TypeError, match="random_state is required"):
+            _ = CSAEngineState[int].from_dict(
+                engine_snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
+
+        proposal_snapshot = state.proposal_state.to_dict()
+        del proposal_snapshot["leaf_stats"]
+        with pytest.raises(TypeError, match="leaf_stats is required"):
+            _ = CSAProposalState.from_dict(
+                proposal_snapshot,
+                policy=state.proposal_state.policy,
+            )
+
+        numeric_stat_snapshot = ProposalNumericSubspaceCovarianceStat(
+            leaf_paths=(("x",),),
+            observation_count=1,
+            discounted_weight=1.0,
+            discounted_displacement_sum=(0.0,),
+            discounted_outer_product_sum=((0.0,),),
+            last_update_index=2,
+        ).to_dict()
+        del numeric_stat_snapshot["discounted_weight"]
+        with pytest.raises(TypeError, match="discounted_weight is required"):
+            _ = ProposalNumericSubspaceCovarianceStat.from_dict(numeric_stat_snapshot)
+
+        action_snapshot: dict[str, JSONValue] = {
+            "kind": "stage_transition",
+            "stage_transition": {
+                "stage_state": CSAStageState(
+                    base_capacity=1,
+                    max_capacity=2,
+                ).to_dict(),
+            },
+        }
+        with pytest.raises(
+            TypeError,
+            match=r"stage_transition\.refresh_required is required",
+        ):
+            _ = PendingBoundaryAction.from_dict(action_snapshot)
+
+    def test_checkpoint_snapshots_distinguish_null_required_fields(self) -> None:
+        state = build_populated_engine_state()
+        engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        engine_snapshot["random_state"] = None
+
+        with pytest.raises(TypeError, match="random_state must be a JSON object"):
+            _ = CSAEngineState[int].from_dict(
+                engine_snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
+
+        with pytest.raises(TypeError, match="leaf_stats must be a JSON array"):
+            _ = CSAProposalState.from_dict(
+                {
+                    "pending_attributions": [],
+                    "family_stats": [],
+                    "leaf_stats": None,
+                    "local_displacement_leaf_stats": [],
+                    "numeric_covariance_stats": [],
+                    "update_index": 0,
+                },
+                policy=state.proposal_state.policy,
+            )
+
+        with pytest.raises(TypeError, match="discounted_weight must be a JSON number"):
+            _ = ProposalNumericSubspaceCovarianceStat.from_dict(
+                {
+                    "leaf_paths": [["x"]],
+                    "observation_count": 1,
+                    "discounted_weight": None,
+                    "discounted_displacement_sum": [0.0],
+                    "discounted_outer_product_sum": [[0.0]],
+                    "last_update_index": 2,
+                },
+            )
+
     def test_checkpoint_snapshot_domain_guards_run_before_deep_shape_checks(self) -> None:
         state = build_populated_engine_state()
         engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)

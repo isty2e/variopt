@@ -7,7 +7,12 @@ from math import exp, isfinite
 import numpy as np
 from typing_extensions import Self
 
-from .....json_types import JSONDict, JSONValue, require_json_finite_float
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_field,
+    require_json_finite_float,
+)
 from .acceptance import CSAAcceptancePolicy
 
 
@@ -103,7 +108,7 @@ class CSAAcceptanceState:
         return cls(
             policy=policy,
             temperature=require_json_finite_float(
-                data.get("temperature"),
+                require_json_field(data, "temperature"),
                 field_name="temperature",
             ),
         )
@@ -148,7 +153,9 @@ class CSAAcceptanceState:
             msg = "random_state is required when probabilistic acceptance is active"
             raise ValueError(msg)
 
-        return bool(exp(beta * (reference_score - trial_score)) > random_state.random_sample())
+        return bool(
+            exp(beta * (reference_score - trial_score)) > random_state.random_sample()
+        )
 
     def advance(self) -> Self:
         """Return the next acceptance state after one CSA iteration."""

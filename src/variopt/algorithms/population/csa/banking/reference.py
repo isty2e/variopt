@@ -13,6 +13,7 @@ from .....json_types import (
     JSONDict,
     JSONValue,
     require_json_bool,
+    require_json_field,
     require_json_int,
     require_json_list,
     require_json_mapping,
@@ -126,12 +127,18 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
         TypeError
             If the snapshot carries invalid field types.
         """
-        capacity = require_json_int(data.get("capacity"), field_name="capacity")
-        raw_entries = require_json_list(data.get("entries"), field_name="entries")
+        capacity = require_json_int(
+            require_json_field(data, "capacity"),
+            field_name="capacity",
+        )
+        raw_entries = require_json_list(
+            require_json_field(data, "entries"),
+            field_name="entries",
+        )
         raw_initialized = data.get("initialized")
         initialized = (
             None
-            if raw_initialized is None
+            if "initialized" not in data
             else require_json_bool(
                 raw_initialized,
                 field_name="initialized",

@@ -11,6 +11,7 @@ from ......diversity import DiversityMetric
 from ......json_types import (
     JSONDict,
     JSONValue,
+    require_json_field,
     require_json_int,
     require_json_list,
     require_json_optional_finite_float,
@@ -129,11 +130,11 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             If the snapshot carries invalid field types.
         """
         cluster_distance = require_json_optional_finite_float(
-            data.get("cluster_distance"),
+            require_json_field(data, "cluster_distance"),
             field_name="cluster_distance",
         )
         raw_cluster_labels = require_json_list(
-            data.get("cluster_labels"),
+            require_json_field(data, "cluster_labels"),
             field_name="cluster_labels",
         )
 

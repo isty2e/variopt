@@ -10,6 +10,7 @@ from ......json_types import (
     JSONDict,
     JSONValue,
     require_json_bool,
+    require_json_field,
     require_json_int,
     require_json_optional_finite_float,
 )
@@ -74,7 +75,9 @@ class CSACutoffState:
             or self.cutoff_recover_limit is not None
             or self.previous_score_gap is not None
         ):
-            msg = "refresh_in_progress states must not carry active cutoff runtime values"
+            msg = (
+                "refresh_in_progress states must not carry active cutoff runtime values"
+            )
             raise ValueError(msg)
 
         if self.distance_cutoff is None or self.minimum_distance_cutoff is None:
@@ -92,10 +95,7 @@ class CSACutoffState:
             msg = "distance_cutoff must be a finite non-negative float"
             raise ValueError(msg)
 
-        if (
-            not np.isfinite(minimum_distance_cutoff)
-            or minimum_distance_cutoff < 0.0
-        ):
+        if not np.isfinite(minimum_distance_cutoff) or minimum_distance_cutoff < 0.0:
             msg = "minimum_distance_cutoff must be a finite non-negative float"
             raise ValueError(msg)
 
@@ -103,10 +103,7 @@ class CSACutoffState:
             msg = "minimum_distance_cutoff must not exceed distance_cutoff"
             raise ValueError(msg)
 
-        if (
-            not np.isfinite(cutoff_recover_limit)
-            or cutoff_recover_limit < 0.0
-        ):
+        if not np.isfinite(cutoff_recover_limit) or cutoff_recover_limit < 0.0:
             msg = "cutoff_recover_limit must be a finite non-negative float"
             raise ValueError(msg)
 
@@ -182,28 +179,31 @@ class CSACutoffState:
             If the snapshot carries invalid field types.
         """
         iteration_count = require_json_int(
-            data.get("iteration_count"),
+            require_json_field(data, "iteration_count"),
             field_name="iteration_count",
         )
-        cycle_count = require_json_int(data.get("cycle_count"), field_name="cycle_count")
+        cycle_count = require_json_int(
+            require_json_field(data, "cycle_count"),
+            field_name="cycle_count",
+        )
         refresh_in_progress = require_json_bool(
-            data.get("refresh_in_progress"),
+            require_json_field(data, "refresh_in_progress"),
             field_name="refresh_in_progress",
         )
         distance_cutoff = require_json_optional_finite_float(
-            data.get("distance_cutoff"),
+            require_json_field(data, "distance_cutoff"),
             field_name="distance_cutoff",
         )
         minimum_distance_cutoff = require_json_optional_finite_float(
-            data.get("minimum_distance_cutoff"),
+            require_json_field(data, "minimum_distance_cutoff"),
             field_name="minimum_distance_cutoff",
         )
         cutoff_recover_limit = require_json_optional_finite_float(
-            data.get("cutoff_recover_limit"),
+            require_json_field(data, "cutoff_recover_limit"),
             field_name="cutoff_recover_limit",
         )
         previous_score_gap = require_json_optional_finite_float(
-            data.get("previous_score_gap"),
+            require_json_field(data, "previous_score_gap"),
             field_name="previous_score_gap",
         )
 

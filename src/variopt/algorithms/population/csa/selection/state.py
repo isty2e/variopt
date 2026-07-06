@@ -10,6 +10,7 @@ from .....json_types import (
     JSONDict,
     JSONValue,
     require_json_bool,
+    require_json_field,
     require_json_int,
     require_json_list,
 )
@@ -92,19 +93,19 @@ class SeedSelectionState:
             If the snapshot carries invalid field types.
         """
         raw_used_entry_indices = require_json_list(
-            data.get("used_entry_indices"),
+            require_json_field(data, "used_entry_indices"),
             field_name="used_entry_indices",
         )
         raw_bank_status = require_json_list(
-            data.get("bank_status"),
+            require_json_field(data, "bank_status"),
             field_name="bank_status",
         )
         raw_active_seed_indices = require_json_list(
-            data.get("active_seed_indices"),
+            require_json_field(data, "active_seed_indices"),
             field_name="active_seed_indices",
         )
         next_seed_offset = require_json_int(
-            data.get("next_seed_offset"),
+            require_json_field(data, "next_seed_offset"),
             field_name="next_seed_offset",
         )
         used_entry_indices: list[int] = []
@@ -300,7 +301,11 @@ class SeedSelectionState:
         removed_index_set = frozenset(index for index in removed_indices if index >= 0)
         resized_status = [
             is_used
-            for index, is_used in enumerate(self.resize_bank_status(entry_count=entry_count + len(removed_index_set)))
+            for index, is_used in enumerate(
+                self.resize_bank_status(
+                    entry_count=entry_count + len(removed_index_set)
+                )
+            )
             if index not in removed_index_set
         ]
         return type(self)(
@@ -334,5 +339,7 @@ class SeedSelectionState:
 
         resized_status = list(self.bank_status[:entry_count])
         if len(resized_status) < entry_count:
-            resized_status.extend(False for _ in range(entry_count - len(resized_status)))
+            resized_status.extend(
+                False for _ in range(entry_count - len(resized_status))
+            )
         return tuple(resized_status)

@@ -174,6 +174,24 @@ class RandomnessContractTests:
         with pytest.raises(TypeError, match="position"):
             _ = RandomStateSnapshot.from_dict(snapshot)
 
+    def test_random_state_snapshot_from_dict_rejects_missing_required_field(
+        self,
+    ) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        del snapshot["algorithm"]
+
+        with pytest.raises(TypeError, match="algorithm is required"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
+    def test_random_state_snapshot_from_dict_distinguishes_null_required_field(
+        self,
+    ) -> None:
+        snapshot = RandomStateSnapshot.from_seed(7).to_dict()
+        snapshot["algorithm"] = None
+
+        with pytest.raises(TypeError, match="algorithm must be a JSON string"):
+            _ = RandomStateSnapshot.from_dict(snapshot)
+
     def test_random_state_snapshot_from_dict_rejects_bool_has_gaussian(self) -> None:
         snapshot = RandomStateSnapshot.from_seed(7).to_dict()
         snapshot["has_gaussian"] = True

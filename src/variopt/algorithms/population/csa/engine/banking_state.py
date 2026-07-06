@@ -6,7 +6,12 @@ from typing import Generic
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....json_types import JSONDict, JSONValue, require_json_mapping
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_field,
+    require_json_mapping,
+)
 from .....typevars import CandidateT
 from ..banking.bank import Bank
 from ..banking.clustering import CSAClusteringState
@@ -111,21 +116,24 @@ class CSABankingState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         ValueError
             If the snapshot attempts to restore an active refresh pool.
         """
-        bank_data = require_json_mapping(data.get("bank"), field_name="bank")
+        bank_data = require_json_mapping(
+            require_json_field(data, "bank"),
+            field_name="bank",
+        )
         reference_bank_data = require_json_mapping(
-            data.get("reference_bank"),
+            require_json_field(data, "reference_bank"),
             field_name="reference_bank",
         )
-        raw_refresh_state = data.get("refresh_state")
+        raw_refresh_state = require_json_field(data, "refresh_state")
         if raw_refresh_state is not None:
             msg = "banking-state checkpoints require reference refresh to be idle"
             raise ValueError(msg)
         growth_state_data = require_json_mapping(
-            data.get("growth_state"),
+            require_json_field(data, "growth_state"),
             field_name="growth_state",
         )
         clustering_state_data = require_json_mapping(
-            data.get("clustering_state"),
+            require_json_field(data, "clustering_state"),
             field_name="clustering_state",
         )
         return cls(

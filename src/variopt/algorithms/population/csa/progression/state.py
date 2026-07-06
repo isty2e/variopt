@@ -11,6 +11,7 @@ from .....json_types import (
     JSONDict,
     JSONValue,
     require_json_bool,
+    require_json_field,
     require_json_int,
     require_json_list,
     require_json_mapping,
@@ -124,8 +125,8 @@ class PendingBoundaryAction:
         TypeError
             If the snapshot carries invalid field types.
         """
-        raw_kind = data.get("kind")
-        raw_stage_transition = data.get("stage_transition")
+        raw_kind = require_json_field(data, "kind")
+        raw_stage_transition = require_json_field(data, "stage_transition")
         if raw_kind == "refresh":
             kind: BoundaryActionKind = "refresh"
         elif raw_kind == "stage_transition":
@@ -142,11 +143,19 @@ class PendingBoundaryAction:
             field_name="stage_transition",
         )
         raw_stage_state = require_json_mapping(
-            stage_transition_data.get("stage_state"),
+            require_json_field(
+                stage_transition_data,
+                "stage_state",
+                field_name="stage_transition.stage_state",
+            ),
             field_name="stage_transition.stage_state",
         )
         refresh_required = require_json_bool(
-            stage_transition_data.get("refresh_required"),
+            require_json_field(
+                stage_transition_data,
+                "refresh_required",
+                field_name="stage_transition.refresh_required",
+            ),
             field_name="stage_transition.refresh_required",
         )
         return cls(
@@ -290,9 +299,7 @@ class CSAProgressionState:
             "base_cycle_limit": self.base_cycle_limit,
             "restart_lite": self.restart_lite,
             "pending_action": (
-                None
-                if self.pending_action is None
-                else self.pending_action.to_dict()
+                None if self.pending_action is None else self.pending_action.to_dict()
             ),
             "is_exhausted": self.is_exhausted,
             "stage_transition_count": self.stage_transition_count,
@@ -323,36 +330,36 @@ class CSAProgressionState:
             If the snapshot carries invalid field types.
         """
         raw_cutoff_state = require_json_mapping(
-            data.get("cutoff_state"),
+            require_json_field(data, "cutoff_state"),
             field_name="cutoff_state",
         )
         raw_stage_state = require_json_mapping(
-            data.get("stage_state"),
+            require_json_field(data, "stage_state"),
             field_name="stage_state",
         )
         base_cycle_limit = require_json_int(
-            data.get("base_cycle_limit"),
+            require_json_field(data, "base_cycle_limit"),
             field_name="base_cycle_limit",
         )
         restart_lite = require_json_bool(
-            data.get("restart_lite"),
+            require_json_field(data, "restart_lite"),
             field_name="restart_lite",
         )
-        raw_pending_action = data.get("pending_action")
+        raw_pending_action = require_json_field(data, "pending_action")
         is_exhausted = require_json_bool(
-            data.get("is_exhausted"),
+            require_json_field(data, "is_exhausted"),
             field_name="is_exhausted",
         )
         stage_transition_count = require_json_int(
-            data.get("stage_transition_count"),
+            require_json_field(data, "stage_transition_count"),
             field_name="stage_transition_count",
         )
         refresh_count = require_json_int(
-            data.get("refresh_count"),
+            require_json_field(data, "refresh_count"),
             field_name="refresh_count",
         )
         raw_refresh_mask = require_json_list(
-            data.get("refresh_mask"),
+            require_json_field(data, "refresh_mask"),
             field_name="refresh_mask",
         )
         pending_action_data: JSONDict | None = None

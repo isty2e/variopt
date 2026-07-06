@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 
 from typing_extensions import Self
 
-from .....json_types import JSONDict, JSONValue, require_json_int, require_json_list
+from .....json_types import (
+    JSONDict,
+    JSONValue,
+    require_json_field,
+    require_json_int,
+    require_json_list,
+)
 from ..indexing import remap_indices_after_removal
 
 
@@ -111,12 +117,30 @@ class CSAStageState:
         TypeError
             If the snapshot carries invalid field types.
         """
-        base_capacity = require_json_int(data.get("base_capacity"), field_name="base_capacity")
-        max_capacity = require_json_int(data.get("max_capacity"), field_name="max_capacity")
-        stage_index = require_json_int(data.get("stage_index"), field_name="stage_index")
-        stage_round = require_json_int(data.get("stage_round"), field_name="stage_round")
-        raw_seed_mask = require_json_list(data.get("seed_mask"), field_name="seed_mask")
-        raw_partner_mask = require_json_list(data.get("partner_mask"), field_name="partner_mask")
+        base_capacity = require_json_int(
+            require_json_field(data, "base_capacity"),
+            field_name="base_capacity",
+        )
+        max_capacity = require_json_int(
+            require_json_field(data, "max_capacity"),
+            field_name="max_capacity",
+        )
+        stage_index = require_json_int(
+            require_json_field(data, "stage_index"),
+            field_name="stage_index",
+        )
+        stage_round = require_json_int(
+            require_json_field(data, "stage_round"),
+            field_name="stage_round",
+        )
+        raw_seed_mask = require_json_list(
+            require_json_field(data, "seed_mask"),
+            field_name="seed_mask",
+        )
+        raw_partner_mask = require_json_list(
+            require_json_field(data, "partner_mask"),
+            field_name="partner_mask",
+        )
 
         seed_mask: list[int] = []
         for raw_position, raw_index in enumerate(raw_seed_mask):
