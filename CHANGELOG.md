@@ -132,6 +132,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- `Trace(events=...)` now copies mutable event sequences into the immutable
+  tuple form used by terminal artifacts, matching the other run-artifact
+  constructors.
 - Built-in local-search kernels now preserve inner failed-attempt diagnostics
   even when the successful attempt itself did not emit base kernel diagnostics,
   while still omitting diagnostics objects that carry no signal.

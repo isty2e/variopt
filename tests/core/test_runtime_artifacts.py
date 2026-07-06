@@ -2791,6 +2791,150 @@ class RuntimeArtifactsTests:
         assert initial.events == ()
         assert updated.events == (event,)
 
+    def test_trace_constructor_copies_mutable_event_sequence(self) -> None:
+        event = TraceEvent(kind="evaluation", message="evaluated p-1", proposal_id="p-1")
+        extra_event = TraceEvent(
+            kind="evaluation",
+            message="evaluated p-2",
+            proposal_id="p-2",
+        )
+        events: list[TraceEvent] = [event]
+
+        trace = Trace(events=events)
+        events.append(extra_event)
+
+        assert type(trace.events) is tuple
+        assert trace.events == (event,)
+
+    def test_trace_replace_copies_mutable_event_sequence(self) -> None:
+        event = TraceEvent(kind="evaluation", message="evaluated p-1", proposal_id="p-1")
+        extra_event = TraceEvent(
+            kind="evaluation",
+            message="evaluated p-2",
+            proposal_id="p-2",
+        )
+        events: list[TraceEvent] = [event]
+
+        trace = replace(Trace(), events=events)
+        events.append(extra_event)
+
+        assert type(trace.events) is tuple
+        assert trace.events == (event,)
+
+    def test_run_report_constructor_copies_mutable_attempt_sequences(self) -> None:
+        request = make_int_request(candidate=1, proposal_id="p-1")
+        failure_request = make_int_request(candidate=2, proposal_id="p-2")
+        observation: Observation[int] = Observation.from_objective_value(
+            request=request,
+            candidate=1,
+            value=1.0,
+            direction=OptimizationDirection.MINIMIZE,
+        )
+        success: EvaluationSuccess[int, Observation[int]] = EvaluationSuccess(
+            request=request,
+            payload=observation,
+        )
+        failure = make_int_failure(failure_request)
+        successes: list[EvaluationSuccess[int, Observation[int]]] = [success]
+        failures: list[EvaluationFailure[int]] = [failure]
+
+        report = RunReport[int, Observation[int]](
+            successes=successes,
+            evaluation_count=2,
+            failures=failures,
+        )
+        successes.append(
+            EvaluationSuccess(
+                request=failure_request,
+                payload=Observation.from_objective_value(
+                    request=failure_request,
+                    candidate=2,
+                    value=2.0,
+                    direction=OptimizationDirection.MINIMIZE,
+                ),
+            )
+        )
+        failures.clear()
+
+        assert type(report.successes) is tuple
+        assert type(report.failures) is tuple
+        assert report.successes == (success,)
+        assert report.failures == (failure,)
+
+    def test_run_result_constructor_copies_mutable_attempt_sequences(self) -> None:
+        request = make_int_request(candidate=1, proposal_id="p-1")
+        failure_request = make_int_request(candidate=2, proposal_id="p-2")
+        success = make_int_success(request)
+        failure = make_int_failure(failure_request)
+        successes: list[EvaluationSuccess[int, ObservationPayload]] = [success]
+        failures: list[EvaluationFailure[int]] = [failure]
+
+        result = RunResult[int](
+            best_success=success,
+            successes=successes,
+            evaluation_count=2,
+            failures=failures,
+        )
+        successes.append(make_int_success(failure_request))
+        failures.clear()
+
+        assert type(result.successes) is tuple
+        assert type(result.failures) is tuple
+        assert result.successes == (success,)
+        assert result.failures == (failure,)
+
+    def test_nondominated_surface_constructor_copies_mutable_attempt_sequences(
+        self,
+    ) -> None:
+        request = make_int_request(candidate=1, proposal_id="p-1")
+        dominated_request = make_int_request(candidate=2, proposal_id="p-2")
+        success: EvaluationSuccess[int, ObjectiveVectorPayload] = EvaluationSuccess(
+            request=request,
+            payload=ObjectiveVectorPayload.from_objective_values(
+                objective_values=(1.0, 2.0),
+                directions=(
+                    OptimizationDirection.MINIMIZE,
+                    OptimizationDirection.MINIMIZE,
+                ),
+            ),
+        )
+        dominated_success: EvaluationSuccess[
+            int,
+            ObjectiveVectorPayload,
+        ] = EvaluationSuccess(
+            request=dominated_request,
+            payload=ObjectiveVectorPayload.from_objective_values(
+                objective_values=(3.0, 4.0),
+                directions=(
+                    OptimizationDirection.MINIMIZE,
+                    OptimizationDirection.MINIMIZE,
+                ),
+            ),
+        )
+        failure = make_int_failure(make_int_request(candidate=3, proposal_id="p-3"))
+        nondominated_successes: list[
+            EvaluationSuccess[int, ObjectiveVectorPayload]
+        ] = [success]
+        successes: list[EvaluationSuccess[int, ObjectiveVectorPayload]] = [success]
+        failures: list[EvaluationFailure[int]] = [failure]
+
+        surface = NondominatedRunSurface[int](
+            nondominated_successes=nondominated_successes,
+            successes=successes,
+            evaluation_count=2,
+            failures=failures,
+        )
+        nondominated_successes.clear()
+        successes.append(dominated_success)
+        failures.clear()
+
+        assert type(surface.nondominated_successes) is tuple
+        assert type(surface.successes) is tuple
+        assert type(surface.failures) is tuple
+        assert surface.nondominated_successes == (success,)
+        assert surface.successes == (success,)
+        assert surface.failures == (failure,)
+
     def test_run_result_from_observations_uses_minimization_semantics(self) -> None:
         proposal_one = Proposal(candidate=4, proposal_id="p-1")
         proposal_two = Proposal(candidate=2, proposal_id="p-2")
