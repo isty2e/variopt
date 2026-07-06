@@ -20,6 +20,7 @@ from variopt.algorithms.population.generational_ga.lifecycle import (
     tell_generational_ga,
 )
 from variopt.algorithms.population.generational_ga.state import (
+    GenerationalGAMemberBuffer,
     GenerationalGAOptimizerState,
     GenerationalGAPopulationMember,
     GenerationalGAVariant,
@@ -131,6 +132,59 @@ class GenerationalGALifecycleTests:
                 variant=GenerationalGAVariant.NATIVE,
                 random_state=random_state,
                 generation_index=-1,
+            )
+
+        with pytest.raises(ValueError, match="queued_proposal_index must be non-negative"):
+            _ = GenerationalGAOptimizerState(
+                variant=GenerationalGAVariant.NATIVE,
+                random_state=random_state,
+                queued_proposal_index=-1,
+            )
+
+    def test_optimizer_state_rejects_invalid_queue_cursor(self) -> None:
+        random_state = RandomStateSnapshot.from_seed(0)
+        proposal = Proposal(candidate=0, proposal_id="ga-0")
+
+        with pytest.raises(ValueError, match="queued_proposal_index must not exceed"):
+            _ = GenerationalGAOptimizerState(
+                variant=GenerationalGAVariant.NATIVE,
+                random_state=random_state,
+                queued_proposals=(proposal,),
+                queued_proposal_index=2,
+            )
+
+        with pytest.raises(ValueError, match="queued_proposal_index must be zero"):
+            _ = GenerationalGAOptimizerState(
+                variant=GenerationalGAVariant.NATIVE,
+                random_state=random_state,
+                queued_proposal_index=1,
+            )
+
+    def test_member_buffer_materializes_append_order(self) -> None:
+        first = GenerationalGAPopulationMember(candidate=1, value=1.0, score=1.0)
+        second = GenerationalGAPopulationMember(candidate=2, value=2.0, score=2.0)
+        third = GenerationalGAPopulationMember(candidate=3, value=3.0, score=3.0)
+
+        empty_buffer: GenerationalGAMemberBuffer[int] = GenerationalGAMemberBuffer()
+        buffer = empty_buffer.append((first, second)).append((third,))
+
+        assert buffer.member_count == 3
+        assert buffer.materialize() == (first, second, third)
+
+    def test_member_buffer_rejects_inconsistent_accounting(self) -> None:
+        member = GenerationalGAPopulationMember(candidate=1, value=1.0, score=1.0)
+
+        with pytest.raises(ValueError, match="member_count must match"):
+            _ = GenerationalGAMemberBuffer(
+                member_count=2,
+                latest_batch=(member,),
+            )
+
+        empty_buffer: GenerationalGAMemberBuffer[int] = GenerationalGAMemberBuffer()
+        with pytest.raises(ValueError, match="latest_batch must not be empty"):
+            _ = GenerationalGAMemberBuffer(
+                member_count=0,
+                previous=empty_buffer,
             )
 
     def test_generation_commit_rejects_empty_population(self) -> None:

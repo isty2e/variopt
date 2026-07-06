@@ -23,6 +23,7 @@ from ....randomness import (
 from ....sampling import CandidateSampler
 from ....typevars import CandidateT
 from .state import (
+    GenerationalGAMemberBuffer,
     GenerationalGAOptimizerState,
     GenerationalGAPopulationMember,
     GenerationalGAVariant,
@@ -229,18 +230,21 @@ def ask_generational_ga(
         )
 
     next_state = state
-    if len(next_state.queued_proposals) == 0:
+    if next_state.queued_proposal_index == len(next_state.queued_proposals):
         next_state = materialize_generational_ga_generation(
             runtime,
             next_state,
             proposal_id_prefix=proposal_id_prefix,
         )
 
-    proposal_count = min(batch_size, len(next_state.queued_proposals))
-    proposals = next_state.queued_proposals[:proposal_count]
+    queued_start = next_state.queued_proposal_index
+    queued_stop = min(batch_size + queued_start, len(next_state.queued_proposals))
+    proposals = next_state.queued_proposals[queued_start:queued_stop]
+    remaining_queue_is_empty = queued_stop == len(next_state.queued_proposals)
     return proposals, replace(
         next_state,
-        queued_proposals=next_state.queued_proposals[proposal_count:],
+        queued_proposals=() if remaining_queue_is_empty else next_state.queued_proposals,
+        queued_proposal_index=0 if remaining_queue_is_empty else queued_stop,
         pending_proposals=proposals,
     )
 
@@ -306,11 +310,10 @@ def tell_generational_ga(
         )
         for observation in observation_tuple
     )
-    buffered_members = state.buffered_members + new_members
     next_state = replace(
         state,
         pending_proposals=(),
-        buffered_members=buffered_members,
+        buffered_member_buffer=state.buffered_member_buffer.append(new_members),
     )
 
     if len(state.population) == 0:
@@ -337,7 +340,9 @@ def ask_initial_generational_ga_population(
     GenerationalGAOptimizerState[CandidateT],
 ]:
     """Emit proposals for an incomplete initial population."""
-    remaining_population = runtime.population_size - len(state.buffered_members)
+    remaining_population = (
+        runtime.population_size - state.buffered_member_buffer.member_count
+    )
     proposal_count = min(batch_size, remaining_population)
     random_state = state.random_state.materialize()
     candidates = tuple(
@@ -385,6 +390,7 @@ def materialize_generational_ga_generation(
         random_state=next_random_state,
         proposal_index=state.proposal_index + len(proposals),
         queued_proposals=proposals,
+        queued_proposal_index=0,
     )
 
 
@@ -483,17 +489,20 @@ def tell_initial_generational_ga_population(
     population_size: int,
 ) -> GenerationalGAOptimizerState[CandidateT]:
     """Commit buffered observations as the initial sorted population."""
-    if len(state.buffered_members) < population_size:
+    if state.buffered_member_buffer.member_count < population_size:
         return state
 
-    if len(state.buffered_members) != population_size:
+    if state.buffered_member_buffer.member_count != population_size:
         msg = "initial population buffer exceeded population_size"
         raise RuntimeError(msg)
 
+    empty_buffer: GenerationalGAMemberBuffer[CandidateT] = GenerationalGAMemberBuffer()
     return replace(
         state,
-        population=sort_generational_ga_population(state.buffered_members),
-        buffered_members=(),
+        population=sort_generational_ga_population(
+            state.buffered_member_buffer.materialize(),
+        ),
+        buffered_member_buffer=empty_buffer,
     )
 
 
@@ -504,28 +513,30 @@ def tell_generational_ga_generation(
     build_next_population: GenerationalGAGenerationCommitter[CandidateT],
 ) -> GenerationalGAOptimizerState[CandidateT]:
     """Commit a full offspring buffer through variant-local survival."""
-    if len(state.buffered_members) < population_size:
+    if state.buffered_member_buffer.member_count < population_size:
         return state
 
-    if len(state.buffered_members) != population_size:
+    if state.buffered_member_buffer.member_count != population_size:
         msg = "offspring buffer exceeded population_size"
         raise RuntimeError(msg)
 
+    offspring = state.buffered_member_buffer.materialize()
     commit = build_next_population(
         parents=state.population,
-        offspring=state.buffered_members,
+        offspring=offspring,
         random_state=state.random_state,
     )
     if len(commit.population) != population_size:
         msg = "next population size must match population_size"
         raise RuntimeError(msg)
 
+    empty_buffer: GenerationalGAMemberBuffer[CandidateT] = GenerationalGAMemberBuffer()
     if commit.random_state is None:
         return replace(
             state,
             generation_index=state.generation_index + 1,
             population=commit.population,
-            buffered_members=(),
+            buffered_member_buffer=empty_buffer,
         )
 
     return replace(
@@ -533,7 +544,7 @@ def tell_generational_ga_generation(
         random_state=commit.random_state,
         generation_index=state.generation_index + 1,
         population=commit.population,
-        buffered_members=(),
+        buffered_member_buffer=empty_buffer,
     )
 
 

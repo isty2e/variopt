@@ -27,11 +27,12 @@ pages.
 ### Population optimizer state artifacts
 
 `variopt.algorithms.population` exposes
-`GenerationalGAOptimizerState`, `GenerationalGAPopulationMember`, and
-`GenerationalGAVariant` as supported type-hint/runtime state artifacts for the
-native GA, clearing GA, species-conserving GA, and restricted-tournament GA
-manual `ask(...)` / `tell(...)` contracts. The concrete state is public because
-those optimizer methods return and accept it directly.
+`GenerationalGAOptimizerState`, `GenerationalGAMemberBuffer`,
+`GenerationalGAPopulationMember`, and `GenerationalGAVariant` as supported
+type-hint/runtime state artifacts for the native GA, clearing GA,
+species-conserving GA, and restricted-tournament GA manual `ask(...)` /
+`tell(...)` contracts. The concrete state is public because those optimizer
+methods return and accept it directly.
 
 The shared lifecycle implementation package
 `variopt.algorithms.population.generational_ga` remains an implementation

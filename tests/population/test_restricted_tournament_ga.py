@@ -211,7 +211,8 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
         assert tuple(proposal.proposal_id for proposal in proposals) == (
             "restricted-tournament-ga-4",
         )
-        assert tuple(proposal.proposal_id for proposal in state.queued_proposals) == (
+        remaining_proposals = state.queued_proposals[state.queued_proposal_index :]
+        assert tuple(proposal.proposal_id for proposal in remaining_proposals) == (
             "restricted-tournament-ga-5",
             "restricted-tournament-ga-6",
             "restricted-tournament-ga-7",

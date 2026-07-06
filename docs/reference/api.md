@@ -66,8 +66,9 @@ KernelStatus`; `variopt.kernel` is not a supported diagnostics facade.
 
 The `variopt.algorithms.population` facade also exposes the generational GA
 state artifacts used by manual `ask(...)` / `tell(...)` loops:
-`GenerationalGAOptimizerState`, `GenerationalGAPopulationMember`, and
-`GenerationalGAVariant`. These are supported type-hint/runtime state artifacts
-because the GA-family optimizer methods return and accept them directly.
+`GenerationalGAOptimizerState`, `GenerationalGAMemberBuffer`,
+`GenerationalGAPopulationMember`, and `GenerationalGAVariant`. These are
+supported type-hint/runtime state artifacts because the GA-family optimizer
+methods return and accept them directly.
 Lifecycle helpers under `variopt.algorithms.population.generational_ga` remain
 implementation details.

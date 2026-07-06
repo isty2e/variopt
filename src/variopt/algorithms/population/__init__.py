@@ -10,6 +10,7 @@ from .csa import CSAOptimizer, CSAProfile
 from .de import DEProfile, DifferentialEvolutionOptimizer
 from .ga import GAProfile, GeneticAlgorithmOptimizer
 from .generational_ga.state import (
+    GenerationalGAMemberBuffer,
     GenerationalGAOptimizerState,
     GenerationalGAPopulationMember,
     GenerationalGAVariant,
@@ -33,6 +34,7 @@ __all__ = [
     "DifferentialEvolutionOptimizer",
     "GAProfile",
     "GeneticAlgorithmOptimizer",
+    "GenerationalGAMemberBuffer",
     "GenerationalGAOptimizerState",
     "GenerationalGAPopulationMember",
     "GenerationalGAVariant",

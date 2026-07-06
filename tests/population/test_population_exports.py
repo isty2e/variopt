@@ -22,6 +22,7 @@ EXPECTED_POPULATION_ALL = (
     "DifferentialEvolutionOptimizer",
     "GAProfile",
     "GeneticAlgorithmOptimizer",
+    "GenerationalGAMemberBuffer",
     "GenerationalGAOptimizerState",
     "GenerationalGAPopulationMember",
     "GenerationalGAVariant",
@@ -78,6 +79,7 @@ class PopulationFacadeExportTests:
         assert population_algorithms.ClearingGeneticAlgorithmOptimizer is clearing_ga_algorithms.ClearingGeneticAlgorithmOptimizer
         assert population_algorithms.RestrictedTournamentGAProfile is restricted_tournament_ga_algorithms.RestrictedTournamentGAProfile
         assert population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer is restricted_tournament_ga_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+        assert population_algorithms.GenerationalGAMemberBuffer is generational_ga_state.GenerationalGAMemberBuffer
         assert population_algorithms.GenerationalGAOptimizerState is generational_ga_state.GenerationalGAOptimizerState
         assert population_algorithms.GenerationalGAPopulationMember is generational_ga_state.GenerationalGAPopulationMember
         assert population_algorithms.GenerationalGAVariant is generational_ga_state.GenerationalGAVariant

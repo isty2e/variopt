@@ -75,9 +75,11 @@ format. Stability guarantees for the public surface are documented in the
 ### Added
 
 - `variopt.algorithms.population` now exposes
-  `GenerationalGAOptimizerState`, `GenerationalGAPopulationMember`, and
-  `GenerationalGAVariant` as supported type-hint/runtime state artifacts for
-  manual generational-GA `ask(...)` / `tell(...)` loops.
+  `GenerationalGAOptimizerState`, `GenerationalGAMemberBuffer`,
+  `GenerationalGAPopulationMember`, and `GenerationalGAVariant` as supported
+  type-hint/runtime state artifacts for manual generational-GA `ask(...)` /
+  `tell(...)` loops. The state uses a queued-proposal cursor and immutable
+  member buffer to avoid repeated split-batch tuple copies.
 - Added `stop_at_checkpoint_boundary=True` for `Study.run(...)` and
   `Study.optimize(...)` so CSA runs can return the latest checkpoint-safe state
   when the budget ends or is exhausted inside an unsafe generation segment.
