@@ -155,15 +155,15 @@ class RunMethod(
         state: RunMethodStateT,
         observations: Sequence[RunMethodRecordT],
     ) -> RunMethodStateT:
-        """Advance the run-method state with materialized feedback records.
+        """Advance the run-method state with request-aligned feedback records.
 
         Parameters
         ----------
         state : RunMethodStateT
             Current immutable run-method state.
         observations : Sequence[RunMethodRecordT]
-            Materialized feedback records aligned to proposals issued by
-            ``ask``.
+            Request-aligned feedback records materialized from successful
+            evaluation attempts for proposals issued by ``ask``.
 
         Returns
         -------

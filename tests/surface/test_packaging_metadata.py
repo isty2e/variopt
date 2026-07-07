@@ -41,6 +41,16 @@ def _load_pyproject_metadata() -> PyprojectMetadata:
     return cast(PyprojectMetadata, cast(object, pyproject_data))
 
 
+def _workflow_uses_references(path: Path) -> tuple[str, ...]:
+    """Return GitHub Actions `uses:` references from one workflow file."""
+    references: list[str] = []
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- uses: "):
+            references.append(stripped.removeprefix("- uses: ").strip())
+    return tuple(references)
+
+
 class PackagingMetadataTests:
     """Lock core and optional dependency boundaries in pyproject metadata."""
 
@@ -108,3 +118,57 @@ class PackagingMetadataTests:
         assert "/dist" in excludes
         assert "/tests" in excludes
         assert "/uv.lock" in excludes
+
+    def test_local_uv_lock_is_not_release_metadata(self) -> None:
+        pyproject_data = _load_toml(Path("pyproject.toml").read_text())
+        gitignore_entries = set(Path(".gitignore").read_text().splitlines())
+        ci_workflow = Path(".github/workflows/ci.yml").read_text()
+
+        hatch_config = cast(dict[str, object], pyproject_data["tool"])["hatch"]
+        build_config = cast(dict[str, object], hatch_config)["build"]
+        targets = cast(dict[str, object], build_config)["targets"]
+        sdist_config = cast(dict[str, object], targets)["sdist"]
+        excludes = set(cast(list[str], cast(dict[str, object], sdist_config)["exclude"]))
+
+        assert "uv.lock" in gitignore_entries
+        assert "/uv.lock" in excludes
+        assert "cache-dependency-glob: pyproject.toml" in ci_workflow
+        assert "cache-dependency-glob: uv.lock" not in ci_workflow
+
+    def test_ci_action_references_use_version_tags(self) -> None:
+        workflow_paths = (
+            Path(".github/workflows/ci.yml"),
+            Path(".github/workflows/docs.yml"),
+        )
+
+        references = tuple(
+            reference
+            for workflow_path in workflow_paths
+            for reference in _workflow_uses_references(workflow_path)
+        )
+
+        assert references
+        for reference in references:
+            assert "@" in reference
+            _, ref = reference.rsplit("@", 1)
+            assert ref not in {"main", "master", "HEAD"}
+            assert ref.startswith("v")
+
+    def test_docs_workflow_builds_without_deploying_site(self) -> None:
+        docs_workflow = Path(".github/workflows/docs.yml").read_text()
+
+        assert "mkdocs build --strict" in docs_workflow
+        assert "gh-pages" not in docs_workflow
+        assert "peaceiris/actions-gh-pages" not in docs_workflow
+        assert "mkdocs gh-deploy" not in docs_workflow
+
+    def test_ci_runs_when_release_metadata_inputs_change(self) -> None:
+        ci_workflow = Path(".github/workflows/ci.yml").read_text()
+
+        for release_metadata_path in (
+            "pyproject.toml",
+            ".gitignore",
+            ".github/workflows/ci.yml",
+            ".github/workflows/docs.yml",
+        ):
+            assert ci_workflow.count(f'- "{release_metadata_path}"') == 2

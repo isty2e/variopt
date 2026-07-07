@@ -1,6 +1,7 @@
 """Regression coverage for release-facing public-surface boundaries."""
 
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -51,3 +52,11 @@ class ReleaseSurfaceBoundaryTests:
         for module_name in removed_modules:
             with pytest.raises(ModuleNotFoundError):
                 _ = importlib.import_module(module_name)
+
+    def test_changelog_documents_run_method_attempt_migration(self) -> None:
+        changelog = Path("CHANGELOG.md").read_text()
+
+        assert "tell_attempts(EvaluationAttemptBatch)" in changelog
+        assert "tell_outcomes(...)" in changelog
+        assert "third-party `RunMethod` subclasses" in changelog
+        assert "EvaluationRecordT" not in changelog

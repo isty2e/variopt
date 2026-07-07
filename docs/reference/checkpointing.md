@@ -21,6 +21,8 @@ cross-version or crash-recovery checkpoint format.
 
 ```python
 import json
+import tempfile
+from pathlib import Path
 
 from variopt import IntegerSpace, Objective, Problem, Study
 from variopt.algorithms.population import CSAOptimizer
@@ -51,16 +53,31 @@ result, state = study.optimize(
 )
 checkpoint = optimizer.state_to_dict(state)
 
-with open("checkpoint.json", "w") as f:
-    json.dump(checkpoint, f)
+checkpoint_path = Path("checkpoint.json")
+with tempfile.NamedTemporaryFile(
+    "w",
+    dir=checkpoint_path.parent,
+    prefix=f"{checkpoint_path.name}.",
+    suffix=".tmp",
+    delete=False,
+) as checkpoint_file:
+    temporary_path = Path(checkpoint_file.name)
+    json.dump(checkpoint, checkpoint_file)
+    checkpoint_file.write("\n")
+temporary_path.replace(checkpoint_path)
 
 # Later: restore and continue.
-with open("checkpoint.json") as f:
+with checkpoint_path.open() as f:
     loaded = json.load(f)
 
 restored_state = optimizer.state_from_dict(loaded)
 result, _ = study.optimize(max_evaluations=20, initial_state=restored_state)
 ```
+
+Write a checkpoint to a temporary path on the same filesystem and then replace
+the destination. Avoid overwriting an existing checkpoint file in place; a crash
+or interrupted write could otherwise leave neither the old nor the new snapshot
+usable.
 
 If a reported logical evaluation cost exhausts the hard budget while the run is
 inside an unsafe segment, `stop_at_checkpoint_boundary=True` returns the latest
