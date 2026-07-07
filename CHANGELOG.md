@@ -96,6 +96,10 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- Added a scheduled and manually dispatchable dependency canary workflow that
+  resolves the latest compatible dependencies, builds the docs and wheel, and
+  smokes the installed base and MPI extras without treating `uv.lock` as release
+  metadata.
 - `variopt.algorithms.population` now exposes
   `GenerationalGAOptimizerState`, `GenerationalGAMemberBuffer`,
   `GenerationalGAPopulationMember`, and `GenerationalGAVariant` as supported

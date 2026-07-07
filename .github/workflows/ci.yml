@@ -11,6 +11,7 @@ on:
       - "pyproject.toml"
       - ".gitignore"
       - ".github/scripts/**"
+      - ".github/workflows/canary.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/docs.yml"
   push:
@@ -24,6 +25,7 @@ on:
       - "pyproject.toml"
       - ".gitignore"
       - ".github/scripts/**"
+      - ".github/workflows/canary.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/docs.yml"
 

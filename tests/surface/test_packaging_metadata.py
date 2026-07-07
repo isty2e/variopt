@@ -137,6 +137,7 @@ class PackagingMetadataTests:
 
     def test_ci_action_references_use_version_tags(self) -> None:
         workflow_paths = (
+            Path(".github/workflows/canary.yml"),
             Path(".github/workflows/ci.yml"),
             Path(".github/workflows/docs.yml"),
         )
@@ -168,7 +169,25 @@ class PackagingMetadataTests:
         for release_metadata_path in (
             "pyproject.toml",
             ".gitignore",
+            ".github/workflows/canary.yml",
             ".github/workflows/ci.yml",
             ".github/workflows/docs.yml",
         ):
             assert ci_workflow.count(f'- "{release_metadata_path}"') == 2
+
+    def test_dependency_canary_tracks_latest_resolution_without_lockfile(self) -> None:
+        canary_workflow = Path(".github/workflows/canary.yml").read_text()
+
+        assert "schedule:" in canary_workflow
+        assert "workflow_dispatch:" in canary_workflow
+        assert "uv run --upgrade --python 3.13 --extra test" in canary_workflow
+        assert "uv run --upgrade --python 3.13 --extra docs" in canary_workflow
+        assert "uv build --wheel" in canary_workflow
+        assert '"${wheel_path}"' in canary_workflow
+        assert '"${wheel_path}[mpi]"' in canary_workflow
+        assert "--surface base" in canary_workflow
+        assert "--surface joblib-private" in canary_workflow
+        assert "--surface mpi" in canary_workflow
+        assert "--locked" not in canary_workflow
+        assert "--frozen" not in canary_workflow
+        assert "cache-dependency-glob: uv.lock" not in canary_workflow
