@@ -123,9 +123,10 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPa
         Optional canonical request-aligned evaluation protocol. This may be
         direction-free or a scalar observation protocol that ``Problem`` will
         lower into the canonical request-based contract.
-    direction : OptimizationDirection, default=OptimizationDirection.MINIMIZE
+    direction : OptimizationDirection | None, optional
         Scalar optimization direction to bind when ``objective`` or an
-        observation protocol is supplied.
+        observation protocol is supplied. ``None`` means no direction was
+        specified and is stored internally as ``OptimizationDirection.MINIMIZE``.
     name : str | None, optional
         Optional human-readable label for reports, examples, and diagnostics.
 
@@ -159,7 +160,7 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPa
             | ObservationEvaluationProtocol[CandidateT]
         )
         | None = None,
-        direction: OptimizationDirection = OptimizationDirection.MINIMIZE,
+        direction: OptimizationDirection | None = None,
         name: str | None = None,
     ) -> None:
         """Create an immutable problem specification.
@@ -174,8 +175,9 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPa
         evaluation_protocol : EvaluationProtocol[CandidateT, ProblemPayloadT] | ObservationEvaluationProtocol[CandidateT] | None, optional
             Optional canonical payload-returning evaluation protocol or scalar
             observation protocol.
-        direction : OptimizationDirection, default=OptimizationDirection.MINIMIZE
-            Scalar direction bound at construction time when needed.
+        direction : OptimizationDirection | None, optional
+            Scalar direction bound at construction time when needed. ``None``
+            means no scalar direction was specified.
         name : str | None, optional
             Optional human-readable problem label.
 
@@ -196,6 +198,15 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPa
             msg = "evaluation_protocol normalization failed"
             raise RuntimeError(msg)
 
+        direction_was_specified = direction is not None
+        if direction is None:
+            canonical_direction = OptimizationDirection.MINIMIZE
+        elif type(direction) is OptimizationDirection:
+            canonical_direction = direction
+        else:
+            msg = "direction must be an OptimizationDirection or None"
+            raise TypeError(msg)
+
         canonical_protocol: (
             EvaluationProtocol[CandidateT, ProblemPayloadT]
             | _ObservationProtocolEvaluationProtocolAdapter[CandidateT]
@@ -204,31 +215,34 @@ class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPa
         if objective is not None:
             canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
                 observation_evaluation_protocol=objective,
-                direction=direction,
+                direction=canonical_direction,
             )
             objective_compat = objective
         elif isinstance(protocol, Objective):
             canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
                 observation_evaluation_protocol=protocol,
-                direction=direction,
+                direction=canonical_direction,
             )
             objective_compat = protocol
         elif isinstance(protocol, ObservationEvaluationProtocol):
             canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
                 observation_evaluation_protocol=protocol,
-                direction=direction,
+                direction=canonical_direction,
             )
             objective_compat = _ProtocolObjectiveCompatibilityView(
                 evaluation_protocol=protocol,
-                direction=direction,
+                direction=canonical_direction,
             )
         else:
+            if direction_was_specified:
+                msg = "direction-free evaluation protocols do not accept direction"
+                raise ValueError(msg)
             canonical_protocol = protocol
             objective_compat = None
 
         object.__setattr__(self, "space", space)
         object.__setattr__(self, "evaluation_protocol", canonical_protocol)
-        object.__setattr__(self, "direction", direction)
+        object.__setattr__(self, "direction", canonical_direction)
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "_objective_compat", objective_compat)
         self.__post_init__()

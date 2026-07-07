@@ -206,6 +206,44 @@ class ProblemContractsTests:
         assert evaluation_record.score == -9.0
         assert problem.objective.evaluate(4) == 9.0
 
+    def test_problem_defaults_unspecified_scalar_direction_to_minimize(self) -> None:
+        objective_problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+            direction=None,
+        )
+        protocol_problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=ShiftedObservationProtocol(),
+            direction=None,
+        )
+
+        objective_record = objective_problem.evaluation_protocol.evaluate_proposal(
+            Proposal(candidate=4),
+        )
+        protocol_record = protocol_problem.evaluation_protocol.evaluate_proposal(
+            Proposal(candidate=4),
+        )
+
+        assert objective_problem.direction is OptimizationDirection.MINIMIZE
+        assert objective_record.score == 16.0
+        assert protocol_problem.direction is OptimizationDirection.MINIMIZE
+        assert protocol_record.score == 9.0
+
+    def test_problem_accepts_objective_protocol_with_unspecified_direction(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=SquareObjective(),
+            direction=None,
+        )
+
+        record = problem.evaluation_protocol.evaluate_proposal(Proposal(candidate=4))
+
+        assert problem.direction is OptimizationDirection.MINIMIZE
+        assert record.value == 16.0
+        assert record.score == 16.0
+        assert problem.objective.evaluate(4) == 16.0
+
     def test_problem_non_scalar_protocol_has_no_objective_compatibility_view(self) -> None:
         protocol = LabelProtocol()
         problem = Problem(
@@ -216,6 +254,38 @@ class ProblemContractsTests:
         assert problem.evaluation_protocol is protocol
         with pytest.raises(TypeError):
             _ = problem.objective
+
+    def test_problem_rejects_explicit_direction_for_direction_free_protocol(self) -> None:
+        for direction in OptimizationDirection:
+            with pytest.raises(ValueError):
+                _ = Problem(
+                    space=IntegerSpace(low=0, high=10),
+                    evaluation_protocol=LabelProtocol(),
+                    direction=direction,
+                )
+
+    def test_problem_accepts_unspecified_direction_for_direction_free_protocol(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            evaluation_protocol=LabelProtocol(),
+            direction=None,
+        )
+
+        assert problem.direction is OptimizationDirection.MINIMIZE
+        assert problem.evaluation_protocol.evaluate_proposal(
+            Proposal(candidate=5),
+        ).label == "parity:1"
+
+    def test_direction_free_protocol_rejects_invalid_direction_type_first(self) -> None:
+        with pytest.raises(TypeError):
+            _ = Problem(
+                space=IntegerSpace(low=0, high=10),
+                evaluation_protocol=LabelProtocol(),
+                direction=cast(
+                    OptimizationDirection,
+                    cast(object, "maximize"),
+                ),
+            )
 
     def test_interaction_evaluation_unit_requires_non_empty_requests(self) -> None:
         with pytest.raises(ValueError):

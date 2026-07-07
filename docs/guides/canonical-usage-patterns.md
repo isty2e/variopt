@@ -88,6 +88,10 @@ assert [success.payload.label for success in successes] == [
 ]
 ```
 
+Do not pass `direction` for a direction-free `EvaluationProtocol`. Scalar
+direction belongs to `Objective` and `ObservationEvaluationProtocol` inputs;
+generic protocols own their payload semantics directly.
+
 In normal optimization runs, [`Problem`][variopt.Problem] and
 [`Study`][variopt.Study] provide the validation and orchestration shell around
 the same request-free protocol contract. `Study` then materializes built-in

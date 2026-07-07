@@ -81,6 +81,12 @@ format. Stability guarantees for the public surface are documented in the
   present. Code that inspected state internals should use
   `buffered_member_buffer` instead of `buffered_members`, and should read
   remaining queued proposals through `queued_proposals[queued_proposal_index:]`.
+- `Problem(..., direction=...)` is now scalar-only constructor input. Pass
+  `direction` only with `objective`, `Objective`, or
+  `ObservationEvaluationProtocol` inputs; direction-free `EvaluationProtocol`
+  implementations must omit it or pass `None`. Internally,
+  `Problem.direction` remains a concrete `OptimizationDirection` and defaults
+  unspecified scalar directions to `OptimizationDirection.MINIMIZE`.
 
 ### Added
 
