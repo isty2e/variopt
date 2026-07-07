@@ -114,6 +114,14 @@ The checkpoint intentionally does not capture:
 - trace or telemetry reducer state
 - derived caches that can be recomputed from authoritative state
 
+When a CSA checkpoint is restored, the optimizer state resumes with no
+accumulated CSA trace reducer state. This does not affect exact optimization
+continuation: tracing is diagnostic, while the checkpoint stores the
+authoritative state that determines future proposals and acceptance decisions.
+Payloads that attempt to include CSA `trace_state` are rejected rather than
+silently dropping that data. Collect trace or report data separately if you
+need a complete external telemetry record across a checkpoint boundary.
+
 ## Candidate Encoding
 
 For CSA optimizers built over `StructuredSearchSpace`, the optimizer provides a

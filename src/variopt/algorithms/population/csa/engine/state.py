@@ -170,7 +170,8 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
     pending_proposals : CSAPendingProposals[CandidateT]
         Outstanding proposals waiting for observations.
     trace_state : CSAEventTraceState[CandidateT] | None, default=None
-        Optional trace reducer state.
+        Optional diagnostic trace reducer state. This state is intentionally
+        outside the durable checkpoint contract.
     proposal_index : int, default=0
         Monotone counter used for proposal id allocation.
     """
@@ -199,6 +200,9 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
     ) -> JSONDict:
         """Return a JSON-safe checkpoint snapshot for a safe-boundary engine state.
 
+        The snapshot contains only authoritative continuation state. Diagnostic
+        trace reducer state is intentionally omitted.
+
         Parameters
         ----------
         candidate_to_dict : Callable[[CandidateT], JSONValue]
@@ -207,7 +211,7 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Returns
         -------
         JSONDict
-            Versioned JSON-safe checkpoint snapshot.
+            Versioned JSON-safe checkpoint snapshot without trace reducer state.
 
         Raises
         ------
@@ -249,6 +253,9 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
     ) -> "CSAEngineState[CandidateT]":
         """Build a safe-boundary engine state from a JSON-safe checkpoint snapshot.
 
+        Restored states start without diagnostic trace reducer state because
+        trace reducers are not part of the durable checkpoint contract.
+
         Parameters
         ----------
         data : Mapping[str, JSONValue]
@@ -270,14 +277,15 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Returns
         -------
         CSAEngineState[CandidateT]
-            Reconstructed safe-boundary engine state.
+            Reconstructed safe-boundary engine state with ``trace_state=None``.
 
         Raises
         ------
         TypeError
             If the snapshot carries invalid field types.
         ValueError
-            If the snapshot format or version is unsupported.
+            If the snapshot format or version is unsupported, or if the
+            snapshot attempts to carry unsupported trace reducer state.
         """
         format_name = require_json_str(
             require_json_field(data, "format"),
@@ -292,6 +300,12 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             raise ValueError(msg)
         if version != _CSA_ENGINE_STATE_VERSION:
             msg = "unsupported CSA checkpoint version"
+            raise ValueError(msg)
+        if "trace_state" in data:
+            msg = (
+                "CSA checkpoints do not support trace_state; persist trace "
+                "telemetry separately"
+            )
             raise ValueError(msg)
         proposal_index = require_json_int(
             require_json_field(data, "proposal_index"),

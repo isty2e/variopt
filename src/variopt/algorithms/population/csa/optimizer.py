@@ -340,6 +340,8 @@ class CSAOptimizer(
         ----------
         trace_state : CSAEventTraceState[CandidateT] | None, default=None
             Optional event-trace state attached to the created engine state.
+            Trace reducer state is diagnostic and is not serialized by
+            checkpoint helpers.
 
         Returns
         -------
@@ -398,6 +400,10 @@ class CSAOptimizer(
     ) -> JSONDict:
         """Return a JSON-safe checkpoint snapshot for one engine state.
 
+        The snapshot captures authoritative CSA continuation state only.
+        Diagnostic trace reducer state is omitted and is not restored by
+        ``state_from_dict``.
+
         Parameters
         ----------
         state : CSAEngineState[CandidateT]
@@ -409,7 +415,7 @@ class CSAOptimizer(
         Returns
         -------
         JSONDict
-            Versioned JSON-safe checkpoint snapshot.
+            Versioned JSON-safe checkpoint snapshot without trace reducer state.
 
         Raises
         ------
@@ -450,6 +456,9 @@ class CSAOptimizer(
     ) -> CSAEngineState[CandidateT]:
         """Return one engine state restored from a JSON-safe checkpoint snapshot.
 
+        Restored states start with ``trace_state=None``; historical trace
+        reducer contents are not recoverable from the checkpoint.
+
         Parameters
         ----------
         data : Mapping[str, JSONValue]
@@ -461,7 +470,7 @@ class CSAOptimizer(
         Returns
         -------
         CSAEngineState[CandidateT]
-            Reconstructed engine state.
+            Reconstructed engine state without trace reducer state.
 
         Raises
         ------

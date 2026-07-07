@@ -81,6 +81,7 @@ from variopt.algorithms.population.csa.scoring.model_state import (
 from variopt.algorithms.population.csa.selection.state import (
     SeedSelectionState,
 )
+from variopt.algorithms.population.csa.trace.events import CSAEventTraceState
 from variopt.artifacts import ObservationPayload
 from variopt.evaluators import SequentialEvaluator
 from variopt.json_types import JSONValue
@@ -325,6 +326,43 @@ class CSAEngineCheckpointTests:
         )
 
         assert restored.to_dict(candidate_to_dict=_int_candidate_to_dict) == snapshot
+
+    def test_checkpoint_omits_trace_reducer_state(self) -> None:
+        state = replace(
+            build_populated_engine_state(),
+            trace_state=CSAEventTraceState[int](),
+        )
+
+        snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        restored = CSAEngineState[int].from_dict(
+            snapshot,
+            candidate_from_dict=_int_candidate_from_dict,
+            growth_policy=state.banking_state.growth_state.policy,
+            clustering_policy=state.banking_state.clustering_state.policy,
+            proposal_policy=state.proposal_state.policy,
+            acceptance_policy=state.scoring_state.acceptance_state.policy,
+            score_model=state.scoring_state.model_state.score_model,
+        )
+
+        assert "trace_state" not in snapshot
+        assert restored.trace_state is None
+        assert restored.to_dict(candidate_to_dict=_int_candidate_to_dict) == snapshot
+
+    def test_checkpoint_rejects_trace_reducer_payload(self) -> None:
+        state = build_populated_engine_state()
+        snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        snapshot["trace_state"] = {"completed_generations": []}
+
+        with pytest.raises(ValueError, match="trace_state"):
+            _ = CSAEngineState[int].from_dict(
+                snapshot,
+                candidate_from_dict=_int_candidate_from_dict,
+                growth_policy=state.banking_state.growth_state.policy,
+                clustering_policy=state.banking_state.clustering_state.policy,
+                proposal_policy=state.proposal_state.policy,
+                acceptance_policy=state.scoring_state.acceptance_state.policy,
+                score_model=state.scoring_state.model_state.score_model,
+            )
 
     def test_clustering_state_snapshot_rejects_bool_and_non_finite_numbers(self) -> None:
         policy = CSAClusteringPolicy(enabled=True)
@@ -1035,6 +1073,40 @@ class CSAOptimizerCheckpointTests:
 
         assert optimizer.state_to_dict(resumed_state) == optimizer.state_to_dict(
             uninterrupted_state,
+        )
+
+    def test_trace_reducer_state_is_not_required_for_checkpoint_continuation(
+        self,
+    ) -> None:
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=IntegerSpace(-10, 10),
+            bank_capacity=6,
+            profile=CSAProfile(seed_count=3),
+            random_state=7,
+        )
+
+        traced_state = optimizer.create_state(trace_state=CSAEventTraceState[int]())
+        _, traced_state = _advance_to_safe_boundary(optimizer, traced_state)
+        snapshot = optimizer.state_to_dict(traced_state)
+        resumed_state = optimizer.state_from_dict(snapshot)
+
+        assert traced_state.trace_state is not None
+        assert "trace_state" not in snapshot
+        assert resumed_state.trace_state is None
+
+        for _ in range(3):
+            traced_trace, traced_state = _advance_to_safe_boundary(
+                optimizer,
+                traced_state,
+            )
+            resumed_trace, resumed_state = _advance_to_safe_boundary(
+                optimizer,
+                resumed_state,
+            )
+            assert resumed_trace == traced_trace
+
+        assert optimizer.state_to_dict(resumed_state) == optimizer.state_to_dict(
+            traced_state,
         )
 
     def test_study_optimize_can_stop_at_checkpoint_safe_boundary(self) -> None:
