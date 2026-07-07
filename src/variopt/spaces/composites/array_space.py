@@ -58,7 +58,7 @@ class ArraySpace(
     element_space : SearchSpace[ElementInputT, ElementCandidateT]
         Search space shared by every array position.
     length : int
-        Fixed array length.
+        Positive fixed array length.
     """
 
     element_space: SearchSpace[ElementInputT, ElementCandidateT]
@@ -72,14 +72,14 @@ class ArraySpace(
         TypeError
             If ``length`` is not a canonical integer.
         ValueError
-            If ``length`` is negative.
+            If ``length`` is not positive.
         """
         if type(self.length) is not int:
             msg = "ArraySpace length must be a canonical integer"
             raise TypeError(msg)
 
-        if self.length < 0:
-            msg = "ArraySpace length must be non-negative"
+        if self.length <= 0:
+            msg = "ArraySpace length must be positive"
             raise ValueError(msg)
 
     @override

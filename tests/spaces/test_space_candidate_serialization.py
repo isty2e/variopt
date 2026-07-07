@@ -3,6 +3,7 @@
 from collections.abc import Mapping
 from typing import cast
 
+import numpy as np
 import pytest
 
 from variopt import CategoricalSpace, IntegerSpace, RecordSpace, TupleSpace
@@ -14,10 +15,28 @@ from variopt.spaces.serialization import (
 )
 from variopt.spaces.types import SpaceCandidateValue
 
+_EXCESSIVE_CODEC_DEPTH = 300
+
 
 def runtime_value(value: object) -> object:
     """Return a value through an object-typed boundary for runtime guard tests."""
     return value
+
+
+def too_deep_tuple_candidate() -> SpaceCandidateValue:
+    """Return a tuple candidate deeper than the codec policy allows."""
+    candidate: SpaceCandidateValue = 0
+    for _ in range(_EXCESSIVE_CODEC_DEPTH):
+        candidate = (candidate,)
+    return candidate
+
+
+def too_deep_list_payload() -> JSONValue:
+    """Return a JSON payload deeper than the codec policy allows."""
+    payload: JSONValue = 0
+    for _ in range(_EXCESSIVE_CODEC_DEPTH):
+        payload = [payload]
+    return payload
 
 
 class SpaceCandidateSerializationTests:
@@ -167,3 +186,89 @@ class SpaceCandidateSerializationTests:
 
         with pytest.raises(ValueError, match="finite"):
             _ = space_candidate_from_dict(float("inf"))
+
+    def test_to_dict_rejects_numpy_float_candidate(self) -> None:
+        raw_candidate = runtime_value(np.float64(1.0))
+        unsupported_candidate = cast(SpaceCandidateValue, raw_candidate)
+
+        with pytest.raises(TypeError, match="supported structured candidate"):
+            _ = space_candidate_to_dict(unsupported_candidate)
+
+    def test_to_dict_rejects_bytes_subclass_candidate(self) -> None:
+        class DerivedBytes(bytes):
+            """Bytes subclass used to verify exact scalar canonicality."""
+
+        raw_candidate = runtime_value(DerivedBytes(b"abc"))
+        unsupported_candidate = cast(SpaceCandidateValue, raw_candidate)
+
+        with pytest.raises(TypeError, match="supported structured candidate"):
+            _ = space_candidate_to_dict(unsupported_candidate)
+
+    def test_from_dict_rejects_numpy_float_payload(self) -> None:
+        raw_payload = runtime_value(np.float64(1.0))
+        unsupported_payload = cast(JSONValue, raw_payload)
+
+        with pytest.raises(TypeError, match="supported structured candidate payload"):
+            _ = space_candidate_from_dict(unsupported_payload)
+
+    def test_to_dict_allows_shared_noncyclic_mapping_candidate(self) -> None:
+        shared_child: dict[str, SpaceCandidateValue] = {"value": 1}
+        candidate: dict[str, SpaceCandidateValue] = {
+            "left": shared_child,
+            "right": shared_child,
+        }
+
+        payload = space_candidate_to_dict(candidate)
+
+        assert payload == {
+            "left": {"value": 1},
+            "right": {"value": 1},
+        }
+
+    def test_from_dict_allows_shared_noncyclic_list_payload(self) -> None:
+        shared_child: list[JSONValue] = [1]
+        payload: JSONValue = [shared_child, shared_child]
+
+        restored = space_candidate_from_dict(payload)
+
+        assert restored == ((1,), (1,))
+
+    def test_to_dict_rejects_cyclic_mapping_candidate(self) -> None:
+        raw_candidate: dict[str, object] = {}
+        raw_candidate["self"] = raw_candidate
+        candidate = cast(SpaceCandidateValue, raw_candidate)
+
+        with pytest.raises(ValueError, match="cycle"):
+            _ = space_candidate_to_dict(candidate)
+
+    def test_from_dict_rejects_cyclic_mapping_payload(self) -> None:
+        raw_payload: dict[str, object] = {}
+        raw_payload["self"] = raw_payload
+        payload = cast(JSONValue, raw_payload)
+
+        with pytest.raises(ValueError, match="cycle"):
+            _ = space_candidate_from_dict(payload)
+
+    def test_from_dict_rejects_escaped_mapping_item_cycle(self) -> None:
+        raw_items: list[object] = []
+        raw_items.append(["self", raw_items])
+        payload = cast(
+            JSONValue,
+            {
+                "__variopt_mapping__": {
+                    "format": "variopt.mapping",
+                    "items": raw_items,
+                },
+            },
+        )
+
+        with pytest.raises(ValueError, match="cycle"):
+            _ = space_candidate_from_dict(payload)
+
+    def test_to_dict_rejects_excessively_deep_candidate(self) -> None:
+        with pytest.raises(ValueError, match="depth"):
+            _ = space_candidate_to_dict(too_deep_tuple_candidate())
+
+    def test_from_dict_rejects_excessively_deep_payload(self) -> None:
+        with pytest.raises(ValueError, match="depth"):
+            _ = space_candidate_from_dict(too_deep_list_payload())

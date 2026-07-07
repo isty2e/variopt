@@ -120,6 +120,11 @@ For CSA optimizers built over `StructuredSearchSpace`, the optimizer provides a
 built-in recursive candidate codec. For non-structured spaces, callers must
 pass explicit candidate serialization callbacks.
 
+The built-in structured candidate codec is JSON-safe and deliberately bounded:
+candidate payloads must be acyclic and must not exceed the codec nesting-depth
+limit. This keeps malformed in-memory payloads from falling through to
+interpreter recursion failures.
+
 ## Terminal Results
 
 `RunReport`, `RunResult`, and `NondominatedRunSurface` are terminal result
