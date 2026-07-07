@@ -73,10 +73,9 @@ format. Stability guarantees for the public surface are documented in the
   separate payload and feedback-record axes.
 - Custom `RunMethod` implementations that need `Study` feedback must now
   consume `tell_attempts(EvaluationAttemptBatch)`. The previous outcome-stream
-  assimilation hook, including `tell_outcomes(...)` implementations, is no
-  longer adapted by `Study`; third-party `RunMethod` subclasses should override
-  `tell_attempts(...)` directly, especially when recorded failures require
-  proposal cleanup or partial-generation handling.
+  assimilation hook is no longer adapted by `Study`; third-party `RunMethod`
+  subclasses should override `tell_attempts(...)` directly, especially when
+  recorded failures require proposal cleanup or partial-generation handling.
 - Native GA, clearing GA, species-conserving GA, and restricted-tournament GA
   manual `ask(...)` / `tell(...)` loops now share
   `variopt.algorithms.population.GenerationalGAOptimizerState` instead of

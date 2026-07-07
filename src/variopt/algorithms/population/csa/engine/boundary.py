@@ -184,18 +184,20 @@ def complete_refresh(
     )
     preserved_entry_count = len(refresh_state.preserved_bank_entries)
     if effective_refresh_policy.mode == "adaptive_refresh":
-        newcomer_mask = frozenset(range(preserved_entry_count))
+        preserved_entry_mask = frozenset(range(preserved_entry_count))
         stage_state = progression_state.stage_state
         if stage_state.seed_mask or stage_state.partner_mask:
             progression_state = replace(
                 progression_state,
                 stage_state=stage_state.with_masks(
-                    seed_mask=newcomer_mask,
-                    partner_mask=newcomer_mask,
+                    seed_mask=preserved_entry_mask,
+                    partner_mask=preserved_entry_mask,
                 ),
             )
         elif effective_refresh_policy.newcomer_first_round:
-            progression_state = progression_state.with_refresh_mask(newcomer_mask)
+            progression_state = progression_state.with_refresh_mask(
+                preserved_entry_mask,
+            )
 
     return replace(
         engine_state,

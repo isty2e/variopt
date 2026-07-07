@@ -156,7 +156,7 @@ class CSARefreshPolicyTests:
         assert refreshed_state.progression_state.seed_mask == frozenset({0})
         assert refreshed_state.progression_state.partner_mask == frozenset({0})
 
-    def test_adaptive_stage_growth_refresh_retargets_newcomer_masks_to_preserved_entries(
+    def test_adaptive_stage_growth_refresh_retargets_masks_to_preserved_entries(
         self,
     ) -> None:
         refresh_policy = CSARefreshPolicy(

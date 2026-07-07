@@ -57,6 +57,6 @@ class ReleaseSurfaceBoundaryTests:
         changelog = Path("CHANGELOG.md").read_text()
 
         assert "tell_attempts(EvaluationAttemptBatch)" in changelog
-        assert "tell_outcomes(...)" in changelog
-        assert "third-party `RunMethod` subclasses" in changelog
+        assert "outcome-stream" in changelog
+        assert "third-party `RunMethod`" in changelog
         assert "EvaluationRecordT" not in changelog

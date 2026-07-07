@@ -35,6 +35,14 @@ from variopt import (
 from variopt.artifacts import EvaluationSuccess
 
 
+class EqualityHostileCandidate:
+    """Candidate that fails the test if candidate equality is used accidentally."""
+
+    def __eq__(self, other: object) -> bool:
+        del other
+        raise AssertionError("candidate equality must not be used")
+
+
 def _request(proposal: Proposal[int]) -> EvaluationRequest[int]:
     return EvaluationRequest(proposal=proposal)
 
@@ -58,6 +66,15 @@ def _failure(request: EvaluationRequest[int]) -> EvaluationFailure[int]:
     return EvaluationFailure[int].from_exception(
         request=request,
         exception=ValueError(f"candidate failed: {request.candidate}"),
+    )
+
+
+def _hostile_failure(
+    request: EvaluationRequest[EqualityHostileCandidate],
+) -> EvaluationFailure[EqualityHostileCandidate]:
+    return EvaluationFailure[EqualityHostileCandidate].from_exception(
+        request=request,
+        exception=ValueError("candidate failed"),
     )
 
 
@@ -232,6 +249,55 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             entry.proposal_id != failed_proposal_id for entry in optimizer.bank.entries
         )
 
+    def test_generated_all_failures_finish_generation_without_bank_evidence(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((1, 2, 3, 4)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=2,
+            perturbation_schedule=perturbation_schedule(
+                regular_children_per_seed=2,
+                initial_children_per_seed=0,
+                shuffle_children=False,
+            ),
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=100.0,
+                minimum_distance_cutoff=100.0,
+                reduction_factor=1.0,
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        self.fill_bank(
+            optimizer=optimizer,
+            problem=problem,
+            evaluator=evaluator,
+        )
+        bank_before = optimizer.bank.entries
+        proposals = optimizer.ask(batch_size=2)
+        requests = tuple(_request(proposal) for proposal in proposals)
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=tuple(_failure(request) for request in requests),
+            )
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            attempts,
+        )
+
+        assert optimizer.bank.entries == bank_before
+        assert optimizer.engine_state.pending_proposals.is_empty
+        assert not optimizer.engine_state.generation_state.is_active
+        assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+
     def test_generated_failure_keeps_unissued_generation_queue_active(self) -> None:
         problem = Problem(
             space=ScriptedIntegerSpace((1, 2, 3, 4)),
@@ -380,7 +446,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
-    def test_attempt_failure_rejects_mismatched_proposal_without_consuming_pending(
+    def test_attempt_failure_uses_proposal_id_without_candidate_equality(
         self,
     ) -> None:
         optimizer = make_optimizer(
@@ -391,18 +457,23 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             random_state=0,
         )
         proposals = optimizer.ask(batch_size=1)
-        failure_request = _request(
-            Proposal(candidate=99, proposal_id=proposals[0].proposal_id),
+        failure_request: EvaluationRequest[EqualityHostileCandidate] = (
+            EvaluationRequest(
+                proposal=Proposal(
+                    candidate=EqualityHostileCandidate(),
+                    proposal_id=proposals[0].proposal_id,
+                ),
+            )
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+        attempts: EvaluationAttemptBatch[EqualityHostileCandidate, Observation[int]] = (
             EvaluationAttemptBatch(
-                attempts=(_failure(failure_request),),
+                attempts=(_hostile_failure(failure_request),),
             )
         )
 
-        with pytest.raises(ValueError, match="does not match"):
-            _ = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
+        next_state = optimizer.optimizer.tell_attempts(optimizer.engine_state, attempts)
 
+        assert next_state.pending_proposals.is_empty
         assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
     def test_attempt_failure_rejects_duplicate_failure_proposal_id(self) -> None:
