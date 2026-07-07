@@ -170,6 +170,50 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         self.distances[key] = distance
         return distance
 
+    def seed_entry_distances(
+        self,
+        *,
+        entry_index: int,
+        distances: Sequence[float],
+    ) -> None:
+        """Cache known distances between one entry and every aligned entry.
+
+        Parameters
+        ----------
+        entry_index : int
+            Entry index whose distances are being cached.
+        distances : collections.abc.Sequence[float]
+            Distance vector aligned to :attr:`entries`. The value at
+            ``entry_index`` is ignored because self-distance is always
+            represented by :meth:`distance` as ``0.0``.
+
+        Raises
+        ------
+        IndexError
+            Raised when ``entry_index`` is outside the workspace entry range.
+        ValueError
+            Raised when ``distances`` is not aligned to :attr:`entries`, or when
+            a supplied non-self distance is invalid.
+        """
+        if entry_index < 0 or entry_index >= len(self.entries):
+            msg = "entry_index must be a valid entry index"
+            raise IndexError(msg)
+
+        if len(distances) != len(self.entries):
+            msg = "distances must align one-to-one with entries"
+            raise ValueError(msg)
+
+        for other_index, distance in enumerate(distances):
+            if other_index == entry_index:
+                continue
+
+            key = (
+                (entry_index, other_index)
+                if entry_index < other_index
+                else (other_index, entry_index)
+            )
+            self.distances[key] = require_valid_distance(distance)
+
     def crowding_counts(self, *, distance_cutoff: float) -> tuple[int, ...]:
         """Count near neighbors for each entry using cached pair distances.
 

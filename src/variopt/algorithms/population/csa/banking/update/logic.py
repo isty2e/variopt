@@ -212,6 +212,7 @@ def apply_bank_update_batch(
             0.0 if shadow_state.distance_cutoff is None else shadow_state.distance_cutoff
         ),
         minimum_distance_cutoff=shadow_state.minimum_distance_cutoff,
+        distance_workspace=distance_workspace,
     )
     if final_changed_indices or removed_indices:
         shadow_clustering_state = shadow_clustering_state.recluster(
@@ -315,15 +316,29 @@ def admit_full_bank_observation(
         *,
         next_bank: Bank[CandidateT],
         invalidated_indices: frozenset[int],
+        admitted_index: int | None = None,
     ) -> BankDistanceWorkspace[CandidateT] | None:
         workspace = distance_workspace
         if workspace is None:
             return None
 
-        return workspace.rebase(
+        rebased_workspace = workspace.rebase(
             entries=next_bank.entries,
             invalidated_indices=invalidated_indices,
         )
+        if admitted_index is None:
+            return rebased_workspace
+
+        admitted_distances = entry_distances
+        if len(next_bank.entries) == len(entry_distances) + 1:
+            admitted_distances = (*entry_distances, 0.0)
+        # The workspace already stores symmetric pair keys; these validated
+        # trial-to-bank distances become bank-pair distances after admission.
+        rebased_workspace.seed_entry_distances(
+            entry_index=admitted_index,
+            distances=admitted_distances,
+        )
+        return rebased_workspace
 
     entry_distances = tuple(
         require_valid_distance(
@@ -401,6 +416,7 @@ def admit_full_bank_observation(
                     rebase_distance_workspace(
                         next_bank=next_bank,
                         invalidated_indices=frozenset({nearest_index}),
+                        admitted_index=nearest_index,
                     ),
                 )
 
@@ -436,6 +452,7 @@ def admit_full_bank_observation(
             rebase_distance_workspace(
                 next_bank=bank,
                 invalidated_indices=frozenset(),
+                admitted_index=appended_index,
             ),
         )
 
@@ -480,6 +497,7 @@ def admit_full_bank_observation(
                     rebase_distance_workspace(
                         next_bank=next_bank,
                         invalidated_indices=frozenset({cluster_update.remove_index}),
+                        admitted_index=cluster_update.remove_index,
                     ),
                 )
 
@@ -571,6 +589,7 @@ def admit_full_bank_observation(
             rebase_distance_workspace(
                 next_bank=next_bank,
                 invalidated_indices=frozenset({worst_index}),
+                admitted_index=worst_index,
             ),
         )
 

@@ -928,6 +928,71 @@ class CSAClusteringRuntimeTests:
             diversity_metric,
             candidates=(0, 1, 20, 100),
         )[(0, 1)] == 1
+        assert bank_pair_call_counts(
+            diversity_metric,
+            candidates=(0, 1, 20, 100),
+        )[(0, 20)] == 1
+        assert bank_pair_call_counts(
+            diversity_metric,
+            candidates=(0, 1, 20, 100),
+        )[(1, 20)] == 1
+
+    def test_batch_distance_workspace_seeds_appended_trial_distances(self) -> None:
+        diversity_metric = CountingAbsoluteDistance()
+
+        batch_result = run_cluster_batch_many(
+            bank=Bank(
+                capacity=2,
+                entries=(
+                    BankEntry(candidate=0, value=0.0),
+                    BankEntry(candidate=10, value=10.0),
+                ),
+            ),
+            observations=(
+                Observation(
+                    proposal=Proposal(candidate=20, proposal_id="p-1"),
+                    candidate=20,
+                    value=5.0,
+                    score=5.0,
+                ),
+                Observation(
+                    proposal=Proposal(candidate=30, proposal_id="p-2"),
+                    candidate=30,
+                    value=40.0,
+                    score=40.0,
+                ),
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=False),
+            ),
+            distance_cutoff=0.1,
+            score_model=CSAScoreModel(
+                biased_potential=CSABiasedPotential(
+                    maximum_bias=1.0,
+                    sigma=1.0,
+                    sigma_reference="constant",
+                ),
+            ),
+            growth_state=CSABankGrowthState[int](
+                policy=CSABankGrowthPolicy(
+                    enabled=True,
+                    maximum_capacity=3,
+                    initial_energy_gap_limit=20.0,
+                ),
+                active_energy_gap_limit=20.0,
+            ),
+            diversity_metric=diversity_metric,
+        )
+
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 10, 20)
+        assert bank_pair_call_counts(
+            diversity_metric,
+            candidates=(0, 10, 20),
+        )[(0, 20)] == 1
+        assert bank_pair_call_counts(
+            diversity_metric,
+            candidates=(0, 10, 20),
+        )[(10, 20)] == 1
 
     def test_unchanged_aligned_clustering_skips_recluster_distance_work(self) -> None:
         bank = Bank(
@@ -1118,6 +1183,7 @@ def run_cluster_batch(
     distance_cutoff: float,
     score_model: CSAScoreModel[int] | None = None,
     update_policy: CSABankUpdatePolicy | None = None,
+    growth_state: CSABankGrowthState[int] | None = None,
     diversity_metric: DiversityMetric[int] | None = None,
 ) -> BankUpdateResult[int]:
     return run_cluster_batch_many(
@@ -1127,6 +1193,7 @@ def run_cluster_batch(
         distance_cutoff=distance_cutoff,
         score_model=score_model,
         update_policy=update_policy,
+        growth_state=growth_state,
         diversity_metric=diversity_metric,
     )
 
@@ -1139,6 +1206,7 @@ def run_cluster_batch_many(
     distance_cutoff: float,
     score_model: CSAScoreModel[int] | None = None,
     update_policy: CSABankUpdatePolicy | None = None,
+    growth_state: CSABankGrowthState[int] | None = None,
     diversity_metric: DiversityMetric[int] | None = None,
 ) -> BankUpdateResult[int]:
     resolved_score_model: CSAScoreModel[int]
@@ -1152,6 +1220,14 @@ def run_cluster_batch_many(
         else update_policy
     )
     growth_policy = CSABankGrowthPolicy()
+    resolved_growth_state = (
+        CSABankGrowthState[int](
+            policy=growth_policy,
+            active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
+        )
+        if growth_state is None
+        else growth_state
+    )
 
     return apply_bank_update_batch(
         bank=bank,
@@ -1181,10 +1257,7 @@ def run_cluster_batch_many(
         update_policy=resolved_update_policy,
         acceptance_state=CSAAcceptanceState.from_policy(CSAAcceptancePolicy()),
         score_model_state=CSAScoreModelState(score_model=resolved_score_model),
-        growth_state=CSABankGrowthState[int](
-            policy=growth_policy,
-            active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
-        ),
+        growth_state=resolved_growth_state,
         clustering_state=clustering_state,
         base_bank_capacity=bank.capacity,
         masked_seed_indices=frozenset(),

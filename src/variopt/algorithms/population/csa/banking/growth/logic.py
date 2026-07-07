@@ -8,6 +8,7 @@ from ......diversity import DiversityMetric
 from ......typevars import CandidateT
 from ...scoring.model_state import CSAScoreModelState, ScoredBank, ScoredTrial
 from ..bank import Bank, BankEntry
+from ..queries import BankDistanceWorkspace
 from .state import CSABankGrowthState
 
 
@@ -187,6 +188,7 @@ def reduce_bank_by_energy_cut(
     diversity_metric: DiversityMetric[CandidateT],
     distance_cutoff: float,
     minimum_distance_cutoff: float | None,
+    distance_workspace: BankDistanceWorkspace[CandidateT] | None = None,
 ) -> tuple[
     Bank[CandidateT],
     frozenset[int],
@@ -210,6 +212,8 @@ def reduce_bank_by_energy_cut(
         Active CSA distance cutoff.
     minimum_distance_cutoff : float | None
         Optional cutoff floor used by the score model.
+    distance_workspace : BankDistanceWorkspace[CandidateT] | None, default=None
+        Optional operation-local distance workspace aligned to ``bank.entries``.
 
     Returns
     -------
@@ -225,6 +229,7 @@ def reduce_bank_by_energy_cut(
         distance_cutoff=distance_cutoff,
         minimum_distance_cutoff=minimum_distance_cutoff,
         masked_entry_indices=frozenset(),
+        distance_workspace=distance_workspace,
     )
     if state.policy.energy_gap_update_mode == "max_score_ratio":
         cut_energy = max(scored_bank.real_scores)
