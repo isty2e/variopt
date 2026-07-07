@@ -10,10 +10,12 @@ on:
       - "CHANGELOG.md"
       - "pyproject.toml"
       - ".gitignore"
+      - ".pre-commit-config.yaml"
       - ".github/scripts/**"
       - ".github/workflows/canary.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/docs.yml"
+      - ".github/workflows/pre-commit-autoupdate.yml"
   push:
     branches: [main]
     paths:
@@ -24,10 +26,12 @@ on:
       - "CHANGELOG.md"
       - "pyproject.toml"
       - ".gitignore"
+      - ".pre-commit-config.yaml"
       - ".github/scripts/**"
       - ".github/workflows/canary.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/docs.yml"
+      - ".github/workflows/pre-commit-autoupdate.yml"
 
 jobs:
   quality:
@@ -47,7 +51,9 @@ jobs:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
       - name: Lint
-        run: uv run --python ${{ matrix.python-version }} --extra test ruff check pyproject.toml src tests .github/scripts
+        run: uv run --python ${{ matrix.python-version }} --extra test ruff check --extend-select I,UP pyproject.toml src tests .github/scripts
+      - name: Format check
+        run: uv run --python ${{ matrix.python-version }} --extra test ruff format --check pyproject.toml src tests .github/scripts
       - name: Type check
         run: uv run --python ${{ matrix.python-version }} --extra test basedpyright src tests .github/scripts
       - name: Test
@@ -56,6 +62,21 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} --extra docs mkdocs build --strict
       - name: Build package
         run: uv build
+
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
+      - name: Run pre-commit hooks
+        run: uv run --python 3.13 --extra test pre-commit run --all-files
 
   package-smoke:
     name: installed wheel smoke
