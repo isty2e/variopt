@@ -420,6 +420,40 @@ class SearchSpaceTests:
 
         assert candidate == (3, 0.0)
 
+    def test_tuple_space_compares_declaration_by_value(self) -> None:
+        space = TupleSpace(
+            IntegerSpace(0, 5),
+            RecordSpace(scale=RealSpace(0.0, 1.0)),
+        )
+        matching_space = TupleSpace(
+            IntegerSpace(0, 5),
+            RecordSpace(scale=RealSpace(0.0, 1.0)),
+        )
+        different_child_space = TupleSpace(
+            IntegerSpace(0, 6),
+            RecordSpace(scale=RealSpace(0.0, 1.0)),
+        )
+        different_order_space = TupleSpace(
+            RecordSpace(scale=RealSpace(0.0, 1.0)),
+            IntegerSpace(0, 5),
+        )
+
+        assert space == matching_space
+        assert hash(space) == hash(matching_space)
+        assert space != different_child_space
+        assert space != different_order_space
+
+    def test_tuple_space_subclasses_keep_identity_equality(self) -> None:
+        class DerivedTupleSpace(TupleSpace):
+            """TupleSpace subclass used to check base equality does not overreach."""
+
+        space = DerivedTupleSpace(IntegerSpace(0, 5))
+
+        assert space == space
+        assert space != DerivedTupleSpace(IntegerSpace(0, 5))
+        assert space != TupleSpace(IntegerSpace(0, 5))
+        assert hash(space) == hash(space)
+
     def test_tuple_space_validate_rejects_noncanonical_real_child(self) -> None:
         space = TupleSpace(RealSpace(0.0, 10.0))
 
@@ -502,6 +536,40 @@ class SearchSpaceTests:
         assert candidate["depth"] == 2
         assert candidate["scale"] == 1.0
         assert candidate.as_dict() == {"depth": 2, "scale": 1.0}
+
+    def test_record_space_compares_declaration_by_value(self) -> None:
+        space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            schedule=TupleSpace(IntegerSpace(0, 3), RealSpace(0.0, 2.0)),
+        )
+        matching_space = RecordSpace(
+            depth=IntegerSpace(1, 4),
+            schedule=TupleSpace(IntegerSpace(0, 3), RealSpace(0.0, 2.0)),
+        )
+        reordered_space = RecordSpace(
+            schedule=TupleSpace(IntegerSpace(0, 3), RealSpace(0.0, 2.0)),
+            depth=IntegerSpace(1, 4),
+        )
+        different_child_space = RecordSpace(
+            depth=IntegerSpace(1, 5),
+            schedule=TupleSpace(IntegerSpace(0, 3), RealSpace(0.0, 2.0)),
+        )
+
+        assert space == matching_space
+        assert hash(space) == hash(matching_space)
+        assert space != reordered_space
+        assert space != different_child_space
+
+    def test_record_space_subclasses_keep_identity_equality(self) -> None:
+        class DerivedRecordSpace(RecordSpace):
+            """RecordSpace subclass used to check base equality does not overreach."""
+
+        space = DerivedRecordSpace(level=IntegerSpace(0, 5))
+
+        assert space == space
+        assert space != DerivedRecordSpace(level=IntegerSpace(0, 5))
+        assert space != RecordSpace(level=IntegerSpace(0, 5))
+        assert hash(space) == hash(space)
 
     def test_record_space_normalizes_mapping_without_order_dependency(self) -> None:
         space = RecordSpace(

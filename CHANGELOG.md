@@ -132,6 +132,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- `TupleSpace` and `RecordSpace` now compare by their declared child spaces
+  instead of object identity, so composite `Problem` equality matches scalar
+  and array space value-object behavior.
 - CSA bank distance queries now use the structured validated-candidate geometry
   path after the optimizer validates observed candidates at the `tell(...)`
   boundary, avoiding repeated public distance validation in canonical bank hot

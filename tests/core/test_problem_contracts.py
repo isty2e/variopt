@@ -21,11 +21,14 @@ from variopt import (
     Evaluator,
     IntegerSpace,
     InteractionProblem,
+    Objective,
     Observation,
     OptimizationDirection,
     Problem,
     Proposal,
+    RealSpace,
     Study,
+    TupleSpace,
 )
 from variopt.algorithms.population import CSAOptimizer
 from variopt.artifacts import (
@@ -35,6 +38,7 @@ from variopt.artifacts import (
     ObservationPayload,
 )
 from variopt.kernel import DirectKernel
+from variopt.spaces import SpaceCandidateValue
 
 PickleRoundTripT = TypeVar("PickleRoundTripT")
 
@@ -98,6 +102,14 @@ class LegacyObservationEvaluator(
         )
 
 
+class TupleLengthObjective(Objective[tuple[SpaceCandidateValue, ...]]):
+    """Objective whose identity lets Problem equality isolate space equality."""
+
+    @override
+    def evaluate(self, candidate: tuple[SpaceCandidateValue, ...]) -> float:
+        return float(len(candidate))
+
+
 class ProblemContractsTests:
     """Coverage for problem construction and interaction contract validation."""
 
@@ -110,6 +122,28 @@ class ProblemContractsTests:
 
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(problem, "name", "other")
+
+    def test_problem_equality_uses_composite_space_value_equality(self) -> None:
+        objective = TupleLengthObjective()
+        first = Problem(
+            space=TupleSpace(IntegerSpace(0, 5), RealSpace(0.0, 1.0)),
+            objective=objective,
+            name="tuple",
+        )
+        second = Problem(
+            space=TupleSpace(IntegerSpace(0, 5), RealSpace(0.0, 1.0)),
+            objective=objective,
+            name="tuple",
+        )
+        different_space = Problem(
+            space=TupleSpace(IntegerSpace(0, 6), RealSpace(0.0, 1.0)),
+            objective=objective,
+            name="tuple",
+        )
+
+        assert first == second
+        assert hash(first) == hash(second)
+        assert first != different_space
 
     def test_problem_pickle_round_trips_without_runtime_generic_metadata(self) -> None:
         problem = Problem(

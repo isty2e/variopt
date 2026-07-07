@@ -76,6 +76,22 @@ class RecordSpace(
         return self._fields
 
     @override
+    def __eq__(self, other: object) -> bool:
+        """Return whether two record spaces declare the same ordered fields."""
+        if type(self) is not RecordSpace:
+            return self is other
+        if type(other) is not RecordSpace:
+            return False
+        return self._fields == other._fields
+
+    @override
+    def __hash__(self) -> int:
+        """Return a hash derived from the record-space declaration."""
+        if type(self) is not RecordSpace:
+            return object.__hash__(self)
+        return hash((RecordSpace, self._fields))
+
+    @override
     def normalize(
         self,
         raw_candidate: Mapping[str, SpaceBoundaryValue] | RecordCandidate,
