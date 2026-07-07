@@ -117,11 +117,22 @@ def emit_structured_mutation_candidate(
     -------
     GeneratedCandidate[SpaceCandidateValue]
         Structured mutation child together with optional planned attribution.
+        Returns the seed unchanged when no active leaf paths are available.
     """
     structured_space = operator.structured_candidate_space
     editable_paths = structured_space.active_leaf_paths_for_validated_candidate(
         seed_candidate,
     )
+    if len(editable_paths) == 0:
+        return GeneratedCandidate(
+            candidate=seed_candidate,
+            planned_attribution=planned_mutation_attribution(
+                source_score=seed_score,
+                proposal_family_key=mutation_family_key(mutation_family_index),
+                mutated_leaf_paths=(),
+            ),
+        )
+
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
         max_exchange_fraction=operator.max_selected_path_fraction,

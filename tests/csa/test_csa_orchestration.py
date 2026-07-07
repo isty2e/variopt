@@ -7,9 +7,12 @@ from tests.csa_support import (
     Bank,
     BankEntry,
     CollapseToZero,
+    CSABankUpdatePolicy,
+    CSABiasedPotential,
     CSACutoffSchedule,
     CSACutoffState,
     CSAOptimizerTestCase,
+    CSAScoreModel,
     EncodeBinaryParents,
     IntegerSpace,
     NaNDistance,
@@ -220,6 +223,41 @@ class CSAOptimizerOrchestrationTests(CSAOptimizerTestCase):
 
         assert optimizer.bank != original_bank
         assert optimizer.state.iteration_count == 1
+
+    def test_biased_potential_degrades_when_runtime_distance_scale_collapses(self) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((0, 0, 0, 0)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            variation_operator=RepeatParent(),
+            bank_capacity=4,
+            seed_count=1,
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=0.0,
+                minimum_distance_cutoff=0.0,
+            ),
+            update_policy=CSABankUpdatePolicy(far_update_mode="crowding_aware"),
+            score_model=CSAScoreModel[int](
+                biased_potential=CSABiasedPotential(),
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+
+        optimizer.tell(
+            evaluate_observations(
+                problem,
+                evaluator,
+                optimizer.ask(batch_size=4),
+            )
+        )
+        proposals = optimizer.ask(batch_size=1)
+        optimizer.tell(evaluate_observations(problem, evaluator, proposals))
+
+        assert len(optimizer.bank.entries) == 4
 
     def test_optimizer_rejects_nan_cutoff_inference_distance(self) -> None:
         problem = Problem(

@@ -520,7 +520,9 @@ class CSAScoreModelState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         else:
             sigma_distance = distance_cutoff
 
-        if sigma_distance <= 0.0:
+        if sigma_distance == 0.0:
+            return None
+        if sigma_distance < 0.0:
             msg = "biased potential requires a positive runtime distance scale"
             raise ValueError(msg)
 

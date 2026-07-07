@@ -1038,6 +1038,106 @@ class CSABankingTests(CSAOptimizerTestCase):
                 candidate_from_dict=candidate_from_dict,
             )
 
+    def test_biased_potential_rejects_negative_runtime_distance_scale(self) -> None:
+        state = CSAScoreModelState[int](
+            score_model=CSAScoreModel[int](
+                biased_potential=CSABiasedPotential(),
+            ),
+        )
+        entries = (
+            BankEntry[int](candidate=0, value=0.0),
+            BankEntry[int](candidate=1, value=1.0),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="biased potential requires a positive runtime distance scale",
+        ):
+            _ = state.score_bank(
+                entries=entries,
+                diversity_metric=AbsoluteDistance(),
+                distance_cutoff=-1.0,
+                minimum_distance_cutoff=None,
+                masked_entry_indices=frozenset(),
+            )
+
+    @pytest.mark.parametrize(
+        "sigma_reference",
+        ["distance_cutoff", "minimum_distance_cutoff"],
+    )
+    def test_biased_potential_zero_runtime_scale_disables_bias(
+        self,
+        sigma_reference: Literal[
+            "distance_cutoff",
+            "minimum_distance_cutoff",
+        ],
+    ) -> None:
+        state = CSAScoreModelState[int](
+            score_model=CSAScoreModel[int](
+                biased_potential=CSABiasedPotential(
+                    maximum_bias=10.0,
+                    sigma_reference=sigma_reference,
+                ),
+            ),
+            biased_potential_max=10.0,
+        )
+        entries = (
+            BankEntry[int](candidate=0, value=0.0),
+            BankEntry[int](candidate=0, value=1.0),
+        )
+        observation = Observation[int](
+            proposal=Proposal[int](candidate=0, proposal_id="p-1"),
+            candidate=0,
+            value=2.0,
+            score=2.0,
+        )
+
+        scored_bank, _ = state.score_bank(
+            entries=entries,
+            diversity_metric=AbsoluteDistance(),
+            distance_cutoff=0.0,
+            minimum_distance_cutoff=0.0,
+            masked_entry_indices=frozenset(),
+        )
+        scored_trial = state.score_trial(
+            observation=observation,
+            bank_real_scores=scored_bank.real_scores,
+            entry_distances=(0.0, 0.0),
+            diversity_metric=AbsoluteDistance(),
+            distance_cutoff=0.0,
+            minimum_distance_cutoff=0.0,
+        )
+
+        assert scored_bank.biased_sigma2 is None
+        assert scored_bank.shaped_scores == (0.0, 1.0)
+        assert scored_trial.shaped_score == 2.0
+
+    def test_biased_potential_constant_scale_survives_zero_cutoff(self) -> None:
+        state = CSAScoreModelState[int](
+            score_model=CSAScoreModel[int](
+                biased_potential=CSABiasedPotential(
+                    maximum_bias=10.0,
+                    sigma_reference="constant",
+                ),
+            ),
+            biased_potential_max=10.0,
+        )
+        entries = (
+            BankEntry[int](candidate=0, value=0.0),
+            BankEntry[int](candidate=0, value=1.0),
+        )
+
+        scored_bank, _ = state.score_bank(
+            entries=entries,
+            diversity_metric=AbsoluteDistance(),
+            distance_cutoff=0.0,
+            minimum_distance_cutoff=0.0,
+            masked_entry_indices=frozenset(),
+        )
+
+        assert scored_bank.biased_sigma2 is not None
+        assert scored_bank.shaped_scores == (0.0, 11.0)
+
     def test_reference_bank_legacy_snapshot_derives_initialized_state(self) -> None:
         def candidate_from_dict(value: JSONValue) -> int:
             if type(value) is not int:
