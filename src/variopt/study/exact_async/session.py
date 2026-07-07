@@ -22,13 +22,13 @@ from ...evaluators.async_evaluator.sessions import (
 )
 from ...spaces import CandidateEquality
 from ...typevars import CandidateT, RunMethodStateT
+from ..assimilation import materialize_feedback_attempts
 from ..common import (
     StudyPayloadT,
     StudyRecordT,
     finalize_ordered_attempts,
     store_completion_group,
     validate_aligned_attempts,
-    validate_materialized_attempts,
 )
 from .artifacts import (
     StudyExactAsyncSessionLifecycle,
@@ -322,12 +322,9 @@ class StudyExactAsyncStepSession(
             attempts,
             candidate_equal=self.candidate_equal,
         )
-        feedback_attempts = self.study.attempt_materializer.materialize_attempts(
-            attempts
-        )
-        validate_materialized_attempts(
+        feedback_attempts = materialize_feedback_attempts(
             attempts,
-            feedback_attempts,
+            self.study.attempt_materializer,
             candidate_equal=self.candidate_equal,
         )
         records = materialize_success_records(feedback_attempts.successes)
