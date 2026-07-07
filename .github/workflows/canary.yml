@@ -18,9 +18,13 @@ jobs:
         with:
           enable-cache: false
       - name: Lint with latest compatible dependencies
-        run: uv run --upgrade --python 3.13 --extra test ruff check pyproject.toml src tests .github/scripts
+        run: uv run --upgrade --python 3.13 --extra test ruff check --extend-select I,UP pyproject.toml src tests .github/scripts
+      - name: Format check with latest compatible dependencies
+        run: uv run --upgrade --python 3.13 --extra test ruff format --check pyproject.toml src tests .github/scripts
       - name: Type check with latest compatible dependencies
         run: uv run --upgrade --python 3.13 --extra test basedpyright src tests .github/scripts
+      - name: Pre-commit with latest compatible dependencies
+        run: uv run --upgrade --python 3.13 --extra test pre-commit run --all-files
       - name: Test with latest compatible dependencies
         run: uv run --upgrade --python 3.13 --extra test pytest tests -q
       - name: Build docs with latest compatible dependencies

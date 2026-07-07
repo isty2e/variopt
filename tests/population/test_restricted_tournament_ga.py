@@ -113,7 +113,9 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
     """Regression tests for the restricted-tournament GA optimizer."""
 
     def test_profile_rejects_invalid_restricted_tournament_fields(self) -> None:
-        with pytest.raises(ValueError, match="restricted_tournament_window_size must be positive"):
+        with pytest.raises(
+            ValueError, match="restricted_tournament_window_size must be positive"
+        ):
             _ = RestrictedTournamentGAProfile(restricted_tournament_window_size=0)
 
     def test_optimizer_rejects_invalid_population_and_operator_shapes(self) -> None:
@@ -125,13 +127,18 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
                 mutation_operator=StepTowardZeroMutation(),
             )
 
-        with pytest.raises(ValueError, match="restricted_tournament_window_size must not exceed population_size"):
+        with pytest.raises(
+            ValueError,
+            match="restricted_tournament_window_size must not exceed population_size",
+        ):
             _ = RestrictedTournamentGeneticAlgorithmOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=4,
                 diversity_metric=IntegerDistance(),
                 mutation_operator=StepTowardZeroMutation(),
-                profile=RestrictedTournamentGAProfile(restricted_tournament_window_size=5),
+                profile=RestrictedTournamentGAProfile(
+                    restricted_tournament_window_size=5
+                ),
             )
 
     def test_restricted_tournament_replacement_is_local(self) -> None:
@@ -178,7 +185,12 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
         next_state = optimizer.tell(state, observations)
 
         assert next_state.generation_index == 1
-        assert tuple(member.candidate for member in next_state.population) == (0, 9, 15, 29)
+        assert tuple(member.candidate for member in next_state.population) == (
+            0,
+            9,
+            15,
+            29,
+        )
 
     def test_optimizer_preserves_proposal_ids_and_queue_slicing(self) -> None:
         optimizer = RestrictedTournamentGeneticAlgorithmOptimizer(
@@ -205,7 +217,9 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
             "restricted-tournament-ga-3",
         )
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, state = optimizer.ask(state, batch_size=1)
         assert tuple(proposal.proposal_id for proposal in proposals) == (
@@ -233,15 +247,18 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
 
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=2)
-        with pytest.raises(RuntimeError, match="cannot ask while proposals are still pending"):
+        with pytest.raises(
+            RuntimeError, match="cannot ask while proposals are still pending"
+        ):
             _ = optimizer.ask(state, batch_size=1)
 
         outcomes = evaluator.evaluate(problem, _requests(proposals))
         reversed_observations = tuple(
-            outcome.observation
-            for outcome in reversed(outcomes)
+            outcome.observation for outcome in reversed(outcomes)
         )
-        with pytest.raises(ValueError, match="observations must align with pending proposal order"):
+        with pytest.raises(
+            ValueError, match="observations must align with pending proposal order"
+        ):
             _ = optimizer.tell(state, reversed_observations)
 
         assert state.pending_proposals == proposals
@@ -265,7 +282,9 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, issued_state = optimizer.ask(state, batch_size=4)
         issued_random_state = issued_state.random_state
@@ -295,8 +314,10 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
             request=request,
             exception=ValueError("failed"),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(failure,),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(failure,),
+            )
         )
 
         with pytest.raises(UnsupportedEvaluationFailureError):
@@ -325,10 +346,12 @@ class RestrictedTournamentGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=6)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert len(state.population) == 6
         assert all(
-                tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
-                for member in state.population
-            )
+            tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
+            for member in state.population
+        )

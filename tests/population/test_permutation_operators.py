@@ -1,6 +1,5 @@
 """Tests for permutation-safe population variation operators."""
 
-
 import numpy as np
 import pytest
 
@@ -102,14 +101,11 @@ class PermutationOperatorTests:
     def test_sample_segment_bounds_allows_full_segment(self) -> None:
         matching_seed = None
         for seed in range(1000):
-            if (
-                sample_segment_bounds(
-                    size=6,
-                    max_segment_fraction=1.0,
-                    random_state=rng(seed),
-                )
-                == (0, 6)
-            ):
+            if sample_segment_bounds(
+                size=6,
+                max_segment_fraction=1.0,
+                random_state=rng(seed),
+            ) == (0, 6):
                 matching_seed = seed
                 break
         assert matching_seed is not None

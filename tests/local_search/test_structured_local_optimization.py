@@ -74,7 +74,9 @@ def evaluate_query_directly(
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(query.proposals))
 
-    requests = tuple(EvaluationRequest(proposal=proposal) for proposal in query.proposals)
+    requests = tuple(
+        EvaluationRequest(proposal=proposal) for proposal in query.proposals
+    )
     successes = tuple(
         EvaluationSuccess.from_scalar_observation(
             observation=Observation.from_objective_value(
@@ -397,7 +399,9 @@ class StructuredHillClimbKernelTests:
 
         assert evaluation_budget.remaining == 0
         assert tuple(outcome.evaluation_count for outcome in outcomes) == (1, 1)
-        assert tuple(outcome.scalar_observation().candidate for outcome in outcomes) == (5, 5)
+        assert tuple(
+            outcome.scalar_observation().candidate for outcome in outcomes
+        ) == (5, 5)
         assert all(
             outcome.kernel_diagnostics is not None
             and outcome.kernel_diagnostics.status == KernelStatus.STOPPED
@@ -1112,7 +1116,10 @@ class StructuredStochasticNeighborhoodKernelTests:
         )
         assert outcome.refinement is not None
         assert outcome.refinement.source_candidate == 0
-        assert outcome.refinement.refined_candidate == outcome.scalar_observation().candidate
+        assert (
+            outcome.refinement.refined_candidate
+            == outcome.scalar_observation().candidate
+        )
         assert outcome.refinement.changed_leaf_paths == ((),)
 
     def test_stochastic_kernel_advances_rng_stream_between_runs(self) -> None:
@@ -1357,7 +1364,9 @@ class StructuredVariableNeighborhoodKernelTests:
                 ),
             ),
         )
-        query: ProposalBatchQuery[Sequence[int], tuple[int, ...], ObservationPayload] = ProposalBatchQuery(
+        query: ProposalBatchQuery[
+            Sequence[int], tuple[int, ...], ObservationPayload
+        ] = ProposalBatchQuery(
             problem=problem,
             proposals=(Proposal(candidate=(0, 0, 0), proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),
@@ -1579,7 +1588,9 @@ class StructuredIteratedLocalSearchKernelTests:
             kick_policy=StructuredKickPolicy(kick_leaf_count=1),
             random_state=4,
         )
-        query: ProposalBatchQuery[Sequence[int], tuple[int, ...], ObservationPayload] = ProposalBatchQuery(
+        query: ProposalBatchQuery[
+            Sequence[int], tuple[int, ...], ObservationPayload
+        ] = ProposalBatchQuery(
             problem=problem,
             proposals=(Proposal(candidate=(0, 0, 0), proposal_id="p-1"),),
             execution_resources=self.make_execution_resources(),

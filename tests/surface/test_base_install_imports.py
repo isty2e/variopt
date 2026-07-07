@@ -1,6 +1,5 @@
 """Regression tests for the supported base-install import surface."""
 
-
 from tests.release_support import collect_base_import_failures
 
 

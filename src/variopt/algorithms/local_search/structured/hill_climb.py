@@ -198,9 +198,11 @@ class StructuredHillClimbKernel(
                     if not runtime.can_evaluate(reserved_count=reserved_count):
                         budget_exhausted = True
                         break
-                    proposed_candidate = space.replace_leaf_values_in_validated_candidate(
-                        current_candidate,
-                        {path: replacement},
+                    proposed_candidate = (
+                        space.replace_leaf_values_in_validated_candidate(
+                            current_candidate,
+                            {path: replacement},
+                        )
                     )
                     proposed_attempt = self._evaluate_candidate_attempt(
                         runtime=runtime,

@@ -88,22 +88,19 @@ class CSAProposalState:
             If pending proposal attributions are still present.
         """
         if self.pending_attributions:
-            msg = "proposal-state checkpoints require an empty pending attribution queue"
+            msg = (
+                "proposal-state checkpoints require an empty pending attribution queue"
+            )
             raise ValueError(msg)
 
         return {
             "pending_attributions": [],
             "family_stats": [
-                family_stat.to_dict()
-                for family_stat in self.family_stats
+                family_stat.to_dict() for family_stat in self.family_stats
             ],
-            "leaf_stats": [
-                leaf_stat.to_dict()
-                for leaf_stat in self.leaf_stats
-            ],
+            "leaf_stats": [leaf_stat.to_dict() for leaf_stat in self.leaf_stats],
             "local_displacement_leaf_stats": [
-                leaf_stat.to_dict()
-                for leaf_stat in self.local_displacement_leaf_stats
+                leaf_stat.to_dict() for leaf_stat in self.local_displacement_leaf_stats
             ],
             "numeric_covariance_stats": [
                 covariance_stat.to_dict()
@@ -145,7 +142,9 @@ class CSAProposalState:
             field_name="pending_attributions",
         )
         if len(raw_pending_attributions) != 0:
-            msg = "proposal-state checkpoints require an empty pending attribution queue"
+            msg = (
+                "proposal-state checkpoints require an empty pending attribution queue"
+            )
             raise ValueError(msg)
         raw_family_stats = require_json_list(
             require_json_field(data, "family_stats"),
@@ -201,7 +200,9 @@ class CSAProposalState:
             )
 
         numeric_covariance_stats: list[ProposalNumericSubspaceCovarianceStat] = []
-        for raw_position, raw_covariance_stat in enumerate(raw_numeric_covariance_stats):
+        for raw_position, raw_covariance_stat in enumerate(
+            raw_numeric_covariance_stats
+        ):
             numeric_covariance_stats.append(
                 ProposalNumericSubspaceCovarianceStat.from_dict(
                     require_json_mapping(
@@ -482,10 +483,7 @@ class CSAProposalState:
 
         return replace(
             self,
-            family_stats=tuple(
-                next_family_stats_by_key[key]
-                for key in ordered_keys
-            ),
+            family_stats=tuple(next_family_stats_by_key[key] for key in ordered_keys),
         )
 
     def record_leaf_score_improvement(
@@ -537,10 +535,7 @@ class CSAProposalState:
 
         return replace(
             self,
-            leaf_stats=tuple(
-                next_leaf_stats_by_path[path]
-                for path in ordered_paths
-            ),
+            leaf_stats=tuple(next_leaf_stats_by_path[path] for path in ordered_paths),
         )
 
     def record_local_displacement_score_improvement(
@@ -570,7 +565,8 @@ class CSAProposalState:
             return self
 
         next_leaf_stats_by_path = {
-            leaf_stat.path: leaf_stat for leaf_stat in self.local_displacement_leaf_stats
+            leaf_stat.path: leaf_stat
+            for leaf_stat in self.local_displacement_leaf_stats
         }
         ordered_paths: list[LeafPath] = list(next_leaf_stats_by_path)
 
@@ -593,8 +589,7 @@ class CSAProposalState:
         return replace(
             self,
             local_displacement_leaf_stats=tuple(
-                next_leaf_stats_by_path[path]
-                for path in ordered_paths
+                next_leaf_stats_by_path[path] for path in ordered_paths
             ),
         )
 
@@ -630,7 +625,9 @@ class CSAProposalState:
             covariance_stat.leaf_paths: covariance_stat
             for covariance_stat in self.numeric_covariance_stats
         }
-        ordered_leaf_paths: list[tuple[LeafPath, ...]] = list(next_covariance_stats_by_paths)
+        ordered_leaf_paths: list[tuple[LeafPath, ...]] = list(
+            next_covariance_stats_by_paths
+        )
         current_stat = next_covariance_stats_by_paths.get(
             numeric_displacement.leaf_paths,
         )
@@ -641,10 +638,7 @@ class CSAProposalState:
                     0.0 for _ in numeric_displacement.displacement_coordinates
                 ),
                 discounted_outer_product_sum=tuple(
-                    tuple(
-                        0.0
-                        for _ in numeric_displacement.displacement_coordinates
-                    )
+                    tuple(0.0 for _ in numeric_displacement.displacement_coordinates)
                     for _ in numeric_displacement.displacement_coordinates
                 ),
                 last_update_index=next_update_index,

@@ -1,6 +1,5 @@
 """Facade regressions for the semantic spaces modules."""
 
-
 from variopt.spaces import ArraySpace as RootArraySpace
 from variopt.spaces import IntegerSpace as RootIntegerSpace
 from variopt.spaces.composites import (

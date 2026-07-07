@@ -31,7 +31,9 @@ InteractionProblemRecordT = TypeVar("InteractionProblemRecordT")
 
 
 @dataclass(frozen=True, slots=True)
-class _ProtocolObjectiveCompatibilityView(FrozenGenericSlotsCompat, Generic[CandidateT], Objective[CandidateT]):
+class _ProtocolObjectiveCompatibilityView(
+    FrozenGenericSlotsCompat, Generic[CandidateT], Objective[CandidateT]
+):
     """Scalar objective view derived from an observation protocol.
 
     Notes
@@ -68,7 +70,8 @@ class _ProtocolObjectiveCompatibilityView(FrozenGenericSlotsCompat, Generic[Cand
 
 
 @dataclass(frozen=True, slots=True)
-class _ObservationProtocolEvaluationProtocolAdapter(FrozenGenericSlotsCompat,
+class _ObservationProtocolEvaluationProtocolAdapter(
+    FrozenGenericSlotsCompat,
     Generic[CandidateT],
     EvaluationProtocol[CandidateT, ObservationPayload],
 ):
@@ -109,7 +112,9 @@ class _ObservationProtocolEvaluationProtocolAdapter(FrozenGenericSlotsCompat,
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class Problem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPayloadT]):
+class Problem(
+    FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, ProblemPayloadT]
+):
     """Immutable proposal-local optimization problem.
 
     Parameters
@@ -323,7 +328,9 @@ install_frozen_generic_slots_pickle(Problem)
 
 
 @dataclass(frozen=True, slots=True)
-class InteractionProblem(FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, InteractionProblemRecordT]):
+class InteractionProblem(
+    FrozenGenericSlotsCompat, Generic[BoundaryT, CandidateT, InteractionProblemRecordT]
+):
     """Immutable interaction-aware optimization problem.
 
     Parameters

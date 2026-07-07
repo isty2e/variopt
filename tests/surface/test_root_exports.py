@@ -1,6 +1,5 @@
 """Regression coverage for the trimmed variopt root facade."""
 
-
 import pytest
 
 import variopt

@@ -1,5 +1,8 @@
 # variopt
 
+[![CI](https://github.com/isty2e/variopt/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/isty2e/variopt/actions/workflows/ci.yml)
+[![Docs](https://github.com/isty2e/variopt/actions/workflows/docs.yml/badge.svg?branch=main)](https://github.com/isty2e/variopt/actions/workflows/docs.yml)
+
 `variopt` is a typed optimization package for structured search spaces,
 canonical candidates, and explicit execution boundaries.
 

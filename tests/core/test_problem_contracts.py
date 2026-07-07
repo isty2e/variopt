@@ -230,7 +230,9 @@ class ProblemContractsTests:
         assert protocol_problem.direction is OptimizationDirection.MINIMIZE
         assert protocol_record.score == 9.0
 
-    def test_problem_accepts_objective_protocol_with_unspecified_direction(self) -> None:
+    def test_problem_accepts_objective_protocol_with_unspecified_direction(
+        self,
+    ) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             evaluation_protocol=SquareObjective(),
@@ -244,7 +246,9 @@ class ProblemContractsTests:
         assert record.score == 16.0
         assert problem.objective.evaluate(4) == 16.0
 
-    def test_problem_non_scalar_protocol_has_no_objective_compatibility_view(self) -> None:
+    def test_problem_non_scalar_protocol_has_no_objective_compatibility_view(
+        self,
+    ) -> None:
         protocol = LabelProtocol()
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
@@ -255,7 +259,9 @@ class ProblemContractsTests:
         with pytest.raises(TypeError):
             _ = problem.objective
 
-    def test_problem_rejects_explicit_direction_for_direction_free_protocol(self) -> None:
+    def test_problem_rejects_explicit_direction_for_direction_free_protocol(
+        self,
+    ) -> None:
         for direction in OptimizationDirection:
             with pytest.raises(ValueError):
                 _ = Problem(
@@ -264,7 +270,9 @@ class ProblemContractsTests:
                     direction=direction,
                 )
 
-    def test_problem_accepts_unspecified_direction_for_direction_free_protocol(self) -> None:
+    def test_problem_accepts_unspecified_direction_for_direction_free_protocol(
+        self,
+    ) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             evaluation_protocol=LabelProtocol(),
@@ -272,9 +280,12 @@ class ProblemContractsTests:
         )
 
         assert problem.direction is OptimizationDirection.MINIMIZE
-        assert problem.evaluation_protocol.evaluate_proposal(
-            Proposal(candidate=5),
-        ).label == "parity:1"
+        assert (
+            problem.evaluation_protocol.evaluate_proposal(
+                Proposal(candidate=5),
+            ).label
+            == "parity:1"
+        )
 
     def test_direction_free_protocol_rejects_invalid_direction_type_first(self) -> None:
         with pytest.raises(TypeError):
@@ -294,8 +305,12 @@ class ProblemContractsTests:
     def test_interaction_evaluation_unit_exposes_request_compatibility_views(
         self,
     ) -> None:
-        first_request = EvaluationRequest(proposal=Proposal(candidate=3, proposal_id="a"))
-        second_request = EvaluationRequest(proposal=Proposal(candidate=5, proposal_id="b"))
+        first_request = EvaluationRequest(
+            proposal=Proposal(candidate=3, proposal_id="a")
+        )
+        second_request = EvaluationRequest(
+            proposal=Proposal(candidate=5, proposal_id="b")
+        )
         interaction_unit = InteractionEvaluationUnit(
             requests=(first_request, second_request),
             interaction_evaluation_spec=MatchupSpec(arena="ladder"),
@@ -303,12 +318,18 @@ class ProblemContractsTests:
 
         assert interaction_unit.request_count == 2
         assert interaction_unit.candidates == (3, 5)
-        assert tuple(proposal.proposal_id for proposal in interaction_unit.proposals) == ("a", "b")
+        assert tuple(
+            proposal.proposal_id for proposal in interaction_unit.proposals
+        ) == ("a", "b")
         assert isinstance(interaction_unit.interaction_evaluation_spec, MatchupSpec)
 
     def test_interaction_evaluation_unit_pickle_round_trips(self) -> None:
-        first_request = EvaluationRequest(proposal=Proposal(candidate=3, proposal_id="a"))
-        second_request = EvaluationRequest(proposal=Proposal(candidate=5, proposal_id="b"))
+        first_request = EvaluationRequest(
+            proposal=Proposal(candidate=3, proposal_id="a")
+        )
+        second_request = EvaluationRequest(
+            proposal=Proposal(candidate=5, proposal_id="b")
+        )
         interaction_unit = InteractionEvaluationUnit(
             requests=(first_request, second_request),
             interaction_evaluation_spec=MatchupSpec(arena="ladder"),
@@ -321,7 +342,10 @@ class ProblemContractsTests:
         plain_restored = pickle_round_trip(plain_interaction_unit)
 
         assert restored.request_count == 2
-        assert tuple(proposal.proposal_id for proposal in restored.proposals) == ("a", "b")
+        assert tuple(proposal.proposal_id for proposal in restored.proposals) == (
+            "a",
+            "b",
+        )
         assert isinstance(restored.interaction_evaluation_spec, MatchupSpec)
         assert plain_restored.request_count == 2
         assert plain_restored.interaction_evaluation_spec is None

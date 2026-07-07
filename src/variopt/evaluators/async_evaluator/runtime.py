@@ -53,7 +53,8 @@ class AsyncBatchHooks(Protocol[EvaluationT]):
 
 
 @dataclass(frozen=True, slots=True)
-class EvaluatorBackedBatchSession(FrozenGenericSlotsCompat,
+class EvaluatorBackedBatchSession(
+    FrozenGenericSlotsCompat,
     EvaluationBatchSession[EvaluationT],
     Generic[EvaluationT],
 ):

@@ -40,7 +40,8 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 @dataclass(frozen=True, slots=True)
-class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
+class ClearingGeneticAlgorithmOptimizer(
+    FrozenGenericSlotsCompat,
     RunMethod[
         GenerationalGAOptimizerState[CandidateT],
         Proposal[CandidateT],
@@ -73,8 +74,12 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
     space: SearchSpace[BoundaryT, CandidateT]
     population_size: int
     diversity_metric: DiversityMetric[CandidateT]
-    crossover_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
-    mutation_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
+    crossover_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
+    mutation_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
     profile: ClearingGAProfile = field(default_factory=ClearingGAProfile, kw_only=True)
     sampler: CandidateSampler[CandidateT] | None = field(default=None, kw_only=True)
     random_state: RandomSeed = None
@@ -311,7 +316,10 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         selected_members: list[GenerationalGAPopulationMember[CandidateT]] = []
         cleared_members: list[GenerationalGAPopulationMember[CandidateT]] = []
         for member in candidate_pool:
-            if self._clearing_occupancy(member, selected_members) < self.resolved_profile.clearing_capacity:
+            if (
+                self._clearing_occupancy(member, selected_members)
+                < self.resolved_profile.clearing_capacity
+            ):
                 selected_members.append(member)
             else:
                 cleared_members.append(member)
@@ -341,7 +349,8 @@ class ClearingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
             if self.diversity_metric.distance(
                 member.candidate,
                 selected_member.candidate,
-            ) < self.resolved_profile.clearing_radius
+            )
+            < self.resolved_profile.clearing_radius
         )
 
     def _build_diverse_backfill(

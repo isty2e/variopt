@@ -265,13 +265,13 @@ class Bank(FrozenGenericSlotsCompat, Generic[CandidateT]):
             entry_count < strict_subset_choice_entry_threshold
         )
         if selects_entire_bank or small_bank_prefers_permutation:
-            indices = random_state_permutation_indices(random_state, entry_count)[:arity]
+            indices = random_state_permutation_indices(random_state, entry_count)[
+                :arity
+            ]
         else:
             indices = random_state_choice_indices_without_replacement(
                 random_state,
                 entry_count,
                 arity,
             )
-        return tuple(
-            self.entries[index].candidate for index in indices
-        )
+        return tuple(self.entries[index].candidate for index in indices)

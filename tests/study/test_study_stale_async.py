@@ -606,9 +606,7 @@ class HolAvoidanceAsyncEvaluator(
                 (CompletionGroup(start_index=0, outcomes=(attempts[0],)),),
             )
         else:
-            poll_results = (
-                (CompletionGroup(start_index=0, outcomes=(attempts[0],)),),
-            )
+            poll_results = ((CompletionGroup(start_index=0, outcomes=(attempts[0],)),),)
         session = ScriptedNonBlockingAttemptBatchSession(
             handle=handle,
             poll_results=poll_results,

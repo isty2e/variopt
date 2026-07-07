@@ -219,9 +219,8 @@ class SumTupleSpace(SearchSpace[SpaceBoundaryValue, SpaceCandidateValue]):
 
     @override
     def normalize(self, raw_candidate: SpaceBoundaryValue) -> SpaceCandidateValue:
-        if (
-            isinstance(raw_candidate, (bytes, bytearray, str))
-            or not isinstance(raw_candidate, Sequence)
+        if isinstance(raw_candidate, (bytes, bytearray, str)) or not isinstance(
+            raw_candidate, Sequence
         ):
             msg = "sum tuple boundary candidate must be a non-string sequence"
             raise TypeError(msg)
@@ -378,7 +377,9 @@ class SearchSpaceTests:
         with pytest.raises(TypeError):
             binary_space.validate(True)
 
-    def test_categorical_space_canonicalizes_equal_bytearray_boundary_value(self) -> None:
+    def test_categorical_space_canonicalizes_equal_bytearray_boundary_value(
+        self,
+    ) -> None:
         space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((b"a", b"b"))
 
         candidate = space.normalize(bytearray(b"a"))
@@ -388,7 +389,9 @@ class SearchSpaceTests:
         with pytest.raises(TypeError):
             space.validate(bytearray(b"a"))
 
-    def test_categorical_space_alternatives_reject_equal_noncanonical_value(self) -> None:
+    def test_categorical_space_alternatives_reject_equal_noncanonical_value(
+        self,
+    ) -> None:
         space: CategoricalSpace[SpaceScalarValue] = CategoricalSpace((0, 1))
 
         with pytest.raises(TypeError):
@@ -507,7 +510,9 @@ class SearchSpaceTests:
         assert first_candidate == second_candidate
         assert tuple(sorted(first_candidate)) == (0, 1, 2, 3, 4)
 
-    def test_permutation_space_replace_leaf_values_preserves_global_constraint(self) -> None:
+    def test_permutation_space_replace_leaf_values_preserves_global_constraint(
+        self,
+    ) -> None:
         space = PermutationSpace(size=4)
         candidate = space.normalize([0, 1, 2, 3])
 
@@ -686,7 +691,9 @@ class SearchSpaceTests:
         assert space.candidates_equal(left_candidate, right_candidate)
         assert not space.candidates_equal(left_candidate, different_candidate)
 
-    def test_built_in_structured_spaces_report_all_declared_paths_as_active(self) -> None:
+    def test_built_in_structured_spaces_report_all_declared_paths_as_active(
+        self,
+    ) -> None:
         space = RecordSpace(
             depth=IntegerSpace(1, 4),
             schedule=TupleSpace(
@@ -794,7 +801,9 @@ class SearchSpaceTests:
         with pytest.raises(TypeError):
             _ = space.replace_leaf_values(candidate, {(): 3})
 
-    def test_record_space_nested_replace_leaf_values_rejects_unknown_child_path(self) -> None:
+    def test_record_space_nested_replace_leaf_values_rejects_unknown_child_path(
+        self,
+    ) -> None:
         space = RecordSpace(
             depth=IntegerSpace(1, 4),
             schedule=TupleSpace(IntegerSpace(0, 3), RealSpace(0.0, 2.0)),
@@ -893,7 +902,9 @@ class SearchSpaceTests:
 
         assert replaced == (8, 2, 3, 5)
 
-    def test_composite_replace_leaf_values_empty_mapping_returns_same_candidate(self) -> None:
+    def test_composite_replace_leaf_values_empty_mapping_returns_same_candidate(
+        self,
+    ) -> None:
         tuple_space = TupleSpace(IntegerSpace(0, 5), RealSpace(-1.0, 1.0))
         record_space = RecordSpace(depth=IntegerSpace(1, 4), scale=RealSpace(0.0, 2.0))
         array_space = ArraySpace(IntegerSpace(0, 9), length=3)
@@ -902,7 +913,9 @@ class SearchSpaceTests:
         array_candidate = array_space.normalize([1, 2, 3])
 
         assert tuple_space.replace_leaf_values(tuple_candidate, {}) is tuple_candidate
-        assert record_space.replace_leaf_values(record_candidate, {}) is record_candidate
+        assert (
+            record_space.replace_leaf_values(record_candidate, {}) is record_candidate
+        )
         assert array_space.replace_leaf_values(array_candidate, {}) is array_candidate
 
     def test_validated_composite_leaf_reads_do_not_revalidate_children(self) -> None:
@@ -941,7 +954,9 @@ class SearchSpaceTests:
 
         assert validate_count == 6
 
-    def test_validated_composite_replacement_validates_each_changed_leaf_once(self) -> None:
+    def test_validated_composite_replacement_validates_each_changed_leaf_once(
+        self,
+    ) -> None:
         validate_count = 0
 
         class CountingIntegerSpace(IntegerSpace):
@@ -972,7 +987,9 @@ class SearchSpaceTests:
         assert replaced_array == ((3, 4), (7, 6))
         assert validate_count == 8
 
-    def test_validated_permutation_replacement_preserves_global_constraint(self) -> None:
+    def test_validated_permutation_replacement_preserves_global_constraint(
+        self,
+    ) -> None:
         space = PermutationSpace(4)
         candidate = space.normalize([0, 1, 2, 3])
         space.validate(candidate)

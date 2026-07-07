@@ -254,7 +254,9 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
                 _ = random_state
                 return parents[0]
 
-        with pytest.raises(ValueError, match="mutation_operator arity must be exactly 1"):
+        with pytest.raises(
+            ValueError, match="mutation_operator arity must be exactly 1"
+        ):
             _ = SpeciesConservingGeneticAlgorithmOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=4,
@@ -283,12 +285,16 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         assert tuple(member.candidate for member in state.population) == (0, 1, 8, 9)
 
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert state.generation_index == 1
         next_candidates = tuple(member.candidate for member in state.population)
@@ -312,8 +318,10 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
             request=request,
             exception=ValueError("failed"),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(failure,),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(failure,),
+            )
         )
 
         with pytest.raises(UnsupportedEvaluationFailureError):
@@ -428,7 +436,9 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
             ),
         )
         pool = tuple(
-            GenerationalGAPopulationMember(candidate=candidate, value=score, score=score)
+            GenerationalGAPopulationMember(
+                candidate=candidate, value=score, score=score
+            )
             for candidate, score in ((0, 0.0), (1, 1.0), (2, 2.0), (10, 10.0))
         )
 
@@ -441,16 +451,18 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
 
     def test_from_permutation_space_defaults_can_optimize(self) -> None:
         space = PermutationSpace(size=6)
-        optimizer = SpeciesConservingGeneticAlgorithmOptimizer.from_permutation_space_defaults(
-            space=space,
-            population_size=6,
-            profile=SpeciesGAProfile(
-                crossover_probability=1.0,
-                mutation_probability=1.0,
-                species_radius=0.25,
-                species_capacity=1,
-            ),
-            random_state=0,
+        optimizer = (
+            SpeciesConservingGeneticAlgorithmOptimizer.from_permutation_space_defaults(
+                space=space,
+                population_size=6,
+                profile=SpeciesGAProfile(
+                    crossover_probability=1.0,
+                    mutation_probability=1.0,
+                    species_radius=0.25,
+                    species_capacity=1,
+                ),
+                random_state=0,
+            )
         )
         problem = Problem(
             space=space,
@@ -461,10 +473,12 @@ class SpeciesConservingGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=6)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert len(state.population) == 6
         assert all(
-                tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
-                for member in state.population
-            )
+            tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
+            for member in state.population
+        )

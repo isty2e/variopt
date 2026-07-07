@@ -96,6 +96,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- Added pre-commit quality gates for Ruff linting, Ruff formatting, and
+  basedpyright standard-mode type checking, plus a scheduled workflow that opens
+  hook-version update pull requests.
 - Added a scheduled and manually dispatchable dependency canary workflow that
   resolves the latest compatible dependencies, builds the docs and wheel, and
   smokes the installed base and MPI extras without treating `uv.lock` as release
@@ -148,6 +151,8 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- Bounded the docs extra to MkDocs 1.x so dependency canaries do not pick the
+  future MkDocs 2.x line without an explicit documentation-stack migration.
 - `TupleSpace` and `RecordSpace` now compare by their declared child spaces
   instead of object identity, so composite `Problem` equality matches scalar
   and array space value-object behavior.

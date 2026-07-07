@@ -162,9 +162,7 @@ class ReferenceBank(FrozenGenericSlotsCompat, Generic[CandidateT]):
             capacity=capacity,
             entries=tuple(entries),
             initialized=(
-                len(entries) >= capacity
-                if initialized is None
-                else initialized
+                len(entries) >= capacity if initialized is None else initialized
             ),
         )
 

@@ -24,7 +24,9 @@ def _leaf_path_to_json(path: LeafPath) -> list[JSONValue]:
     return [segment for segment in path]
 
 
-def _leaf_path_from_json(value: JSONValue, *, field_name: str = "leaf path") -> LeafPath:
+def _leaf_path_from_json(
+    value: JSONValue, *, field_name: str = "leaf path"
+) -> LeafPath:
     raw_segments = require_json_list(value, field_name=field_name)
     segments: list[int | str] = []
     for raw_position, raw_segment in enumerate(raw_segments):
@@ -118,7 +120,10 @@ class ProposalNumericSubspaceCovarianceStat:
         if any(not isfinite(value) for value in self.discounted_displacement_sum):
             msg = "discounted_displacement_sum values must be finite"
             raise ValueError(msg)
-        if len(self.discounted_outer_product_sum) not in {0, len(normalized_leaf_paths)}:
+        if len(self.discounted_outer_product_sum) not in {
+            0,
+            len(normalized_leaf_paths),
+        }:
             msg = "discounted_outer_product_sum dimensions must match leaf_paths"
             raise ValueError(msg)
         for row in self.discounted_outer_product_sum:
@@ -148,8 +153,7 @@ class ProposalNumericSubspaceCovarianceStat:
             "discounted_weight": self.discounted_weight,
             "discounted_displacement_sum": list(self.discounted_displacement_sum),
             "discounted_outer_product_sum": [
-                list(row)
-                for row in self.discounted_outer_product_sum
+                list(row) for row in self.discounted_outer_product_sum
             ],
             "last_update_index": self.last_update_index,
         }
@@ -286,11 +290,10 @@ class ProposalNumericSubspaceCovarianceStat:
         tuple[float, ...]
             Effective first-moment accumulator after lazy decay.
         """
-        decay_factor = score_decay ** max(0, current_update_index - self.last_update_index)
-        return tuple(
-            value * decay_factor
-            for value in self.discounted_displacement_sum
+        decay_factor = score_decay ** max(
+            0, current_update_index - self.last_update_index
         )
+        return tuple(value * decay_factor for value in self.discounted_displacement_sum)
 
     def effective_outer_product_sum(
         self,
@@ -312,7 +315,9 @@ class ProposalNumericSubspaceCovarianceStat:
         tuple[tuple[float, ...], ...]
             Effective second-moment accumulator after lazy decay.
         """
-        decay_factor = score_decay ** max(0, current_update_index - self.last_update_index)
+        decay_factor = score_decay ** max(
+            0, current_update_index - self.last_update_index
+        )
         return tuple(
             tuple(value * decay_factor for value in row)
             for row in self.discounted_outer_product_sum
@@ -349,10 +354,7 @@ class ProposalNumericSubspaceCovarianceStat:
             current_update_index=current_update_index,
             score_decay=score_decay,
         )
-        return tuple(
-            value / effective_weight
-            for value in effective_displacement_sum
-        )
+        return tuple(value / effective_weight for value in effective_displacement_sum)
 
     def effective_covariance(
         self,
@@ -380,8 +382,7 @@ class ProposalNumericSubspaceCovarianceStat:
         )
         if effective_weight == 0.0:
             return tuple(
-                tuple(0.0 for _ in range(self.dimension))
-                for _ in range(self.dimension)
+                tuple(0.0 for _ in range(self.dimension)) for _ in range(self.dimension)
             )
 
         effective_mean = self.effective_mean(
@@ -394,7 +395,10 @@ class ProposalNumericSubspaceCovarianceStat:
         )
         return tuple(
             tuple(
-                (effective_outer_product_sum[row_index][column_index] / effective_weight)
+                (
+                    effective_outer_product_sum[row_index][column_index]
+                    / effective_weight
+                )
                 - (effective_mean[row_index] * effective_mean[column_index])
                 for column_index in range(self.dimension)
             )

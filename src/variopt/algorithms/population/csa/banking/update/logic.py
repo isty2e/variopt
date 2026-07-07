@@ -209,7 +209,9 @@ def apply_bank_update_batch(
         score_model_state=shadow_score_model_state,
         diversity_metric=diversity_metric,
         distance_cutoff=(
-            0.0 if shadow_state.distance_cutoff is None else shadow_state.distance_cutoff
+            0.0
+            if shadow_state.distance_cutoff is None
+            else shadow_state.distance_cutoff
         ),
         minimum_distance_cutoff=shadow_state.minimum_distance_cutoff,
         distance_workspace=distance_workspace,
@@ -373,19 +375,13 @@ def admit_full_bank_observation(
 
     nearest_index = min(range(len(entry_distances)), key=entry_distances.__getitem__)
     nearest_distance = entry_distances[nearest_index]
-    adaptive_potential_active = (
-        score_model_state.adaptive_potential_state is not None
-    )
+    adaptive_potential_active = score_model_state.adaptive_potential_state is not None
     local_update_allowed = (
-        max(scored_bank.real_scores) >= trial.real_score
-        or adaptive_potential_active
+        max(scored_bank.real_scores) >= trial.real_score or adaptive_potential_active
     )
 
     if nearest_distance < distance_cutoff:
-        if (
-            update_policy.local_update_mode != "disabled"
-            and local_update_allowed
-        ):
+        if update_policy.local_update_mode != "disabled" and local_update_allowed:
             comparison_score = score_model_state.comparison_score_for_entry(
                 base_score=scored_bank.shaped_scores[nearest_index],
                 entry_real_score=scored_bank.real_scores[nearest_index],
@@ -460,8 +456,7 @@ def admit_full_bank_observation(
     # are all aligned to this pre-growth bank snapshot.
     if bank is not pre_growth_bank:
         msg = (
-            "try_append_growth_entry must not replace the bank unless "
-            "did_grow is true"
+            "try_append_growth_entry must not replace the bank unless did_grow is true"
         )
         raise RuntimeError(msg)
 

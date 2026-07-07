@@ -30,7 +30,8 @@ MetricCandidateT = TypeVar("MetricCandidateT")
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredSpaceDiversityMetric(FrozenGenericSlotsCompat,
+class StructuredSpaceDiversityMetric(
+    FrozenGenericSlotsCompat,
     DiversityMetric[CandidateT],
     Generic[BoundaryT, CandidateT],
 ):

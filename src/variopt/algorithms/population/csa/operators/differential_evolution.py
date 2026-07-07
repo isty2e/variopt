@@ -26,7 +26,8 @@ StructuredCandidateT = TypeVar("StructuredCandidateT", bound=SpaceCandidateValue
 
 
 @dataclass(frozen=True, slots=True)
-class DifferentialEvolutionVariation(FrozenGenericSlotsCompat,
+class DifferentialEvolutionVariation(
+    FrozenGenericSlotsCompat,
     VariationOperator[StructuredCandidateT],
     Generic[BoundaryT, StructuredCandidateT],
 ):
@@ -58,8 +59,12 @@ class DifferentialEvolutionVariation(FrozenGenericSlotsCompat,
         structured_space = require_structured_space(self.space)
         object.__setattr__(self, "structured_space", structured_space)
         for path in structured_space.leaf_paths():
-            if not isinstance(structured_space.leaf_space_at_path(path), (RealSpace, IntegerSpace)):
-                msg = "space must contain only numeric leaves for differential evolution"
+            if not isinstance(
+                structured_space.leaf_space_at_path(path), (RealSpace, IntegerSpace)
+            ):
+                msg = (
+                    "space must contain only numeric leaves for differential evolution"
+                )
                 raise TypeError(msg)
 
         mutation_low, mutation_high = self.mutation_range
@@ -110,9 +115,8 @@ class DifferentialEvolutionVariation(FrozenGenericSlotsCompat,
         mutation_low, mutation_high = self.mutation_range
         mutation_factor = mutation_low
         if mutation_high > mutation_low:
-            mutation_factor += (
-                (mutation_high - mutation_low)
-                * float(random_state.random_sample())
+            mutation_factor += (mutation_high - mutation_low) * float(
+                random_state.random_sample()
             )
 
         child = _differential_evolution_variation(

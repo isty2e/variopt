@@ -39,7 +39,9 @@ _ScalarObservationViewCandidateT = TypeVar(
     covariant=True,
 )
 MaterializableEvaluationPayload: TypeAlias = (
-    ObservationPayload | ObjectiveVectorPayload | RequestAlignedEvaluationRecord[CandidateT]
+    ObservationPayload
+    | ObjectiveVectorPayload
+    | RequestAlignedEvaluationRecord[CandidateT]
 )
 
 
@@ -413,19 +415,19 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         repr=False,
         compare=False,
     )
-    _validated_payload_request_candidate: ValidatedRefinementCandidate[
-        CandidateT
-    ] = field(
-        default=_UNVALIDATED_REFINEMENT_CANDIDATE,
-        repr=False,
-        compare=False,
+    _validated_payload_request_candidate: ValidatedRefinementCandidate[CandidateT] = (
+        field(
+            default=_UNVALIDATED_REFINEMENT_CANDIDATE,
+            repr=False,
+            compare=False,
+        )
     )
-    _validated_refinement_source_candidate: ValidatedRefinementCandidate[
-        CandidateT
-    ] = field(
-        default=_UNVALIDATED_REFINEMENT_CANDIDATE,
-        repr=False,
-        compare=False,
+    _validated_refinement_source_candidate: ValidatedRefinementCandidate[CandidateT] = (
+        field(
+            default=_UNVALIDATED_REFINEMENT_CANDIDATE,
+            repr=False,
+            compare=False,
+        )
     )
 
     def __init__(
@@ -578,8 +580,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             record_candidate=self.request.candidate,
             refined_candidate=refinement.refined_candidate,
             mismatch_message=(
-                "refinement refined_candidate must match the success request "
-                "candidate"
+                "refinement refined_candidate must match the success request candidate"
             ),
             candidate_equal=candidate_equal,
         )
@@ -674,8 +675,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
                 left_candidate=payload.candidate,
                 right_candidate=self.request.candidate,
                 mismatch_message=(
-                    "success payload candidate must match the success request "
-                    "candidate"
+                    "success payload candidate must match the success request candidate"
                 ),
                 candidate_equal=candidate_equal,
             )
@@ -708,7 +708,10 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         if payload_request.proposal_id != self.request.proposal_id:
             return False
 
-        if payload_request.proposal_evaluation_spec != self.request.proposal_evaluation_spec:
+        if (
+            payload_request.proposal_evaluation_spec
+            != self.request.proposal_evaluation_spec
+        ):
             return False
 
         return True
@@ -1520,9 +1523,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         cached_successes = self._successes_cache
         if cached_successes is None:
             cached_successes = tuple(
-                attempt
-                for attempt in self.attempts
-                if _is_evaluation_success(attempt)
+                attempt for attempt in self.attempts if _is_evaluation_success(attempt)
             )
             object.__setattr__(self, "_successes_cache", cached_successes)
         return cached_successes
@@ -1539,9 +1540,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         cached_failures = self._failures_cache
         if cached_failures is None:
             cached_failures = tuple(
-                attempt
-                for attempt in self.attempts
-                if _is_evaluation_failure(attempt)
+                attempt for attempt in self.attempts if _is_evaluation_failure(attempt)
             )
             object.__setattr__(self, "_failures_cache", cached_failures)
         return cached_failures
@@ -1791,7 +1790,9 @@ class DefaultEvaluationAttemptMaterializer(
             CandidateT,
             RequestAlignedEvaluationRecord[CandidateT],
         ],
-    ) -> EvaluationAttemptBatch[CandidateT, RequestAlignedEvaluationRecord[CandidateT]]: ...
+    ) -> EvaluationAttemptBatch[
+        CandidateT, RequestAlignedEvaluationRecord[CandidateT]
+    ]: ...
 
     def materialize_attempts(
         self,

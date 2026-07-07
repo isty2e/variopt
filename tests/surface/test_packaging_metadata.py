@@ -13,6 +13,7 @@ ProjectMetadata = TypedDict(
     },
 )
 
+
 class PyprojectMetadata(TypedDict):
     """Typed subset of pyproject metadata required by packaging tests."""
 
@@ -81,7 +82,7 @@ class PackagingMetadataTests:
         optional_dependencies = pyproject_data["project"]["optional-dependencies"]
 
         assert "docs" in optional_dependencies
-        assert "mkdocs>=1.6.1" in optional_dependencies["docs"]
+        assert "mkdocs>=1.6.1,<2.0" in optional_dependencies["docs"]
         assert "mkdocstrings>=0.27.0" in optional_dependencies["docs"]
         assert "mkdocstrings-python>=1.12.2" in optional_dependencies["docs"]
 
@@ -92,6 +93,7 @@ class PackagingMetadataTests:
 
         assert "test" in optional_dependencies
         assert "basedpyright>=1.20.0" in optional_dependencies["test"]
+        assert "pre-commit>=4.0.0" in optional_dependencies["test"]
         assert "pytest>=8.0.0" in optional_dependencies["test"]
         assert "ruff>=0.8.0" in optional_dependencies["test"]
         assert "tomli>=2.0.0" in optional_dependencies["test"]
@@ -113,7 +115,9 @@ class PackagingMetadataTests:
         build_config = cast(dict[str, object], hatch_config)["build"]
         targets = cast(dict[str, object], build_config)["targets"]
         sdist_config = cast(dict[str, object], targets)["sdist"]
-        excludes = set(cast(list[str], cast(dict[str, object], sdist_config)["exclude"]))
+        excludes = set(
+            cast(list[str], cast(dict[str, object], sdist_config)["exclude"])
+        )
 
         assert "/dist" in excludes
         assert "/tests" in excludes
@@ -128,7 +132,9 @@ class PackagingMetadataTests:
         build_config = cast(dict[str, object], hatch_config)["build"]
         targets = cast(dict[str, object], build_config)["targets"]
         sdist_config = cast(dict[str, object], targets)["sdist"]
-        excludes = set(cast(list[str], cast(dict[str, object], sdist_config)["exclude"]))
+        excludes = set(
+            cast(list[str], cast(dict[str, object], sdist_config)["exclude"])
+        )
 
         assert "uv.lock" in gitignore_entries
         assert "/uv.lock" in excludes
@@ -140,6 +146,7 @@ class PackagingMetadataTests:
             Path(".github/workflows/canary.yml"),
             Path(".github/workflows/ci.yml"),
             Path(".github/workflows/docs.yml"),
+            Path(".github/workflows/pre-commit-autoupdate.yml"),
         )
 
         references = tuple(
@@ -169,9 +176,11 @@ class PackagingMetadataTests:
         for release_metadata_path in (
             "pyproject.toml",
             ".gitignore",
+            ".pre-commit-config.yaml",
             ".github/workflows/canary.yml",
             ".github/workflows/ci.yml",
             ".github/workflows/docs.yml",
+            ".github/workflows/pre-commit-autoupdate.yml",
         ):
             assert ci_workflow.count(f'- "{release_metadata_path}"') == 2
 
@@ -180,7 +189,17 @@ class PackagingMetadataTests:
 
         assert "schedule:" in canary_workflow
         assert "workflow_dispatch:" in canary_workflow
-        assert "uv run --upgrade --python 3.13 --extra test" in canary_workflow
+        assert (
+            "uv run --upgrade --python 3.13 --extra test ruff check "
+            "--extend-select I,UP"
+        ) in canary_workflow
+        assert "uv run --upgrade --python 3.13 --extra test ruff format --check" in (
+            canary_workflow
+        )
+        assert (
+            "uv run --upgrade --python 3.13 --extra test pre-commit run --all-files"
+            in (canary_workflow)
+        )
         assert "uv run --upgrade --python 3.13 --extra docs" in canary_workflow
         assert "uv build --wheel" in canary_workflow
         assert '"${wheel_path}"' in canary_workflow
@@ -191,3 +210,43 @@ class PackagingMetadataTests:
         assert "--locked" not in canary_workflow
         assert "--frozen" not in canary_workflow
         assert "cache-dependency-glob: uv.lock" not in canary_workflow
+
+    def test_quality_gates_include_pre_commit_format_and_standard_typing(self) -> None:
+        pyproject_data = _load_toml(Path("pyproject.toml").read_text())
+        ci_workflow = Path(".github/workflows/ci.yml").read_text()
+        pre_commit_config = Path(".pre-commit-config.yaml").read_text()
+
+        tool_config = cast(dict[str, object], pyproject_data["tool"])
+        basedpyright_config = cast(dict[str, object], tool_config["basedpyright"])
+
+        assert basedpyright_config["typeCheckingMode"] == "standard"
+        assert "ruff check --extend-select I,UP" in ci_workflow
+        assert "ruff format --check" in ci_workflow
+        assert "pre-commit run --all-files" in ci_workflow
+        assert "id: ruff-check" in pre_commit_config
+        assert "--fix" in pre_commit_config
+        assert "--extend-select" in pre_commit_config
+        assert "I,UP" in pre_commit_config
+        assert "id: ruff-format" in pre_commit_config
+        assert "id: basedpyright" in pre_commit_config
+        assert 'typeCheckingMode = "standard"' in Path("pyproject.toml").read_text()
+
+    def test_pre_commit_autoupdate_workflow_opens_update_pull_requests(self) -> None:
+        workflow = Path(".github/workflows/pre-commit-autoupdate.yml").read_text()
+
+        assert "schedule:" in workflow
+        assert "workflow_dispatch:" in workflow
+        assert "contents: write" in workflow
+        assert "pull-requests: write" in workflow
+        assert "pre-commit autoupdate" in workflow
+        assert "chore/pre-commit-autoupdate" in workflow
+        assert "gh pr create" in workflow
+        assert "gh pr edit" in workflow
+
+    def test_readme_status_badges_reference_active_workflows(self) -> None:
+        readme = Path("README.md").read_text()
+
+        assert "actions/workflows/ci.yml/badge.svg?branch=main" in readme
+        assert "actions/workflows/ci.yml" in readme
+        assert "actions/workflows/docs.yml/badge.svg?branch=main" in readme
+        assert "actions/workflows/docs.yml" in readme

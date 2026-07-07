@@ -103,7 +103,9 @@ def prepare_seed_batch(
         )
         return current_state.activate_seed_batch(
             selected_seed_indices=selected_seed_indices,
-            bank_status=mark_selected(bank_status=bank_status, selected_indices=selected_seed_indices),
+            bank_status=mark_selected(
+                bank_status=bank_status, selected_indices=selected_seed_indices
+            ),
             used_entry_indices=used_entry_indices.union(selected_seed_indices),
         )
 
@@ -140,7 +142,9 @@ def prepare_seed_batch(
     selected_seed_indices = tuple(selected_indices)
     return current_state.activate_seed_batch(
         selected_seed_indices=selected_seed_indices,
-        bank_status=mark_selected(bank_status=bank_status, selected_indices=selected_seed_indices),
+        bank_status=mark_selected(
+            bank_status=bank_status, selected_indices=selected_seed_indices
+        ),
         used_entry_indices=used_entry_indices.union(selected_seed_indices),
     )
 
@@ -284,9 +288,7 @@ def select_initial_seed_pool(
         selected_indices.extend(remaining_indices)
         selected_set = set(selected_indices)
         remaining_indices = [
-            index
-            for index in unmasked_indices
-            if index not in selected_set
+            index for index in unmasked_indices if index not in selected_set
         ]
         return selected_indices, remaining_indices
 

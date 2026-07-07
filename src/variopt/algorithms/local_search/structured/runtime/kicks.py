@@ -53,9 +53,8 @@ def sample_structured_kick_candidate(
             path,
         )
         leaf_neighbors = discrete_leaf_neighbors(leaf_space, current_leaf_value)
-        if (
-            kick_policy.max_categorical_alternatives_per_leaf is not None
-            and isinstance(leaf_space, CategoricalSpace)
+        if kick_policy.max_categorical_alternatives_per_leaf is not None and isinstance(
+            leaf_space, CategoricalSpace
         ):
             leaf_neighbors = sample_neighbors_without_replacement(
                 neighbors=leaf_neighbors,

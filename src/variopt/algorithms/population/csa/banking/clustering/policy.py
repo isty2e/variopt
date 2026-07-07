@@ -38,8 +38,5 @@ class CSAClusteringPolicy:
             raise ValueError(msg)
 
         if self.update_mode not in {"largest_cluster", "current_cluster"}:
-            msg = (
-                "update_mode must be one of "
-                "'largest_cluster' or 'current_cluster'"
-            )
+            msg = "update_mode must be one of 'largest_cluster' or 'current_cluster'"
             raise ValueError(msg)

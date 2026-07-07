@@ -264,7 +264,9 @@ class RandomStateSnapshot:
         Self
             Immutable snapshot carrying the full NumPy random-state payload.
         """
-        algorithm, keys, position, has_gaussian, cached_gaussian = random_state.get_state()
+        algorithm, keys, position, has_gaussian, cached_gaussian = (
+            random_state.get_state()
+        )
         key_array = np.asarray(keys, dtype=np.uint32)
         return cls(
             algorithm=algorithm,

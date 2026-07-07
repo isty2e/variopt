@@ -22,6 +22,7 @@ class FrozenGenericSlotsCompat:
         default=None,
     )
 
+
 def frozen_generic_slots_compat_getstate(
     self: FrozenGenericSlotsCompat,
 ) -> list[object | None]:
@@ -34,7 +35,9 @@ def frozen_generic_slots_compat_getstate(
         is normalized to ``None`` so unsubscripted generic instances remain
         picklable under Python 3.11.
     """
-    return [getattr(self, dataclass_field.name, None) for dataclass_field in fields(self)]
+    return [
+        getattr(self, dataclass_field.name, None) for dataclass_field in fields(self)
+    ]
 
 
 def frozen_generic_slots_compat_setstate(

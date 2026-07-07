@@ -62,8 +62,12 @@ class PermutationSpaceGeometry:
             value=right,
             message="permutation-space diversity requires canonical tuple candidates",
         )
-        left_permutation = normalize_permutation_values(left_tuple, size=self.space.size)
-        right_permutation = normalize_permutation_values(right_tuple, size=self.space.size)
+        left_permutation = normalize_permutation_values(
+            left_tuple, size=self.space.size
+        )
+        right_permutation = normalize_permutation_values(
+            right_tuple, size=self.space.size
+        )
 
         return self.distance_part_values_for_validated_candidates(
             left_permutation,

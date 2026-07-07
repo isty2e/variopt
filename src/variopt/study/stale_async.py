@@ -142,9 +142,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyPayloadT]):
         self,
     ) -> tuple[EvaluationAttemptBatch[CandidateT, StudyPayloadT], ...]:
         """Poll and validate newly completed groups for one stale-async session."""
-        completed_groups: list[
-            EvaluationAttemptBatch[CandidateT, StudyPayloadT]
-        ] = []
+        completed_groups: list[EvaluationAttemptBatch[CandidateT, StudyPayloadT]] = []
         for completion_group in self.batch_session.poll():
             end_index = completion_group.start_index + len(completion_group.outcomes)
             if end_index > self.batch_session.handle.request_count:
@@ -184,9 +182,7 @@ class StaleAsyncActiveBatchSession(Generic[CandidateT, StudyPayloadT]):
 
 
 def _cancel_active_stale_async_sessions(
-    active_sessions: Sequence[
-        StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]
-    ],
+    active_sessions: Sequence[StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]],
 ) -> None:
     """Cancel all active stale-async sessions while preserving the run failure."""
     for active_session in active_sessions:
@@ -213,9 +209,7 @@ def open_stale_async_batch_session(
     state: RunMethodStateT,
     batch_size: int,
     evaluation_budget: EvaluationBudget | None = None,
-) -> tuple[
-    StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT], RunMethodStateT
-]:
+) -> tuple[StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT], RunMethodStateT]:
     """Ask one batch and open its stale-async evaluator session.
 
     Parameters
@@ -405,9 +399,7 @@ def run_stale_async(
         if initial_state is None
         else initial_state
     )
-    safe_snapshot: (
-        CheckpointSafeRunSnapshot[RunMethodStateT] | None
-    ) = None
+    safe_snapshot: CheckpointSafeRunSnapshot[RunMethodStateT] | None = None
     unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
         safe_snapshot = CheckpointSafeRunSnapshot(
@@ -417,9 +409,7 @@ def run_stale_async(
             evaluation_count=0,
             state=state,
         )
-    active_sessions: list[
-        StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]
-    ] = []
+    active_sessions: list[StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]] = []
 
     try:
         while active_sessions or (
@@ -592,10 +582,13 @@ def run_stale_async(
             failures=tuple(failures),
             candidate_equal=study.problem.space.candidates_equal,
         )
-        checkpoint_safe_report: RunReport[
-            CandidateT,
-            StudyRecordT,
-        ] | None = None
+        checkpoint_safe_report: (
+            RunReport[
+                CandidateT,
+                StudyRecordT,
+            ]
+            | None
+        ) = None
         checkpoint_safe_state: RunMethodStateT | None = None
         if safe_snapshot is not None:
             checkpoint_safe_report = build_checkpoint_safe_report_or_raise_cause(

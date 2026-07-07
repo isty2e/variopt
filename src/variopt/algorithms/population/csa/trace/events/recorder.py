@@ -44,9 +44,7 @@ class CSAEventTraceRecorder(Generic[CandidateT]):
             empty trace state.
         """
         self.trace_state = (
-            CSAEventTraceState[CandidateT]()
-            if trace_state is None
-            else trace_state
+            CSAEventTraceState[CandidateT]() if trace_state is None else trace_state
         )
 
     def start_generation(

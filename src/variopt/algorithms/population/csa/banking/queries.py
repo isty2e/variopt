@@ -118,9 +118,7 @@ class BankDistanceWorkspace(Generic[CandidateT]):
 
         common_entry_count = min(len(self.entries), len(entries))
         invalidated_index_set = frozenset(
-            index
-            for index in invalidated_indices
-            if index >= 0
+            index for index in invalidated_indices if index >= 0
         )
         workspace.distances.update(
             (key, distance)
@@ -363,11 +361,7 @@ def crowded_indices(
         if distance_workspace is None
         else distance_workspace.crowding_counts(distance_cutoff=distance_cutoff)
     )
-    return frozenset(
-        index
-        for index, count in enumerate(counts)
-        if count > 0
-    )
+    return frozenset(index for index, count in enumerate(counts) if count > 0)
 
 
 def crowding_counts(
@@ -403,7 +397,9 @@ def crowding_counts(
 
     counts = [0] * len(entries)
     for left_index, left_entry in enumerate(entries[:-1]):
-        for right_index, right_entry in enumerate(entries[left_index + 1 :], start=left_index + 1):
+        for right_index, right_entry in enumerate(
+            entries[left_index + 1 :], start=left_index + 1
+        ):
             distance = require_valid_distance(
                 validated_candidate_distance(
                     diversity_metric,
@@ -494,8 +490,7 @@ def crowding_aware_scores(
         return tuple(base_scores)
 
     niche_quality_enabled = (
-        niche_quality_policy.mode != "disabled"
-        and niche_quality_policy.ratio != 0.0
+        niche_quality_policy.mode != "disabled" and niche_quality_policy.ratio != 0.0
     )
     if penalty_ratio == 0.0 and not niche_quality_enabled:
         return tuple(base_scores)
@@ -520,8 +515,7 @@ def crowding_aware_scores(
     score_span = max(base_scores) - min(base_scores)
     score_scale = max(score_span, 1.0)
     crowding_penalties = tuple(
-        penalty_ratio * score_scale * (count / maximum_count)
-        for count in counts
+        penalty_ratio * score_scale * (count / maximum_count) for count in counts
     )
     quality_penalties = niche_quality_penalties(
         base_scores=base_scores,
@@ -703,10 +697,7 @@ def mean_niche_scores(
                 counts[left_index] += 1
                 counts[right_index] += 1
 
-    return tuple(
-        total / count
-        for total, count in zip(sums, counts, strict=True)
-    )
+    return tuple(total / count for total, count in zip(sums, counts, strict=True))
 
 
 def best_mean_niche_scores(

@@ -1520,7 +1520,9 @@ class StudyTests:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         def reject_trace_append(_trace: Trace, _event: TraceEvent) -> Trace:
-            raise AssertionError("run should buffer trace events before materialization")
+            raise AssertionError(
+                "run should buffer trace events before materialization"
+            )
 
         monkeypatch.setattr(Trace, "append", reject_trace_append)
         problem = Problem(
@@ -1720,8 +1722,7 @@ class StudyTests:
         assert isinstance(exception.cause, RuntimeError)
         assert str(exception.cause) == "forced sync tell failure"
         assert tuple(
-            record.proposal.proposal_id
-            for record in exception.partial_report.records
+            record.proposal.proposal_id for record in exception.partial_report.records
         ) == ("p-ok",)
         assert tuple(
             success.request.proposal.proposal_id
@@ -1776,8 +1777,7 @@ class StudyTests:
             pytest.fail("expected sync tell failure")
 
         assert tuple(
-            record.proposal.proposal_id
-            for record in exception.partial_report.records
+            record.proposal.proposal_id for record in exception.partial_report.records
         ) == ("p-safe", "p-ok")
         assert tuple(
             failure.proposal_id for failure in exception.partial_report.failures
@@ -1881,8 +1881,7 @@ class StudyTests:
 
         assert isinstance(exception.cause, RuntimeError)
         assert tuple(
-            record.proposal.proposal_id
-            for record in exception.partial_report.records
+            record.proposal.proposal_id for record in exception.partial_report.records
         ) == ("p-1",)
         assert all(
             type(success.payload) is Observation
@@ -2126,8 +2125,7 @@ class StudyTests:
         assert isinstance(exception.cause, RuntimeError)
         assert str(exception.cause) == "forced sync tell failure"
         assert tuple(
-            record.proposal.proposal_id
-            for record in exception.partial_report.records
+            record.proposal.proposal_id for record in exception.partial_report.records
         ) == ("p-ok",)
         assert tuple(
             success.request.proposal.proposal_id
@@ -2720,7 +2718,8 @@ class StudyTests:
         state = optimizer.create_initial_state()
 
         with pytest.raises(
-            ValueError, match="attempt batch requests must align with input request order"
+            ValueError,
+            match="attempt batch requests must align with input request order",
         ):
             _ = study.step(state, batch_size=2)
 

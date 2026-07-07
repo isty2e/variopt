@@ -167,8 +167,10 @@ class RunMethodAttemptAssimilationTests:
     def test_default_attempt_assimilation_rejects_all_failure_batch(self) -> None:
         request_one = _request(1, "p-1")
         request_two = _request(2, "p-2")
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(_failure(request_one), _failure(request_two)),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(request_one), _failure(request_two)),
+            )
         )
         optimizer = BatchQueueOptimizer(proposal_batches=[])
 
@@ -195,7 +197,9 @@ class RunMethodAttemptAssimilationTests:
         )
 
         assert optimizer.failure_history == (("p-2",),)
-        assert next_state.tell_history == ((success_one.payload, success_three.payload),)
+        assert next_state.tell_history == (
+            (success_one.payload, success_three.payload),
+        )
 
     def test_override_can_consume_zero_cost_failure(self) -> None:
         request_one = _request(1, "p-1")

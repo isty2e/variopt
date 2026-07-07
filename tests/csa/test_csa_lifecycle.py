@@ -39,7 +39,9 @@ def _request(proposal: Proposal[int]) -> EvaluationRequest[int]:
     return EvaluationRequest(proposal=proposal)
 
 
-def _success(request: EvaluationRequest[int]) -> EvaluationSuccess[int, Observation[int]]:
+def _success(
+    request: EvaluationRequest[int],
+) -> EvaluationSuccess[int, Observation[int]]:
     observation = Observation.from_objective_value(
         request=request,
         candidate=request.candidate,
@@ -62,7 +64,9 @@ def _failure(request: EvaluationRequest[int]) -> EvaluationFailure[int]:
 class CSALifecycleTests(CSAOptimizerTestCase):
     """White-box tests for CSA cutoff, refresh, and staged lifecycle transitions."""
 
-    def test_attempt_failures_consume_initial_pending_without_bank_evidence(self) -> None:
+    def test_attempt_failures_consume_initial_pending_without_bank_evidence(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=ScriptedIntegerSpace((1, 2)),
             diversity_metric=AbsoluteDistance(),
@@ -72,8 +76,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
         proposals = optimizer.ask(batch_size=2)
         requests = tuple(_request(proposal) for proposal in proposals)
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=tuple(_failure(request) for request in requests),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=tuple(_failure(request) for request in requests),
+            )
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -109,8 +115,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert tuple(entry.candidate for entry in optimizer.bank.entries) == (1,)
         assert all(
-            entry.proposal_id != failed_proposal_id
-            for entry in optimizer.bank.entries
+            entry.proposal_id != failed_proposal_id for entry in optimizer.bank.entries
         )
         assert optimizer.engine_state.pending_proposals.is_empty
         assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
@@ -156,8 +161,11 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             success_attempt,
         )
         assert optimizer.engine_state.generation_state.buffered_observations != ()
-        assert optimizer.engine_state.generation_state.pending_proposal_ids == frozenset(
-            {proposals[1].proposal_id},
+        assert (
+            optimizer.engine_state.generation_state.pending_proposal_ids
+            == frozenset(
+                {proposals[1].proposal_id},
+            )
         )
 
         failure_attempt: EvaluationAttemptBatch[int, Observation[int]] = (
@@ -221,8 +229,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         assert optimizer.engine_state.pending_proposals.is_empty
         assert not optimizer.engine_state.generation_state.is_active
         assert all(
-            entry.proposal_id != failed_proposal_id
-            for entry in optimizer.bank.entries
+            entry.proposal_id != failed_proposal_id for entry in optimizer.bank.entries
         )
 
     def test_generated_failure_keeps_unissued_generation_queue_active(self) -> None:
@@ -255,8 +262,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
         proposals = optimizer.ask(batch_size=1)
         request = _request(proposals[0])
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(_failure(request),),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(request),),
+            )
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -265,7 +274,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
 
         assert optimizer.engine_state.pending_proposals.is_empty
-        assert optimizer.engine_state.generation_state.pending_proposal_ids == frozenset()
+        assert (
+            optimizer.engine_state.generation_state.pending_proposal_ids == frozenset()
+        )
         assert not optimizer.engine_state.generation_state.queue.is_empty
         assert not optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
         next_proposals = optimizer.ask(batch_size=1)
@@ -307,8 +318,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
         assert optimizer.state.refresh_in_progress
         failed_request = _request(refresh_batch[2])
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(_failure(failed_request),),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(failed_request),),
+            )
         )
 
         optimizer.engine_state = optimizer.optimizer.tell_attempts(
@@ -321,7 +334,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         assert {entry.candidate for entry in optimizer.bank.entries} == {1, 2}
         assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
 
-    def test_attempt_failure_rejects_missing_proposal_id_without_consuming_pending(self) -> None:
+    def test_attempt_failure_rejects_missing_proposal_id_without_consuming_pending(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=ScriptedIntegerSpace((1, 2)),
             diversity_metric=AbsoluteDistance(),
@@ -331,8 +346,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
         proposals = optimizer.ask(batch_size=1)
         failure_request = _request(Proposal(candidate=99))
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(_failure(failure_request),),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(failure_request),),
+            )
         )
 
         with pytest.raises(ValueError, match="must reference proposal ids"):
@@ -340,7 +357,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
-    def test_attempt_failure_rejects_unknown_proposal_without_consuming_pending(self) -> None:
+    def test_attempt_failure_rejects_unknown_proposal_without_consuming_pending(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=ScriptedIntegerSpace((1, 2)),
             diversity_metric=AbsoluteDistance(),
@@ -350,8 +369,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
         proposals = optimizer.ask(batch_size=1)
         failure_request = _request(Proposal(candidate=99, proposal_id="csa-missing"))
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(_failure(failure_request),),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(failure_request),),
+            )
         )
 
         with pytest.raises(ValueError, match="does not correspond"):
@@ -359,7 +380,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
-    def test_attempt_failure_rejects_mismatched_proposal_without_consuming_pending(self) -> None:
+    def test_attempt_failure_rejects_mismatched_proposal_without_consuming_pending(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=ScriptedIntegerSpace((1, 2)),
             diversity_metric=AbsoluteDistance(),
@@ -371,8 +394,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         failure_request = _request(
             Proposal(candidate=99, proposal_id=proposals[0].proposal_id),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(_failure(failure_request),),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(_failure(failure_request),),
+            )
         )
 
         with pytest.raises(ValueError, match="does not match"):
@@ -398,8 +423,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
                 ),
             ),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=tuple(_failure(request) for request in requests),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=tuple(_failure(request) for request in requests),
+            )
         )
 
         with pytest.raises(ValueError, match="distinct proposal ids"):
@@ -407,7 +434,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
-    def test_attempt_failure_rejects_duplicate_success_failure_proposal_id(self) -> None:
+    def test_attempt_failure_rejects_duplicate_success_failure_proposal_id(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=ScriptedIntegerSpace((1, 2)),
             diversity_metric=AbsoluteDistance(),
@@ -432,7 +461,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert tuple(optimizer.engine_state.pending_proposals.proposals) == proposals
 
-    def test_state_initializes_from_explicit_cutoff_without_advancing_on_first_bank_fill(self) -> None:
+    def test_state_initializes_from_explicit_cutoff_without_advancing_on_first_bank_fill(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
             diversity_metric=AbsoluteDistance(),
@@ -460,11 +491,11 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         optimizer.tell(observations)
 
         assert optimizer.state.cutoff_state == CSACutoffState(
-                iteration_count=0,
-                cycle_count=0,
-                distance_cutoff=3.0,
-                minimum_distance_cutoff=1.0,
-            )
+            iteration_count=0,
+            cycle_count=0,
+            distance_cutoff=3.0,
+            minimum_distance_cutoff=1.0,
+        )
 
     def test_state_derives_cutoff_from_full_bank(self) -> None:
         optimizer = make_optimizer(
@@ -494,7 +525,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         assert optimizer.state.distance_cutoff is not None
         assert optimizer.state.minimum_distance_cutoff is not None
         assert optimizer.state.distance_cutoff > 0.0
-        assert optimizer.state.minimum_distance_cutoff <= optimizer.state.distance_cutoff
+        assert (
+            optimizer.state.minimum_distance_cutoff <= optimizer.state.distance_cutoff
+        )
         assert optimizer.state.iteration_count == 0
 
     def test_state_advances_cutoff_once_bank_is_already_full(self) -> None:
@@ -574,7 +607,9 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         assert optimizer.state.cutoff_recover_limit == 4.0
         assert optimizer.state.previous_score_gap == 2.0
 
-    def test_cycle_count_increments_only_after_unused_bank_entries_are_exhausted(self) -> None:
+    def test_cycle_count_increments_only_after_unused_bank_entries_are_exhausted(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
             diversity_metric=AbsoluteDistance(),
@@ -706,9 +741,12 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             )
         )
 
-        assert sum(
+        assert (
+            sum(
                 optimizer.selection_state.bank_status,
-            ) == 1
+            )
+            == 1
+        )
 
         optimizer.tell(
             evaluate_observations(
@@ -720,9 +758,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
 
         assert optimizer.state.cycle_count == 1
         assert not (optimizer.state.refresh_in_progress)
-        assert (
-            optimizer.selection_state.bank_status == (False, False)
-        )
+        assert optimizer.selection_state.bank_status == (False, False)
 
     def test_final_stage_exhausts_when_restart_lite_is_disabled(self) -> None:
         optimizer = make_optimizer(
@@ -777,7 +813,10 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             _ = optimizer.ask(batch_size=1)
 
     def test_optimizer_rejects_stage_and_adaptive_growth_combination(self) -> None:
-        with pytest.raises(ValueError, match="adaptive bank growth and staged bank growth must not both be enabled"):
+        with pytest.raises(
+            ValueError,
+            match="adaptive bank growth and staged bank growth must not both be enabled",
+        ):
             _ = make_optimizer(
                 space=IntegerSpace(low=0, high=100),
                 diversity_metric=AbsoluteDistance(),
@@ -1086,12 +1125,8 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
 
         assert not (optimizer.state.refresh_in_progress)
-        assert (
-            {entry.candidate for entry in optimizer.bank.entries} == {0, 1}
-        )
-        assert (
-            {entry.candidate for entry in optimizer.reference_bank.entries} == {0, 1}
-        )
+        assert {entry.candidate for entry in optimizer.bank.entries} == {0, 1}
+        assert {entry.candidate for entry in optimizer.reference_bank.entries} == {0, 1}
 
     def test_refresh_start_pending_empty_tell_is_a_noop(self) -> None:
         problem = Problem(
@@ -1236,14 +1271,12 @@ class CSALifecycleTests(CSAOptimizerTestCase):
         )
 
         assert not (optimizer.state.refresh_in_progress)
-        assert (
-            {entry.candidate for entry in optimizer.bank.entries} == {0, 1}
-        )
-        assert (
-            {entry.candidate for entry in optimizer.reference_bank.entries} == {0, 1}
-        )
+        assert {entry.candidate for entry in optimizer.bank.entries} == {0, 1}
+        assert {entry.candidate for entry in optimizer.reference_bank.entries} == {0, 1}
 
-    def test_stage_growth_appends_new_entries_to_reference_bank_without_overwriting_prefix(self) -> None:
+    def test_stage_growth_appends_new_entries_to_reference_bank_without_overwriting_prefix(
+        self,
+    ) -> None:
         problem = Problem(
             space=ScriptedIntegerSpace((1, 2)),
             objective=SquareObjective(),
@@ -1290,12 +1323,17 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             )
         )
 
-        assert (
-            tuple(entry.candidate for entry in optimizer.bank.entries) == (7, 8, 1, 2)
+        assert tuple(entry.candidate for entry in optimizer.bank.entries) == (
+            7,
+            8,
+            1,
+            2,
         )
-        assert (
-            tuple(entry.candidate for entry in optimizer.reference_bank.entries)
-            == (9, 8, 1, 2)
+        assert tuple(entry.candidate for entry in optimizer.reference_bank.entries) == (
+            9,
+            8,
+            1,
+            2,
         )
 
     def test_stage_mask_does_not_reduce_initial_new_bank_cut_entry_count(self) -> None:

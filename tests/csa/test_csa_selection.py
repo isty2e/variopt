@@ -267,8 +267,7 @@ class CSASelectionTests(CSAOptimizerTestCase):
 
     def test_unmasked_partner_selection_preserves_rng_trajectory(self) -> None:
         entries = tuple(
-            BankEntry(candidate=index, value=float(index))
-            for index in range(32)
+            BankEntry(candidate=index, value=float(index)) for index in range(32)
         )
         fast_random_state = np.random.RandomState(17)
         fallback_random_state = np.random.RandomState(17)
@@ -481,7 +480,9 @@ class CSASelectionTests(CSAOptimizerTestCase):
         assert initial_operator.last_parents[0] == 1
         assert set(initial_operator.last_parents[1:]) == {2, 3}
 
-    def test_initial_variation_switches_only_primary_after_new_bank_cut_for_higher_arity(self) -> None:
+    def test_initial_variation_switches_only_primary_after_new_bank_cut_for_higher_arity(
+        self,
+    ) -> None:
         initial_operator = RecordingTernaryParents()
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=2000),
@@ -534,7 +535,9 @@ class CSASelectionTests(CSAOptimizerTestCase):
         assert initial_operator.last_parents[0] == 10
         assert set(initial_operator.last_parents[1:]) == {2, 3}
 
-    def test_initial_new_bank_cut_larger_than_bank_size_remains_reference_primary(self) -> None:
+    def test_initial_new_bank_cut_larger_than_bank_size_remains_reference_primary(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=2000),
             diversity_metric=AbsoluteDistance(),
@@ -628,7 +631,9 @@ class CSASelectionTests(CSAOptimizerTestCase):
 
         assert proposal.candidate == 102
 
-    def test_initial_variation_switches_to_bank_primary_after_new_bank_cut(self) -> None:
+    def test_initial_variation_switches_to_bank_primary_after_new_bank_cut(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=2000),
             diversity_metric=AbsoluteDistance(),
@@ -677,26 +682,30 @@ class CSASelectionTests(CSAOptimizerTestCase):
 
     def test_initial_routing_matches_legacy_new_bank_cut_rule(self) -> None:
         assert should_use_reference_primary(
-                cycle_count=0,
-                entry_count=5,
-                active_seed_count=2,
-                unused_entry_count=3,
-                new_bank_cut=1,
-            )
-        assert not (should_use_reference_primary(
+            cycle_count=0,
+            entry_count=5,
+            active_seed_count=2,
+            unused_entry_count=3,
+            new_bank_cut=1,
+        )
+        assert not (
+            should_use_reference_primary(
                 cycle_count=0,
                 entry_count=5,
                 active_seed_count=2,
                 unused_entry_count=2,
                 new_bank_cut=1,
-            ))
-        assert not (should_use_reference_primary(
+            )
+        )
+        assert not (
+            should_use_reference_primary(
                 cycle_count=1,
                 entry_count=5,
                 active_seed_count=2,
                 unused_entry_count=3,
                 new_bank_cut=1,
-            ))
+            )
+        )
 
     def test_batch_tell_invalidates_seed_state_from_original_bank_delta(self) -> None:
         optimizer = make_optimizer(
@@ -739,19 +748,21 @@ class CSASelectionTests(CSAOptimizerTestCase):
 
         optimizer.tell(
             (
-                Observation(proposal=proposals[0], candidate=11, value=97.0, score=97.0),
-                Observation(proposal=proposals[1], candidate=12, value=93.0, score=93.0),
+                Observation(
+                    proposal=proposals[0], candidate=11, value=97.0, score=97.0
+                ),
+                Observation(
+                    proposal=proposals[1], candidate=12, value=93.0, score=93.0
+                ),
             )
         )
 
-        assert (
-            tuple(entry.candidate for entry in optimizer.bank.entries) == (12, 20)
-        )
-        assert (
-            optimizer.selection_state.used_entry_indices == frozenset({1})
-        )
+        assert tuple(entry.candidate for entry in optimizer.bank.entries) == (12, 20)
+        assert optimizer.selection_state.used_entry_indices == frozenset({1})
 
-    def test_seed_count_larger_than_bank_capacity_still_uses_distinct_seeds(self) -> None:
+    def test_seed_count_larger_than_bank_capacity_still_uses_distinct_seeds(
+        self,
+    ) -> None:
         problem = Problem(
             space=ScriptedIntegerSpace((11, 7)),
             objective=SquareObjective(),

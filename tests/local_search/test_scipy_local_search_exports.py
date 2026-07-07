@@ -1,6 +1,5 @@
 """Tests for SciPy local-search package exports."""
 
-
 from variopt.algorithms.local_search import ScipyMinimizeKernel
 from variopt.algorithms.local_search.scipy import (
     ScipyMinimizeKernel as PackageScipyMinimizeKernel,

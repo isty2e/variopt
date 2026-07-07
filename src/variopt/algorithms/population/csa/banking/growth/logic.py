@@ -106,7 +106,10 @@ def try_append_growth_entry(
     ):
         return bank, state, False
 
-    if max(scored_bank.real_scores) < trial.real_score and not adaptive_potential_active:
+    if (
+        max(scored_bank.real_scores) < trial.real_score
+        and not adaptive_potential_active
+    ):
         return bank, state, False
 
     grown_bank = Bank(
@@ -120,11 +123,15 @@ def try_append_growth_entry(
             ),
         ),
     )
-    return grown_bank, CSABankGrowthState[CandidateT](
-        policy=state.policy,
-        active_energy_gap_limit=state.active_energy_gap_limit,
-        generation_growth_count=state.generation_growth_count + 1,
-    ), True
+    return (
+        grown_bank,
+        CSABankGrowthState[CandidateT](
+            policy=state.policy,
+            active_energy_gap_limit=state.active_energy_gap_limit,
+            generation_growth_count=state.generation_growth_count + 1,
+        ),
+        True,
+    )
 
 
 def should_attempt_remove_top(

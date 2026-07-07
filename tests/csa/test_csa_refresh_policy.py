@@ -86,7 +86,9 @@ class CSARefreshPolicyTests:
         assert next_state.banking_state.refresh_state.preserved_bank_entries == ()
         assert next_state.banking_state.refresh_state.preserved_reference_entries == ()
 
-    def test_adaptive_refresh_preserves_elite_entries_and_masks_them_for_one_cycle(self) -> None:
+    def test_adaptive_refresh_preserves_elite_entries_and_masks_them_for_one_cycle(
+        self,
+    ) -> None:
         refresh_policy = CSARefreshPolicy(
             mode="adaptive_refresh",
             preserve_fraction=0.25,
@@ -105,8 +107,12 @@ class CSARefreshPolicyTests:
         refreshing_state = begin_refresh(engine_state, refresh_policy=refresh_policy)
         refresh_state = refreshing_state.banking_state.refresh_state
         assert refresh_state is not None
-        assert refresh_state.preserved_bank_entries == (BankEntry(candidate=11, value=1.0),)
-        assert refresh_state.preserved_reference_entries == (BankEntry(candidate=11, value=1.0),)
+        assert refresh_state.preserved_bank_entries == (
+            BankEntry(candidate=11, value=1.0),
+        )
+        assert refresh_state.preserved_reference_entries == (
+            BankEntry(candidate=11, value=1.0),
+        )
 
         refreshed_state = complete_refresh(
             replace(
@@ -141,16 +147,18 @@ class CSARefreshPolicyTests:
         )
 
         assert refreshed_state.banking_state.bank.entries == (
-                BankEntry(candidate=11, value=1.0),
-                BankEntry(candidate=21, value=0.5),
-                BankEntry(candidate=20, value=5.0),
-                BankEntry(candidate=22, value=6.0),
-            )
+            BankEntry(candidate=11, value=1.0),
+            BankEntry(candidate=21, value=0.5),
+            BankEntry(candidate=20, value=5.0),
+            BankEntry(candidate=22, value=6.0),
+        )
         assert refreshed_state.progression_state.refresh_mask == frozenset({0})
         assert refreshed_state.progression_state.seed_mask == frozenset({0})
         assert refreshed_state.progression_state.partner_mask == frozenset({0})
 
-    def test_adaptive_stage_growth_refresh_retargets_newcomer_masks_to_preserved_entries(self) -> None:
+    def test_adaptive_stage_growth_refresh_retargets_newcomer_masks_to_preserved_entries(
+        self,
+    ) -> None:
         refresh_policy = CSARefreshPolicy(
             mode="adaptive_refresh",
             preserve_fraction=0.5,
@@ -175,7 +183,9 @@ class CSARefreshPolicyTests:
         refresh_state = transitioned_state.banking_state.refresh_state
         assert refresh_state is not None
         assert len(refresh_state.preserved_bank_entries) == 1
-        assert refresh_state.preserved_bank_entries == (BankEntry(candidate=31, value=1.0),)
+        assert refresh_state.preserved_bank_entries == (
+            BankEntry(candidate=31, value=1.0),
+        )
 
         refreshed_state = complete_refresh(
             replace(
@@ -211,7 +221,9 @@ class CSARefreshPolicyTests:
 
         assert refreshed_state.progression_state.refresh_mask == frozenset()
         assert refreshed_state.progression_state.stage_state.seed_mask == frozenset({0})
-        assert refreshed_state.progression_state.stage_state.partner_mask == frozenset({0})
+        assert refreshed_state.progression_state.stage_state.partner_mask == frozenset(
+            {0}
+        )
 
 
 def build_full_engine_state(

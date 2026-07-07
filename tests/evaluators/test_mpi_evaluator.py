@@ -180,13 +180,15 @@ class MpiEvaluatorTests:
             problem,
             _requests(
                 (
-                Proposal(candidate=4, proposal_id="p-1"),
-                Proposal(candidate=1, proposal_id="p-2"),
+                    Proposal(candidate=4, proposal_id="p-1"),
+                    Proposal(candidate=1, proposal_id="p-2"),
                 )
             ),
         )
 
-        assert tuple(outcome.observation.proposal.proposal_id for outcome in outcomes) == ("p-1", "p-2")
+        assert tuple(
+            outcome.observation.proposal.proposal_id for outcome in outcomes
+        ) == ("p-1", "p-2")
         assert tuple(outcome.observation.value for outcome in outcomes) == (16.0, 1.0)
         assert executor.submission_count == 2
         assert executor.shutdown_calls == [True]
@@ -267,11 +269,11 @@ class MpiEvaluatorTests:
         evaluator = MpiEvaluator[int, int](max_workers=4)
 
         assert evaluator.execution_resources() == ExecutionResources(
-                parallel_owner="evaluator",
-                nested_parallelism_policy=NestedParallelismPolicy.FORBID,
-                owner_worker_count=4,
-                owner_backend="mpi",
-            )
+            parallel_owner="evaluator",
+            nested_parallelism_policy=NestedParallelismPolicy.FORBID,
+            owner_worker_count=4,
+            owner_backend="mpi",
+        )
 
     def test_raises_helpful_error_when_mpi4py_is_unavailable(
         self,

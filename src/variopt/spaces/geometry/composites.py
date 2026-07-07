@@ -177,9 +177,11 @@ class TupleSpaceGeometry:
         if categorical_child_geometries is not None:
             mismatch_count = 0.0
             for index, child_geometry in enumerate(categorical_child_geometries):
-                mismatch_count += child_geometry.squared_distance_for_validated_candidates(
-                    left[index],
-                    right[index],
+                mismatch_count += (
+                    child_geometry.squared_distance_for_validated_candidates(
+                        left[index],
+                        right[index],
+                    )
                 )
             return (mismatch_count, self.arity, 0)
 
@@ -303,9 +305,8 @@ class RecordSpaceGeometry:
         )
         left_entries = left_record.entries
         right_entries = right_record.entries
-        if (
-            len(left_entries) != len(self.field_geometries)
-            or len(right_entries) != len(self.field_geometries)
+        if len(left_entries) != len(self.field_geometries) or len(right_entries) != len(
+            self.field_geometries
         ):
             msg = "record candidate keys must exactly match the declared fields"
             raise ValueError(msg)
@@ -357,7 +358,9 @@ class RecordSpaceGeometry:
         right: SpaceCandidateValue,
     ) -> tuple[float, int, int]:
         """Return raw part values for canonical record candidates."""
-        if not isinstance(left, RecordCandidate) or not isinstance(right, RecordCandidate):
+        if not isinstance(left, RecordCandidate) or not isinstance(
+            right, RecordCandidate
+        ):
             return self.distance_part_values(left, right)
 
         left_entries = left.entries
@@ -368,9 +371,11 @@ class RecordSpaceGeometry:
             for index, (_name, child_geometry) in enumerate(
                 categorical_field_geometries
             ):
-                mismatch_count += child_geometry.squared_distance_for_validated_candidates(
-                    left_entries[index][1],
-                    right_entries[index][1],
+                mismatch_count += (
+                    child_geometry.squared_distance_for_validated_candidates(
+                        left_entries[index][1],
+                        right_entries[index][1],
+                    )
                 )
             return (mismatch_count, len(categorical_field_geometries), 0)
 
@@ -773,7 +778,9 @@ class IntegerArraySpaceGeometry:
                 left_value = left[index]
                 right_value = right[index]
                 if type(left_value) is not int or type(right_value) is not int:
-                    msg = "integer-array diversity requires canonical integer candidates"
+                    msg = (
+                        "integer-array diversity requires canonical integer candidates"
+                    )
                     raise TypeError(msg)
                 if (
                     left_value < element_space.low
@@ -787,12 +794,16 @@ class IntegerArraySpaceGeometry:
 
         squared_distance = 0.0
         if element_space.scale == "log":
-            coordinate_span = log(float(element_space.high)) - log(float(element_space.low))
+            coordinate_span = log(float(element_space.high)) - log(
+                float(element_space.low)
+            )
             for index in range(self.length):
                 left_value = left[index]
                 right_value = right[index]
                 if type(left_value) is not int or type(right_value) is not int:
-                    msg = "integer-array diversity requires canonical integer candidates"
+                    msg = (
+                        "integer-array diversity requires canonical integer candidates"
+                    )
                     raise TypeError(msg)
                 if (
                     left_value < element_space.low
@@ -802,7 +813,10 @@ class IntegerArraySpaceGeometry:
                 ):
                     msg = "integer candidate is outside the declared bounds"
                     raise ValueError(msg)
-                leaf_distance = abs(log(float(left_value)) - log(float(right_value))) / coordinate_span
+                leaf_distance = (
+                    abs(log(float(left_value)) - log(float(right_value)))
+                    / coordinate_span
+                )
                 squared_distance += leaf_distance * leaf_distance
             return (squared_distance, self.length, 0)
 
@@ -950,7 +964,9 @@ class RealArraySpaceGeometry:
                 ):
                     msg = "real candidate is outside the declared bounds"
                     raise ValueError(msg)
-                leaf_distance = abs(log(left_value) - log(right_value)) / coordinate_span
+                leaf_distance = (
+                    abs(log(left_value) - log(right_value)) / coordinate_span
+                )
                 squared_distance += leaf_distance * leaf_distance
             return (squared_distance, self.length, 0)
 

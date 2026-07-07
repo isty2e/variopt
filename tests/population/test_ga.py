@@ -178,24 +178,32 @@ class GeneticAlgorithmOptimizerTests:
         with pytest.raises(ValueError, match="tournament_size must be positive"):
             _ = GAProfile(tournament_size=0)
 
-        with pytest.raises(ValueError, match="crossover_probability must be between 0.0 and 1.0"):
+        with pytest.raises(
+            ValueError, match="crossover_probability must be between 0.0 and 1.0"
+        ):
             _ = GAProfile(crossover_probability=1.5)
 
-        with pytest.raises(ValueError, match="mutation_probability must be between 0.0 and 1.0"):
+        with pytest.raises(
+            ValueError, match="mutation_probability must be between 0.0 and 1.0"
+        ):
             _ = GAProfile(mutation_probability=-0.1)
 
         with pytest.raises(ValueError, match="elite_count must be non-negative"):
             _ = GAProfile(elite_count=-1)
 
     def test_optimizer_rejects_invalid_operator_shapes(self) -> None:
-        with pytest.raises(ValueError, match="crossover_operator arity must be at least 2"):
+        with pytest.raises(
+            ValueError, match="crossover_operator arity must be at least 2"
+        ):
             _ = GeneticAlgorithmOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=4,
                 crossover_operator=UnaryCrossover(),
             )
 
-        with pytest.raises(ValueError, match="mutation_operator arity must be exactly 1"):
+        with pytest.raises(
+            ValueError, match="mutation_operator arity must be exactly 1"
+        ):
             _ = GeneticAlgorithmOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=4,
@@ -217,7 +225,9 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert len(state.population) == 0
         assert tuple(
@@ -226,12 +236,16 @@ class GeneticAlgorithmOptimizerTests:
 
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert tuple(member.candidate for member in state.population) == (2, 3, 4, 5)
         assert state.buffered_member_buffer.member_count == 0
 
-    def test_optimizer_preserves_proposal_id_continuity_across_queue_slices(self) -> None:
+    def test_optimizer_preserves_proposal_id_continuity_across_queue_slices(
+        self,
+    ) -> None:
         optimizer = GeneticAlgorithmOptimizer(
             space=IntegerSpace(0, 10),
             population_size=4,
@@ -247,12 +261,16 @@ class GeneticAlgorithmOptimizerTests:
         proposals, state = optimizer.ask(state, batch_size=2)
         assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-0", "ga-1")
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, state = optimizer.ask(state, batch_size=2)
         assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-2", "ga-3")
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, state = optimizer.ask(state, batch_size=1)
         assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-4",)
@@ -278,7 +296,9 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, state = optimizer.ask(state, batch_size=3)
 
@@ -293,7 +313,9 @@ class GeneticAlgorithmOptimizerTests:
         )
 
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         proposals, state = optimizer.ask(state, batch_size=1)
 
         assert tuple(proposal.proposal_id for proposal in proposals) == ("ga-7",)
@@ -310,12 +332,16 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=1)
 
-        with pytest.raises(RuntimeError, match="cannot ask while proposals are still pending"):
+        with pytest.raises(
+            RuntimeError, match="cannot ask while proposals are still pending"
+        ):
             _ = optimizer.ask(state, batch_size=1)
 
         assert state.pending_proposals == proposals
 
-    def test_optimizer_rejects_reordered_observations_without_consuming_pending(self) -> None:
+    def test_optimizer_rejects_reordered_observations_without_consuming_pending(
+        self,
+    ) -> None:
         optimizer = GeneticAlgorithmOptimizer(
             space=IntegerSpace(0, 10),
             population_size=4,
@@ -330,11 +356,12 @@ class GeneticAlgorithmOptimizerTests:
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
         reordered_observations = tuple(
-            outcome.observation
-            for outcome in reversed(outcomes)
+            outcome.observation for outcome in reversed(outcomes)
         )
 
-        with pytest.raises(ValueError, match="observations must align with pending proposal order"):
+        with pytest.raises(
+            ValueError, match="observations must align with pending proposal order"
+        ):
             _ = optimizer.tell(state, reordered_observations)
 
         assert state.pending_proposals == proposals
@@ -354,8 +381,10 @@ class GeneticAlgorithmOptimizerTests:
             request=request,
             exception=ValueError("failed"),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(failure,),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(failure,),
+            )
         )
 
         with pytest.raises(UnsupportedEvaluationFailureError):
@@ -363,7 +392,9 @@ class GeneticAlgorithmOptimizerTests:
 
         assert state.pending_proposals == proposals
 
-    def test_optimizer_split_generation_matches_full_generation_rng_and_order(self) -> None:
+    def test_optimizer_split_generation_matches_full_generation_rng_and_order(
+        self,
+    ) -> None:
         split_optimizer = GeneticAlgorithmOptimizer(
             space=IntegerSpace(0, 10),
             population_size=4,
@@ -427,7 +458,9 @@ class GeneticAlgorithmOptimizerTests:
         assert split_state.generation_index == full_state.generation_index
         assert split_state.population == full_state.population
 
-    def test_optimizer_partial_generation_round_trip_preserves_continuation(self) -> None:
+    def test_optimizer_partial_generation_round_trip_preserves_continuation(
+        self,
+    ) -> None:
         split_optimizer = GeneticAlgorithmOptimizer(
             space=IntegerSpace(0, 10),
             population_size=4,
@@ -511,18 +544,24 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         assert tuple(member.candidate for member in state.population) == (4, 5)
 
         proposals, state = optimizer.ask(state, batch_size=1)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         remaining_proposals = state.queued_proposals[state.queued_proposal_index :]
         assert tuple(proposal.candidate for proposal in remaining_proposals) == (3,)
 
         proposals, state = optimizer.ask(state, batch_size=1)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert state.generation_index == 1
         assert tuple(member.candidate for member in state.population) == (3, 4)
@@ -547,11 +586,15 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert state.generation_index == 1
         assert tuple(member.candidate for member in state.population) == (0, 0)
@@ -577,10 +620,12 @@ class GeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=6)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert len(state.population) == 6
         assert all(
-                tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
-                for member in state.population
-            )
+            tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
+            for member in state.population
+        )

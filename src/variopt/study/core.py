@@ -199,7 +199,9 @@ class Study(
             ConstructorRecordT,
         ],
         *,
-        problem: Problem[ConstructorBoundaryT, ConstructorCandidateT, ConstructorRecordT],
+        problem: Problem[
+            ConstructorBoundaryT, ConstructorCandidateT, ConstructorRecordT
+        ],
         run_method: RunMethod[
             ConstructorRunMethodStateT,
             Proposal[ConstructorCandidateT],
@@ -232,7 +234,9 @@ class Study(
             ConstructorRecordT,
         ],
         *,
-        problem: Problem[ConstructorBoundaryT, ConstructorCandidateT, ConstructorPayloadT],
+        problem: Problem[
+            ConstructorBoundaryT, ConstructorCandidateT, ConstructorPayloadT
+        ],
         run_method: RunMethod[
             ConstructorRunMethodStateT,
             Proposal[ConstructorCandidateT],

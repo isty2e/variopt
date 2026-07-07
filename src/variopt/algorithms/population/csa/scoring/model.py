@@ -40,8 +40,7 @@ class CSABiasedPotential:
     def __post_init__(self) -> None:
         """Reject invalid biased-potential configuration."""
         if self.maximum_bias is not None and (
-            not isfinite(self.maximum_bias)
-            or self.maximum_bias < 0.0
+            not isfinite(self.maximum_bias) or self.maximum_bias < 0.0
         ):
             msg = "maximum_bias must be a finite non-negative float or None"
             raise ValueError(msg)
@@ -85,10 +84,7 @@ class CSAAdaptivePotentialAxis(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
     def __post_init__(self) -> None:
         """Reject invalid adaptive-potential axis definitions."""
-        if (
-            not isfinite(self.minimum_distance)
-            or self.minimum_distance < 0.0
-        ):
+        if not isfinite(self.minimum_distance) or self.minimum_distance < 0.0:
             msg = "minimum_distance must be a finite non-negative float"
             raise ValueError(msg)
 
@@ -96,7 +92,9 @@ class CSAAdaptivePotentialAxis(FrozenGenericSlotsCompat, Generic[CandidateT]):
             not isfinite(self.maximum_distance)
             or self.maximum_distance <= self.minimum_distance
         ):
-            msg = "maximum_distance must be a finite float greater than minimum_distance"
+            msg = (
+                "maximum_distance must be a finite float greater than minimum_distance"
+            )
             raise ValueError(msg)
 
         if self.bin_count <= 0:
@@ -132,10 +130,7 @@ class CSAAdaptivePotential(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "increment must be a finite non-negative float"
             raise ValueError(msg)
 
-        if (
-            not isfinite(self.overflow_energy)
-            or self.overflow_energy < 0.0
-        ):
+        if not isfinite(self.overflow_energy) or self.overflow_energy < 0.0:
             msg = "overflow_energy must be a finite non-negative float"
             raise ValueError(msg)
 

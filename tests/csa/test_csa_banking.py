@@ -105,7 +105,9 @@ class BankUpdatePolicyTests:
     """Unit tests for CSA bank admission semantics."""
 
     def test_policy_rejects_negative_crowding_penalty_ratio(self) -> None:
-        with pytest.raises(ValueError, match="crowding_penalty_ratio must be non-negative"):
+        with pytest.raises(
+            ValueError, match="crowding_penalty_ratio must be non-negative"
+        ):
             _ = CSABankUpdatePolicy(crowding_penalty_ratio=-0.1)
 
     def test_crowding_aware_best_mean_reuses_pairwise_distances(self) -> None:
@@ -369,7 +371,9 @@ class BankUpdatePolicyTests:
                 random_state=0,
             )
 
-    def test_csa_tell_rejects_noncanonical_structured_observation_candidate(self) -> None:
+    def test_csa_tell_rejects_noncanonical_structured_observation_candidate(
+        self,
+    ) -> None:
         space = RecordSpace(mode=CategoricalSpace((1, 2)))
         optimizer = CSAOptimizer.from_space_defaults(
             space=space,
@@ -522,7 +526,9 @@ class BankUpdatePolicyTests:
             BankEntry(candidate=1, value=3.0),
         )
         metric = CountingDistance()
-        distance_workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+        distance_workspace = BankDistanceWorkspace(
+            entries=entries, diversity_metric=metric
+        )
 
         scores = crowding_aware_scores(
             base_scores=tuple(entry.value for entry in entries),
@@ -560,7 +566,9 @@ class BankUpdatePolicyTests:
         assert scores != (5.0, 3.0, 1.0)
         assert metric.call_count == 3
 
-    def test_crowding_aware_rejects_negative_penalty_before_empty_fast_path(self) -> None:
+    def test_crowding_aware_rejects_negative_penalty_before_empty_fast_path(
+        self,
+    ) -> None:
         with pytest.raises(ValueError, match="penalty_ratio must be non-negative"):
             _ = crowding_aware_scores(
                 base_scores=(),
@@ -574,7 +582,9 @@ class BankUpdatePolicyTests:
     def test_crowding_aware_rejects_length_mismatch_before_zero_fast_path(self) -> None:
         entries = (BankEntry(candidate=0, value=5.0),)
 
-        with pytest.raises(ValueError, match="base_scores and entries must have the same length"):
+        with pytest.raises(
+            ValueError, match="base_scores and entries must have the same length"
+        ):
             _ = crowding_aware_scores(
                 base_scores=(),
                 entries=entries,
@@ -584,7 +594,9 @@ class BankUpdatePolicyTests:
                 niche_quality_policy=CSANicheQualityPolicy(),
             )
 
-    def test_distance_workspace_rejects_negative_cutoff_before_metric_call(self) -> None:
+    def test_distance_workspace_rejects_negative_cutoff_before_metric_call(
+        self,
+    ) -> None:
         entries = (BankEntry(candidate=1, value=1.0),)
         metric = CountingDistance()
         workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
@@ -658,7 +670,9 @@ class BankUpdatePolicyTests:
 
         assert bank.entries == ()
         assert len(updated_bank.entries) == 1
-        assert updated_bank.entries[0] == BankEntry(candidate=3, value=9.0, proposal_id="p-1")
+        assert updated_bank.entries[0] == BankEntry(
+            candidate=3, value=9.0, proposal_id="p-1"
+        )
 
     def test_admit_replaces_nearest_when_within_cutoff_and_better(self) -> None:
         bank = Bank(
@@ -685,7 +699,9 @@ class BankUpdatePolicyTests:
             distance_cutoff=2.0,
         )
 
-        assert updated_bank.entries[0] == BankEntry(candidate=3, value=9.0, proposal_id="p-3")
+        assert updated_bank.entries[0] == BankEntry(
+            candidate=3, value=9.0, proposal_id="p-3"
+        )
         assert updated_bank.entries[1] == bank.entries[1]
 
     def test_admit_treats_cutoff_equality_as_far_case(self) -> None:
@@ -714,7 +730,9 @@ class BankUpdatePolicyTests:
         )
 
         assert updated_bank.entries[0] == bank.entries[0]
-        assert updated_bank.entries[1] == BankEntry(candidate=5, value=25.0, proposal_id="p-3")
+        assert updated_bank.entries[1] == BankEntry(
+            candidate=5, value=25.0, proposal_id="p-3"
+        )
 
     def test_admit_replaces_worst_when_far_and_better(self) -> None:
         bank = Bank(
@@ -742,7 +760,9 @@ class BankUpdatePolicyTests:
         )
 
         assert updated_bank.entries[0] == bank.entries[0]
-        assert updated_bank.entries[1] == BankEntry(candidate=5, value=25.0, proposal_id="p-3")
+        assert updated_bank.entries[1] == BankEntry(
+            candidate=5, value=25.0, proposal_id="p-3"
+        )
 
     def test_admit_crowded_worst_mode_preserves_isolated_far_worst(self) -> None:
         bank = Bank(
@@ -772,7 +792,9 @@ class BankUpdatePolicyTests:
 
         assert updated_bank == bank
 
-    def test_admit_crowded_worst_mode_falls_back_when_no_crowded_entries_exist(self) -> None:
+    def test_admit_crowded_worst_mode_falls_back_when_no_crowded_entries_exist(
+        self,
+    ) -> None:
         bank = Bank(
             capacity=3,
             entries=(
@@ -800,7 +822,9 @@ class BankUpdatePolicyTests:
 
         assert updated_bank.entries[0] == bank.entries[0]
         assert updated_bank.entries[2] == bank.entries[2]
-        assert updated_bank.entries[1] == BankEntry(candidate=20, value=25.0, proposal_id="p-4")
+        assert updated_bank.entries[1] == BankEntry(
+            candidate=20, value=25.0, proposal_id="p-4"
+        )
 
     def test_admit_crowding_aware_mode_can_replace_isolated_far_worst(self) -> None:
         bank = Bank(
@@ -830,7 +854,9 @@ class BankUpdatePolicyTests:
 
         assert updated_bank.entries[0] == bank.entries[0]
         assert updated_bank.entries[1] == bank.entries[1]
-        assert updated_bank.entries[2] == BankEntry(candidate=20, value=60.0, proposal_id="p-4")
+        assert updated_bank.entries[2] == BankEntry(
+            candidate=20, value=60.0, proposal_id="p-4"
+        )
 
     def test_admit_crowding_aware_mode_biases_toward_crowded_entries(self) -> None:
         bank = Bank(
@@ -861,11 +887,15 @@ class BankUpdatePolicyTests:
             distance_cutoff=2.0,
         )
 
-        assert updated_bank.entries[0] == BankEntry(candidate=20, value=45.0, proposal_id="p-4")
+        assert updated_bank.entries[0] == BankEntry(
+            candidate=20, value=45.0, proposal_id="p-4"
+        )
         assert updated_bank.entries[1] == bank.entries[1]
         assert updated_bank.entries[2] == bank.entries[2]
 
-    def test_admit_crowding_aware_mode_can_bias_against_poor_crowded_niche(self) -> None:
+    def test_admit_crowding_aware_mode_can_bias_against_poor_crowded_niche(
+        self,
+    ) -> None:
         bank = Bank(
             capacity=4,
             entries=(
@@ -896,7 +926,12 @@ class BankUpdatePolicyTests:
             distance_cutoff=2.0,
         )
 
-        assert tuple(entry.candidate for entry in updated_bank.entries) == (0, 1, 100, 20)
+        assert tuple(entry.candidate for entry in updated_bank.entries) == (
+            0,
+            1,
+            100,
+            20,
+        )
 
     def test_admit_crowding_aware_best_mean_mode_runs(self) -> None:
         bank = Bank(
@@ -1219,7 +1254,9 @@ class CSABankingTests(CSAOptimizerTestCase):
 
         assert updated_indices == set()
 
-    def test_significant_update_threshold_marks_large_score_changes_and_new_entries(self) -> None:
+    def test_significant_update_threshold_marks_large_score_changes_and_new_entries(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
             diversity_metric=AbsoluteDistance(),
@@ -1285,7 +1322,9 @@ class CSABankingTests(CSAOptimizerTestCase):
         )
 
         assert updated_bank.entries[0] == bank.entries[0]
-        assert updated_bank.entries[1] == BankEntry(candidate=5, value=25.0, proposal_id="p-3")
+        assert updated_bank.entries[1] == BankEntry(
+            candidate=5, value=25.0, proposal_id="p-3"
+        )
 
     def test_bank_update_policy_can_disable_local_update(self) -> None:
         optimizer = make_optimizer(
@@ -1320,7 +1359,9 @@ class CSABankingTests(CSAOptimizerTestCase):
 
         assert updated_bank == bank
 
-    def test_temperature_policy_does_not_bypass_local_update_maxscore_gate(self) -> None:
+    def test_temperature_policy_does_not_bypass_local_update_maxscore_gate(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
             diversity_metric=AbsoluteDistance(),
@@ -1431,7 +1472,9 @@ class CSABankingTests(CSAOptimizerTestCase):
 
         assert optimizer.bank.entries[2].value == 10.0
 
-    def test_rejected_metadynamics_local_update_increments_bank_candidate_bin(self) -> None:
+    def test_rejected_metadynamics_local_update_increments_bank_candidate_bin(
+        self,
+    ) -> None:
         axis: CSAAdaptivePotentialAxis[int] = CSAAdaptivePotentialAxis(
             reference_candidate=1,
             minimum_distance=0.0,
@@ -1545,24 +1588,21 @@ class CSABankingTests(CSAOptimizerTestCase):
         )
 
         assert optimizer.bank.capacity == 3
-        assert (
-            tuple(entry.candidate for entry in optimizer.bank.entries) == (0, 10, 20)
-        )
+        assert tuple(entry.candidate for entry in optimizer.bank.entries) == (0, 10, 20)
         assert optimizer.reference_bank.entries == reference_entries
-        assert (
-            tuple(
-                zip(
-                    (entry.candidate for entry in optimizer.bank.entries),
-                    optimizer.engine_state.banking_state.clustering_state.cluster_labels,
-                    strict=True,
-                )
+        assert tuple(
+            zip(
+                (entry.candidate for entry in optimizer.bank.entries),
+                optimizer.engine_state.banking_state.clustering_state.cluster_labels,
+                strict=True,
             )
-            == ((0, 1), (10, 2), (20, 3))
-        )
+        ) == ((0, 1), (10, 2), (20, 3))
         assert optimizer.selection_state.used_entry_indices == frozenset({1})
         assert optimizer.selection_state.bank_status == (False, True, False)
         assert optimizer.engine_state.progression_state.seed_mask == frozenset({1})
-        assert optimizer.engine_state.progression_state.partner_mask == frozenset({0, 1})
+        assert optimizer.engine_state.progression_state.partner_mask == frozenset(
+            {0, 1}
+        )
 
     def test_growth_policy_reduces_oversized_bank_after_batch(self) -> None:
         optimizer = make_optimizer(
@@ -1623,16 +1663,20 @@ class CSABankingTests(CSAOptimizerTestCase):
         )
 
         assert optimizer.bank.capacity == 2
-        assert (
-            tuple(entry.value for entry in optimizer.bank.entries) == (0.0, 0.5)
-        )
+        assert tuple(entry.value for entry in optimizer.bank.entries) == (0.0, 0.5)
         assert optimizer.selection_state.used_entry_indices == frozenset({0})
         assert optimizer.selection_state.bank_status == (True, False)
-        assert optimizer.engine_state.progression_state.stage_state.seed_mask == frozenset(
-            {0},
+        assert (
+            optimizer.engine_state.progression_state.stage_state.seed_mask
+            == frozenset(
+                {0},
+            )
         )
-        assert optimizer.engine_state.progression_state.stage_state.partner_mask == frozenset(
-            {1},
+        assert (
+            optimizer.engine_state.progression_state.stage_state.partner_mask
+            == frozenset(
+                {1},
+            )
         )
         assert optimizer.engine_state.progression_state.refresh_mask == frozenset()
 
@@ -1682,7 +1726,9 @@ class CSABankingTests(CSAOptimizerTestCase):
                 policy=growth_policy,
                 active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
             ),
-            clustering_state=CSAClusteringState(policy=CSAClusteringPolicy(enabled=False)),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=False)
+            ),
             base_bank_capacity=2,
             masked_seed_indices=frozenset(),
             random_state=None,
@@ -1693,7 +1739,9 @@ class CSABankingTests(CSAOptimizerTestCase):
         assert result.significant_update_indices == frozenset({2})
         assert tuple(entry.candidate for entry in result.bank.entries) == (10, 21)
 
-    def test_update_then_energy_cut_remaps_selection_and_progression_masks(self) -> None:
+    def test_update_then_energy_cut_remaps_selection_and_progression_masks(
+        self,
+    ) -> None:
         optimizer = make_optimizer(
             space=IntegerSpace(low=0, high=100),
             diversity_metric=AbsoluteDistance(),
@@ -1754,9 +1802,15 @@ class CSABankingTests(CSAOptimizerTestCase):
         assert tuple(entry.candidate for entry in optimizer.bank.entries) == (10, 21)
         assert optimizer.selection_state.used_entry_indices == frozenset({0})
         assert optimizer.selection_state.bank_status == (True, False)
-        assert optimizer.engine_state.progression_state.stage_state.seed_mask == frozenset()
-        assert optimizer.engine_state.progression_state.stage_state.partner_mask == frozenset(
-            {0, 1},
+        assert (
+            optimizer.engine_state.progression_state.stage_state.seed_mask
+            == frozenset()
+        )
+        assert (
+            optimizer.engine_state.progression_state.stage_state.partner_mask
+            == frozenset(
+                {0, 1},
+            )
         )
         assert optimizer.engine_state.progression_state.refresh_mask == frozenset()
 
@@ -1782,11 +1836,10 @@ class CSABankingTests(CSAOptimizerTestCase):
             )
         )
 
-        assert (
-            tuple(entry.candidate for entry in optimizer.bank.entries) == (1, 5, 9)
-        )
-        assert (
-            tuple(entry.candidate for entry in optimizer.reference_bank.entries)
-            == (1, 5, 9)
+        assert tuple(entry.candidate for entry in optimizer.bank.entries) == (1, 5, 9)
+        assert tuple(entry.candidate for entry in optimizer.reference_bank.entries) == (
+            1,
+            5,
+            9,
         )
         assert optimizer.reference_bank.initialized

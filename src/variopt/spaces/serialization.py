@@ -80,8 +80,7 @@ def _encode_mapping(
         return encoded_mapping
 
     encoded_items: list[JSONValue] = [
-        [key, value]
-        for key, value in encoded_mapping.items()
+        [key, value] for key, value in encoded_mapping.items()
     ]
     return {
         _MAPPING_MARKER: {

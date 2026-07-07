@@ -42,7 +42,8 @@ StructuredCandidateT = TypeVar("StructuredCandidateT", bound=SpaceCandidateValue
 
 
 @dataclass(frozen=True, slots=True)
-class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
+class DifferentialEvolutionOptimizer(
+    FrozenGenericSlotsCompat,
     RunMethod[
         DEOptimizerState[StructuredCandidateT],
         Proposal[StructuredCandidateT],
@@ -69,10 +70,14 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
     space: SearchSpace[BoundaryT, StructuredCandidateT]
     population_size: int
     profile: DEProfile = field(default_factory=DEProfile, kw_only=True)
-    sampler: CandidateSampler[StructuredCandidateT] | None = field(default=None, kw_only=True)
+    sampler: CandidateSampler[StructuredCandidateT] | None = field(
+        default=None, kw_only=True
+    )
     random_state: RandomSeed = None
     resolved_profile: DEResolvedProfile = field(init=False, repr=False)
-    resolved_sampler: CandidateSampler[StructuredCandidateT] = field(init=False, repr=False)
+    resolved_sampler: CandidateSampler[StructuredCandidateT] = field(
+        init=False, repr=False
+    )
     structured_space: StructuredSearchSpace[BoundaryT, StructuredCandidateT] = field(
         init=False,
         repr=False,
@@ -165,7 +170,10 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
         self,
         state: DEOptimizerState[StructuredCandidateT],
         batch_size: int = 1,
-    ) -> tuple[tuple[Proposal[StructuredCandidateT], ...], DEOptimizerState[StructuredCandidateT]]:
+    ) -> tuple[
+        tuple[Proposal[StructuredCandidateT], ...],
+        DEOptimizerState[StructuredCandidateT],
+    ]:
         """Emit the next proposal batch and advanced DE state.
 
         Parameters
@@ -218,13 +226,15 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
         state: DEOptimizerState[StructuredCandidateT],
         *,
         batch_size: int,
-    ) -> tuple[tuple[Proposal[StructuredCandidateT], ...], DEOptimizerState[StructuredCandidateT]]:
+    ) -> tuple[
+        tuple[Proposal[StructuredCandidateT], ...],
+        DEOptimizerState[StructuredCandidateT],
+    ]:
         remaining_population = self.population_size - len(state.buffered_evaluations)
         evaluation_count = min(batch_size, remaining_population)
         random_state = state.random_state.materialize()
         candidates = tuple(
-            self.resolved_sampler.sample(random_state)
-            for _ in range(evaluation_count)
+            self.resolved_sampler.sample(random_state) for _ in range(evaluation_count)
         )
         pending_evaluations = tuple(
             DEPendingEvaluation(
@@ -303,9 +313,8 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
         mutation_low, mutation_high = self.resolved_profile.mutation_range
         mutation_factor = mutation_low
         if mutation_high > mutation_low:
-            mutation_factor += (
-                (mutation_high - mutation_low)
-                * float(random_state.random_sample())
+            mutation_factor += (mutation_high - mutation_low) * float(
+                random_state.random_sample()
             )
         return mutation_factor
 
@@ -317,9 +326,7 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
         target_index: int,
     ) -> tuple[int, int, int]:
         candidate_indices = tuple(
-            index
-            for index in range(population_size)
-            if index != target_index
+            index for index in range(population_size) if index != target_index
         )
         selected_offsets = random_state_choice_indices_without_replacement(
             random_state,
@@ -331,7 +338,9 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
             tuple(candidate_indices[offset] for offset in selected_offsets),
         )
 
-    def _validated_candidate(self, candidate: StructuredCandidateT) -> StructuredCandidateT:
+    def _validated_candidate(
+        self, candidate: StructuredCandidateT
+    ) -> StructuredCandidateT:
         self.space.validate(candidate)
         return candidate
 
@@ -423,8 +432,7 @@ class DifferentialEvolutionOptimizer(FrozenGenericSlotsCompat,
         return replace(
             state,
             population=tuple(
-                evaluation.member
-                for evaluation in state.buffered_evaluations
+                evaluation.member for evaluation in state.buffered_evaluations
             ),
             buffered_evaluations=(),
         )

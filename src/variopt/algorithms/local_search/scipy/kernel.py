@@ -563,7 +563,9 @@ class ScipyMinimizeKernel(
                 initial_coordinates,
             )
             original_success = (
-                None if original_attempt is None else original_attempt.single_success_or_none()
+                None
+                if original_attempt is None
+                else original_attempt.single_success_or_none()
             )
             if original_success is None and original_attempt is None:
                 if (
@@ -582,14 +584,14 @@ class ScipyMinimizeKernel(
                         proposal_evaluation_spec=proposal_evaluation_spec,
                         runner=runner,
                     )
-                    evaluated_attempts_by_coordinates[
-                        initial_coordinates
-                    ] = original_attempt
+                    evaluated_attempts_by_coordinates[initial_coordinates] = (
+                        original_attempt
+                    )
                     original_success = record_attempt_success(original_attempt)
                     if original_success is not None:
-                        evaluated_successes_by_coordinates[
-                            initial_coordinates
-                        ] = original_success
+                        evaluated_successes_by_coordinates[initial_coordinates] = (
+                            original_success
+                        )
 
             if original_success is None:
                 return self._attempt_batch_from_success_and_failures(
@@ -695,9 +697,9 @@ class ScipyMinimizeKernel(
                     status=KernelStatus.FAILED,
                     message="optimized candidate evaluation failed",
                 )
-            evaluated_successes_by_coordinates[
-                optimized_coordinates
-            ] = cached_optimized_success
+            evaluated_successes_by_coordinates[optimized_coordinates] = (
+                cached_optimized_success
+            )
         optimized_candidate = cached_optimized_success.candidate
         refinement = _candidate_refinement_from_codec(
             codec=codec,

@@ -1,6 +1,5 @@
 """Regression tests for the population-family facade exports."""
 
-
 import variopt.algorithms as root_algorithms
 import variopt.algorithms.population as population_algorithms
 import variopt.algorithms.population.clearing_ga as clearing_ga_algorithms
@@ -67,22 +66,64 @@ class PopulationFacadeExportTests:
         assert population_algorithms.CSAOptimizer is csa_algorithms.CSAOptimizer
         assert population_algorithms.CSAProfile is csa_algorithms.CSAProfile
         assert population_algorithms.DEProfile is de_algorithms.DEProfile
-        assert population_algorithms.DifferentialEvolutionOptimizer is de_algorithms.DifferentialEvolutionOptimizer
+        assert (
+            population_algorithms.DifferentialEvolutionOptimizer
+            is de_algorithms.DifferentialEvolutionOptimizer
+        )
         assert population_algorithms.GAProfile is ga_algorithms.GAProfile
-        assert population_algorithms.GeneticAlgorithmOptimizer is ga_algorithms.GeneticAlgorithmOptimizer
-        assert population_algorithms.InversionMutation is permutation_algorithms.InversionMutation
-        assert population_algorithms.OrderCrossover is permutation_algorithms.OrderCrossover
+        assert (
+            population_algorithms.GeneticAlgorithmOptimizer
+            is ga_algorithms.GeneticAlgorithmOptimizer
+        )
+        assert (
+            population_algorithms.InversionMutation
+            is permutation_algorithms.InversionMutation
+        )
+        assert (
+            population_algorithms.OrderCrossover
+            is permutation_algorithms.OrderCrossover
+        )
         assert population_algorithms.SwapMutation is permutation_algorithms.SwapMutation
-        assert population_algorithms.SpeciesGAProfile is species_ga_algorithms.SpeciesGAProfile
-        assert population_algorithms.SpeciesConservingGeneticAlgorithmOptimizer is species_ga_algorithms.SpeciesConservingGeneticAlgorithmOptimizer
-        assert population_algorithms.ClearingGAProfile is clearing_ga_algorithms.ClearingGAProfile
-        assert population_algorithms.ClearingGeneticAlgorithmOptimizer is clearing_ga_algorithms.ClearingGeneticAlgorithmOptimizer
-        assert population_algorithms.RestrictedTournamentGAProfile is restricted_tournament_ga_algorithms.RestrictedTournamentGAProfile
-        assert population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer is restricted_tournament_ga_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
-        assert population_algorithms.GenerationalGAMemberBuffer is generational_ga_state.GenerationalGAMemberBuffer
-        assert population_algorithms.GenerationalGAOptimizerState is generational_ga_state.GenerationalGAOptimizerState
-        assert population_algorithms.GenerationalGAPopulationMember is generational_ga_state.GenerationalGAPopulationMember
-        assert population_algorithms.GenerationalGAVariant is generational_ga_state.GenerationalGAVariant
+        assert (
+            population_algorithms.SpeciesGAProfile
+            is species_ga_algorithms.SpeciesGAProfile
+        )
+        assert (
+            population_algorithms.SpeciesConservingGeneticAlgorithmOptimizer
+            is species_ga_algorithms.SpeciesConservingGeneticAlgorithmOptimizer
+        )
+        assert (
+            population_algorithms.ClearingGAProfile
+            is clearing_ga_algorithms.ClearingGAProfile
+        )
+        assert (
+            population_algorithms.ClearingGeneticAlgorithmOptimizer
+            is clearing_ga_algorithms.ClearingGeneticAlgorithmOptimizer
+        )
+        assert (
+            population_algorithms.RestrictedTournamentGAProfile
+            is restricted_tournament_ga_algorithms.RestrictedTournamentGAProfile
+        )
+        assert (
+            population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+            is restricted_tournament_ga_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+        )
+        assert (
+            population_algorithms.GenerationalGAMemberBuffer
+            is generational_ga_state.GenerationalGAMemberBuffer
+        )
+        assert (
+            population_algorithms.GenerationalGAOptimizerState
+            is generational_ga_state.GenerationalGAOptimizerState
+        )
+        assert (
+            population_algorithms.GenerationalGAPopulationMember
+            is generational_ga_state.GenerationalGAPopulationMember
+        )
+        assert (
+            population_algorithms.GenerationalGAVariant
+            is generational_ga_state.GenerationalGAVariant
+        )
 
         internal_names = (
             "GENERATIONAL_GA_EXECUTION_MODELS",
@@ -99,12 +140,34 @@ class PopulationFacadeExportTests:
     def test_root_algorithms_facade_remains_convenience_reexport(self) -> None:
         assert tuple(root_algorithms.__all__) == EXPECTED_ROOT_ALGORITHMS_ALL
         assert root_algorithms.DEProfile is population_algorithms.DEProfile
-        assert root_algorithms.DifferentialEvolutionOptimizer is population_algorithms.DifferentialEvolutionOptimizer
+        assert (
+            root_algorithms.DifferentialEvolutionOptimizer
+            is population_algorithms.DifferentialEvolutionOptimizer
+        )
         assert root_algorithms.GAProfile is population_algorithms.GAProfile
-        assert root_algorithms.GeneticAlgorithmOptimizer is population_algorithms.GeneticAlgorithmOptimizer
-        assert root_algorithms.SpeciesGAProfile is population_algorithms.SpeciesGAProfile
-        assert root_algorithms.SpeciesConservingGeneticAlgorithmOptimizer is population_algorithms.SpeciesConservingGeneticAlgorithmOptimizer
-        assert root_algorithms.ClearingGAProfile is population_algorithms.ClearingGAProfile
-        assert root_algorithms.ClearingGeneticAlgorithmOptimizer is population_algorithms.ClearingGeneticAlgorithmOptimizer
-        assert root_algorithms.RestrictedTournamentGAProfile is population_algorithms.RestrictedTournamentGAProfile
-        assert root_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer is population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+        assert (
+            root_algorithms.GeneticAlgorithmOptimizer
+            is population_algorithms.GeneticAlgorithmOptimizer
+        )
+        assert (
+            root_algorithms.SpeciesGAProfile is population_algorithms.SpeciesGAProfile
+        )
+        assert (
+            root_algorithms.SpeciesConservingGeneticAlgorithmOptimizer
+            is population_algorithms.SpeciesConservingGeneticAlgorithmOptimizer
+        )
+        assert (
+            root_algorithms.ClearingGAProfile is population_algorithms.ClearingGAProfile
+        )
+        assert (
+            root_algorithms.ClearingGeneticAlgorithmOptimizer
+            is population_algorithms.ClearingGeneticAlgorithmOptimizer
+        )
+        assert (
+            root_algorithms.RestrictedTournamentGAProfile
+            is population_algorithms.RestrictedTournamentGAProfile
+        )
+        assert (
+            root_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+            is population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+        )

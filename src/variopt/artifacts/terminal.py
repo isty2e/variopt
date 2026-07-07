@@ -222,7 +222,9 @@ def _successes_from_records(
     records: Sequence[RequestAlignedEvaluationRecord[CandidateT]],
     refinements: Sequence[CandidateRefinement[CandidateT] | None],
     candidate_equal: CandidateEquality[CandidateT] | None,
-) -> tuple[EvaluationSuccess[CandidateT, RequestAlignedEvaluationRecord[CandidateT]], ...]:
+) -> tuple[
+    EvaluationSuccess[CandidateT, RequestAlignedEvaluationRecord[CandidateT]], ...
+]:
     record_tuple = tuple(records)
     refinement_tuple = tuple(refinements)
     if refinement_tuple and len(refinement_tuple) != len(record_tuple):
@@ -473,7 +475,9 @@ def _initialize_dataclass_fields(
     *,
     field_values: Mapping[str, object | None],
 ) -> None:
-    dataclass_field_names = {dataclass_field.name for dataclass_field in fields(instance)}
+    dataclass_field_names = {
+        dataclass_field.name for dataclass_field in fields(instance)
+    }
     value_names = set(field_values)
     missing_names = dataclass_field_names - value_names
     extra_names = value_names - dataclass_field_names
@@ -1129,13 +1133,11 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     _validated_frontier_source_successes: tuple[
         EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
         ...,
-    ] = (
-        field(
-            default=(),
-            init=False,
-            repr=False,
-            compare=False,
-        )
+    ] = field(
+        default=(),
+        init=False,
+        repr=False,
+        compare=False,
     )
     _validated_frontier_successes: tuple[
         EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
@@ -1304,8 +1306,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
         frontier_is_prevalidated = (
             normalized_successes is self._validated_frontier_source_successes
-            and normalized_nondominated_successes
-            is self._validated_frontier_successes
+            and normalized_nondominated_successes is self._validated_frontier_successes
         )
         if not frontier_is_prevalidated and (
             normalized_nondominated_successes
@@ -1444,7 +1445,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Self
             Terminal nondominated surface derived from ``report``.
         """
-        vector_successes: list[EvaluationSuccess[CandidateT, ObjectiveVectorPayload]] = []
+        vector_successes: list[
+            EvaluationSuccess[CandidateT, ObjectiveVectorPayload]
+        ] = []
         for success in report.successes:
             payload = success.payload
             vector_successes.append(

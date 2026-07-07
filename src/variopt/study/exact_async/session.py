@@ -77,9 +77,9 @@ class StudyExactAsyncStepSession(
         EvaluationAttemptBatch[CandidateT, StudyPayloadT]
     ]
     candidate_equal: CandidateEquality[CandidateT]
-    ordered_attempts: list[
-        EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None
-    ] = field(default_factory=list)
+    ordered_attempts: list[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None] = (
+        field(default_factory=list)
+    )
     _lifecycle: StudyExactAsyncSessionLifecycle = "active"
     _final_records: tuple[StudyRecordT, ...] | None = None
     _final_state: RunMethodStateT | None = None
@@ -125,9 +125,7 @@ class StudyExactAsyncStepSession(
             Canonical lifecycle summary derived from stored outcomes and the
             evaluator-owned handle.
         """
-        completed_count = sum(
-            attempt is not None for attempt in self.ordered_attempts
-        )
+        completed_count = sum(attempt is not None for attempt in self.ordered_attempts)
         return EvaluationBatchSessionState(
             request_count=self.handle.request_count,
             completed_count=completed_count,
@@ -162,9 +160,7 @@ class StudyExactAsyncStepSession(
         try:
             completion_groups = tuple(self.batch_session.poll())
         except BatchExecutionFailed as exception:
-            self._lifecycle = (
-                "cancelled" if exception.kind == "cancelled" else "failed"
-            )
+            self._lifecycle = "cancelled" if exception.kind == "cancelled" else "failed"
             raise
 
         try:
@@ -209,9 +205,7 @@ class StudyExactAsyncStepSession(
         try:
             completion_groups = tuple(self.batch_session.wait(timeout=timeout))
         except BatchExecutionFailed as exception:
-            self._lifecycle = (
-                "cancelled" if exception.kind == "cancelled" else "failed"
-            )
+            self._lifecycle = "cancelled" if exception.kind == "cancelled" else "failed"
             raise
 
         try:
@@ -236,9 +230,7 @@ class StudyExactAsyncStepSession(
     def _record_completion_groups(
         self,
         completion_groups: tuple[
-            CompletionGroup[
-                EvaluationAttemptBatch[CandidateT, StudyPayloadT]
-            ],
+            CompletionGroup[EvaluationAttemptBatch[CandidateT, StudyPayloadT]],
             ...,
         ],
     ) -> None:
@@ -318,9 +310,7 @@ class StudyExactAsyncStepSession(
             return self._final_records, self._final_state
 
         if self._lifecycle in {"cancelled", "failed", "suspended"}:
-            msg = (
-                "study exact-async step session must be active or completed to finish"
-            )
+            msg = "study exact-async step session must be active or completed to finish"
             raise RuntimeError(msg)
 
         while self._lifecycle == "active":

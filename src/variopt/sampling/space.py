@@ -16,7 +16,8 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 @dataclass(frozen=True, slots=True)
-class SearchSpaceSampler(FrozenGenericSlotsCompat,
+class SearchSpaceSampler(
+    FrozenGenericSlotsCompat,
     CandidateSampler[CandidateT],
     Generic[BoundaryT, CandidateT],
 ):

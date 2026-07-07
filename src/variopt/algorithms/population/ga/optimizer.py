@@ -39,7 +39,8 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 @dataclass(frozen=True, slots=True)
-class GeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
+class GeneticAlgorithmOptimizer(
+    FrozenGenericSlotsCompat,
     RunMethod[
         GenerationalGAOptimizerState[CandidateT],
         Proposal[CandidateT],
@@ -69,8 +70,12 @@ class GeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
 
     space: SearchSpace[BoundaryT, CandidateT]
     population_size: int
-    crossover_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
-    mutation_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
+    crossover_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
+    mutation_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
     profile: GAProfile = field(default_factory=GAProfile, kw_only=True)
     sampler: CandidateSampler[CandidateT] | None = field(default=None, kw_only=True)
     random_state: RandomSeed = None

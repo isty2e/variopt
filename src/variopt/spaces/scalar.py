@@ -885,7 +885,9 @@ class CategoricalSpace(
             msg = "categorical candidate must use the declared choice type"
             raise TypeError(msg)
 
-        return tuple(other_choice for other_choice in self.choices if other_choice != choice)
+        return tuple(
+            other_choice for other_choice in self.choices if other_choice != choice
+        )
 
     @override
     def leaf_paths(self) -> tuple[LeafPath, ...]:

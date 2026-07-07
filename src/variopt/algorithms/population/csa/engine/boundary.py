@@ -98,7 +98,9 @@ def begin_stage_transition(
     _, grows_bank = transition
     engine_state = replace(
         engine_state,
-        progression_state=engine_state.progression_state.apply_stage_transition(transition),
+        progression_state=engine_state.progression_state.apply_stage_transition(
+            transition
+        ),
         selection_state=SeedSelectionState(),
         generation_state=GenerationRuntimeState(),
     )
@@ -244,7 +246,9 @@ def apply_pending_boundary_action(
     effective_refresh_policy = (
         CSARefreshPolicy() if refresh_policy is None else refresh_policy
     )
-    pending_action, progression_state = engine_state.progression_state.consume_pending_action()
+    pending_action, progression_state = (
+        engine_state.progression_state.consume_pending_action()
+    )
     engine_state = replace(engine_state, progression_state=progression_state)
     if pending_action.kind == "refresh":
         return begin_refresh(engine_state, refresh_policy=effective_refresh_policy)

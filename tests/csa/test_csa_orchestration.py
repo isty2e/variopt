@@ -224,7 +224,9 @@ class CSAOptimizerOrchestrationTests(CSAOptimizerTestCase):
         assert optimizer.bank != original_bank
         assert optimizer.state.iteration_count == 1
 
-    def test_biased_potential_degrades_when_runtime_distance_scale_collapses(self) -> None:
+    def test_biased_potential_degrades_when_runtime_distance_scale_collapses(
+        self,
+    ) -> None:
         problem = Problem(
             space=ScriptedIntegerSpace((0, 0, 0, 0)),
             objective=SquareObjective(),

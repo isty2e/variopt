@@ -31,7 +31,9 @@ class RestrictedTournamentGAResolvedProfile:
 
 
 @dataclass(frozen=True, slots=True)
-class RestrictedTournamentGAProfile(AlgorithmProfile[RestrictedTournamentGAResolvedProfile]):
+class RestrictedTournamentGAProfile(
+    AlgorithmProfile[RestrictedTournamentGAResolvedProfile]
+):
     """Boundary-level configuration for the restricted-tournament GA.
 
     Parameters

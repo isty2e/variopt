@@ -190,8 +190,10 @@ def mutate_leaf_value(
         if coordinate_span == 0.0:
             return current_value
 
-        delta = coordinate_span * max_perturbation_fraction * (
-            2.0 * float(random_state.random_sample()) - 1.0
+        delta = (
+            coordinate_span
+            * max_perturbation_fraction
+            * (2.0 * float(random_state.random_sample()) - 1.0)
         )
         return space.project_coordinate(space.to_coordinate(current_value) + delta)
 
@@ -205,8 +207,10 @@ def mutate_leaf_value(
         if coordinate_span == 0.0:
             return current_value
 
-        coordinate_delta = coordinate_span * max_perturbation_fraction * (
-            2.0 * float(random_state.random_sample()) - 1.0
+        coordinate_delta = (
+            coordinate_span
+            * max_perturbation_fraction
+            * (2.0 * float(random_state.random_sample()) - 1.0)
         )
         return space.project_coordinate(
             space.to_coordinate(current_value) + coordinate_delta,
@@ -259,10 +263,8 @@ def differential_leaf_value(
         integer values.
     """
     if isinstance(space, RealSpace):
-        donor_value = (
-            float(base_value)
-            + mutation_factor
-            * (float(differential_value_a) - float(differential_value_b))
+        donor_value = float(base_value) + mutation_factor * (
+            float(differential_value_a) - float(differential_value_b)
         )
         return min(space.high, max(space.low, donor_value))
 
@@ -274,10 +276,8 @@ def differential_leaf_value(
         msg = "integer differential evolution requires canonical integer leaf values"
         raise TypeError(msg)
 
-    donor_value = (
-        float(base_value)
-        + mutation_factor
-        * (float(differential_value_a) - float(differential_value_b))
+    donor_value = float(base_value) + mutation_factor * (
+        float(differential_value_a) - float(differential_value_b)
     )
     rounded_value = int(round(donor_value))
     return min(space.high, max(space.low, rounded_value))

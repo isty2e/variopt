@@ -1,6 +1,5 @@
 """Tests for structured geometry package facade exports."""
 
-
 import variopt.spaces.geometry as geometry
 from variopt.spaces import (
     CompiledStructuredGeometryProvider as SpacesCompiledStructuredGeometryProvider,
@@ -38,7 +37,10 @@ class SpaceGeometryExportTests:
 
     def test_geometry_facade_re_exports_contract_symbols(self) -> None:
         assert StructuredSpaceGeometry is StructuredSpaceGeometrySubmodule
-        assert CompiledStructuredGeometryProvider is CompiledStructuredGeometryProviderSubmodule
+        assert (
+            CompiledStructuredGeometryProvider
+            is CompiledStructuredGeometryProviderSubmodule
+        )
         assert StructuredDistanceParts is StructuredDistancePartsSubmodule
 
     def test_spaces_facade_re_exports_public_geometry_contracts(self) -> None:

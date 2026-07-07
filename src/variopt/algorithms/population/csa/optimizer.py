@@ -787,7 +787,10 @@ class CSAOptimizer(
                 )
                 raise ValueError(msg)
 
-            if proposal_id in failed_proposal_ids or proposal_id in successful_proposal_ids:
+            if (
+                proposal_id in failed_proposal_ids
+                or proposal_id in successful_proposal_ids
+            ):
                 msg = (
                     "attempts supplied to CSAOptimizer.tell_attempts must have "
                     "distinct proposal ids"

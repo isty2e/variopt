@@ -158,10 +158,7 @@ class AsyncEvaluator(
             session.cancel()
             raise
 
-        return tuple(
-            cast(EvaluationT, outcome)
-            for outcome in ordered_outcomes
-        )
+        return tuple(cast(EvaluationT, outcome) for outcome in ordered_outcomes)
 
 
 class ResumableAsyncEvaluator(

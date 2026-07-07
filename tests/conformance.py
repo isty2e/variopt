@@ -107,7 +107,9 @@ class SearchSpaceConformanceCase(Generic[RawCandidateT, CandidateT]):
         space = self.make_space()
 
         with pytest.raises(self.boundary_exception_types()):
-            _ = space.normalize(cast(RawCandidateT, self.make_invalid_boundary_candidate()))
+            _ = space.normalize(
+                cast(RawCandidateT, self.make_invalid_boundary_candidate())
+            )
 
 
 class ExplicitRandomnessConformanceCase(Generic[ResultT]):
@@ -128,8 +130,12 @@ class ExplicitRandomnessConformanceCase(Generic[ResultT]):
         return 11
 
     def test_conformance_repeated_seed_reproduces_same_result(self) -> None:
-        result_one = self.exercise_with_rng(normalize_random_state(self.component_seed()))
-        result_two = self.exercise_with_rng(normalize_random_state(self.component_seed()))
+        result_one = self.exercise_with_rng(
+            normalize_random_state(self.component_seed())
+        )
+        result_two = self.exercise_with_rng(
+            normalize_random_state(self.component_seed())
+        )
 
         self.assert_result_equal(result_one, result_two)
 
@@ -166,7 +172,9 @@ class ArtifactConformanceCase(Generic[CandidateT]):
         """Return a representative diagnostics event."""
         raise NotImplementedError
 
-    def test_conformance_observation_separates_proposal_and_evaluated_candidate(self) -> None:
+    def test_conformance_observation_separates_proposal_and_evaluated_candidate(
+        self,
+    ) -> None:
         observation = self.make_refined_observation()
 
         assert observation.proposal.candidate != observation.candidate

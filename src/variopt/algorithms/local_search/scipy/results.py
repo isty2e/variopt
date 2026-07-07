@@ -58,9 +58,11 @@ class ScipyMinimizeResult:
             candidates.
         """
         function_value_is_finite = isfinite(self.function_value)
-        return len(self.coordinates) > 0 and all(
-            isfinite(coordinate) for coordinate in self.coordinates
-        ) and function_value_is_finite
+        return (
+            len(self.coordinates) > 0
+            and all(isfinite(coordinate) for coordinate in self.coordinates)
+            and function_value_is_finite
+        )
 
     @classmethod
     def from_optimize_result(cls, optimize_result: ScipyOptimizeResult) -> Self:

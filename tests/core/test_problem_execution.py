@@ -119,7 +119,9 @@ class VectorPayloadProtocol(EvaluationProtocol[int, ObjectiveVectorPayload]):
     """Protocol that returns a request-free vector payload."""
 
     @override
-    def evaluate_request(self, request: EvaluationRequest[int]) -> ObjectiveVectorPayload:
+    def evaluate_request(
+        self, request: EvaluationRequest[int]
+    ) -> ObjectiveVectorPayload:
         candidate = request.candidate
         return ObjectiveVectorPayload.from_objective_values(
             objective_values=(float(candidate), float(candidate + 1)),
@@ -183,9 +185,7 @@ class RecordLikePayload:
     candidate: int
 
 
-class MisalignedRecordLikePayloadProtocol(
-    EvaluationProtocol[int, RecordLikePayload]
-):
+class MisalignedRecordLikePayloadProtocol(EvaluationProtocol[int, RecordLikePayload]):
     """Protocol that returns a record-like payload for the wrong request."""
 
     @override
@@ -720,7 +720,9 @@ class ProblemExecutionTests:
                 (request,),
             )
 
-    def test_sequential_evaluator_attempts_do_not_catch_keyboard_interrupt(self) -> None:
+    def test_sequential_evaluator_attempts_do_not_catch_keyboard_interrupt(
+        self,
+    ) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             objective=InterruptingObjective(),

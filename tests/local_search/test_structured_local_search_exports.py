@@ -1,6 +1,5 @@
 """Facade regressions for the structured local-search package."""
 
-
 from variopt.algorithms.local_search import (
     StructuredHillClimbKernel as LocalSearchHillClimbKernel,
 )
