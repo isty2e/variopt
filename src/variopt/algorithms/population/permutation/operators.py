@@ -232,11 +232,7 @@ def order_crossover(
         child[index] = value
         used[value] = True
 
-    partner_values = tuple(
-        value
-        for value in partner_parent
-        if not used[value]
-    )
+    partner_values = tuple(value for value in partner_parent if not used[value])
     partner_index = 0
     for index in range(end_index, space.size):
         if child[index] is None:
@@ -247,11 +243,7 @@ def order_crossover(
             child[index] = partner_values[partner_index]
             partner_index += 1
 
-    normalized_child = tuple(
-        value
-        for value in child
-        if value is not None
-    )
+    normalized_child = tuple(value for value in child if value is not None)
     return space.normalize(normalized_child)
 
 

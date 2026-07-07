@@ -31,7 +31,9 @@ from .state import CSAEngineState
 
 InferAverageDistance = Callable[[Sequence[BankEntry[CandidateT]]], float]
 InferScoreGap = Callable[[Sequence[BankEntry[CandidateT]]], float | None]
-InferLocalDisplacementLeafPaths = Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]]
+InferLocalDisplacementLeafPaths = Callable[
+    [CandidateT, CandidateT], tuple[LeafPath, ...]
+]
 InferNumericSubspaceDisplacement = Callable[
     [ProposalAttribution, CandidateT],
     NumericSubspaceDisplacement | None,
@@ -50,9 +52,12 @@ def apply_tell(
     random_state: np.random.RandomState | None = None,
     infer_average_distance: InferAverageDistance[CandidateT],
     infer_score_gap: InferScoreGap[CandidateT],
-    infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT] | None = None,
-    explicit_local_displacement_leaf_paths: Sequence[tuple[LeafPath, ...] | None] | None = None,
-    infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT] | None = None,
+    infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT]
+    | None = None,
+    explicit_local_displacement_leaf_paths: Sequence[tuple[LeafPath, ...] | None]
+    | None = None,
+    infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT]
+    | None = None,
 ) -> CSAEngineState[CandidateT]:
     """Apply one tell batch to the CSA engine state.
 
@@ -122,7 +127,9 @@ def apply_tell(
     for observation in observations:
         proposal_id = observation.proposal.proposal_id
         if proposal_id is None:
-            msg = "observations supplied to CSAOptimizer.tell must reference proposal ids"
+            msg = (
+                "observations supplied to CSAOptimizer.tell must reference proposal ids"
+            )
             raise ValueError(msg)
 
         if proposal_id in consumed_ids:
@@ -188,8 +195,8 @@ def apply_tell(
     )
     updated_indices = batch_result.changed_indices
     significant_update_indices = batch_result.significant_update_indices
-    entry_count_before_removal = (
-        len(batch_result.bank.entries) + len(batch_result.removed_indices)
+    entry_count_before_removal = len(batch_result.bank.entries) + len(
+        batch_result.removed_indices
     )
     progression_state = batch_result.state
     if updated_indices:
@@ -271,7 +278,11 @@ def apply_tell(
             engine_state = record_generation_completion(engine_state)
         return engine_state
 
-    if consumed_ids and bank_was_full and engine_state.progression_state.cutoff_is_initialized:
+    if (
+        consumed_ids
+        and bank_was_full
+        and engine_state.progression_state.cutoff_is_initialized
+    ):
         unused_entry_count = engine_state.selection_state.count_unused_entries(
             entry_count=len(engine_state.banking_state.bank.entries),
             ignored_indices=engine_state.progression_state.seed_mask,
@@ -291,7 +302,10 @@ def apply_tell(
                 ),
                 progression_state=engine_state.progression_state.clear_refresh_mask().request_boundary(),
             )
-            if engine_state.progression_state.has_pending_action and engine_state.pending_proposals.is_empty:
+            if (
+                engine_state.progression_state.has_pending_action
+                and engine_state.pending_proposals.is_empty
+            ):
                 engine_state = apply_pending_boundary_action(
                     engine_state,
                     refresh_policy=refresh_policy,
@@ -323,8 +337,10 @@ def apply_refresh_tell(
     refresh_policy: CSARefreshPolicy,
     infer_average_distance: InferAverageDistance[CandidateT],
     infer_score_gap: InferScoreGap[CandidateT],
-    infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT] | None = None,
-    infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT] | None = None,
+    infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT]
+    | None = None,
+    infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT]
+    | None = None,
 ) -> CSAEngineState[CandidateT]:
     """Apply one tell batch while refresh collection is active.
 
@@ -367,7 +383,9 @@ def apply_refresh_tell(
     for observation in observations:
         proposal_id = observation.proposal.proposal_id
         if proposal_id is None:
-            msg = "observations supplied to CSAOptimizer.tell must reference proposal ids"
+            msg = (
+                "observations supplied to CSAOptimizer.tell must reference proposal ids"
+            )
             raise ValueError(msg)
 
         if proposal_id in consumed_ids:
@@ -444,7 +462,9 @@ def record_generation_completion(
 
     pending_boundary_action_after = None
     if engine_state.progression_state.pending_action is not None:
-        pending_boundary_action_after = engine_state.progression_state.pending_action.kind
+        pending_boundary_action_after = (
+            engine_state.progression_state.pending_action.kind
+        )
 
     proposal_state = engine_state.proposal_state
     family_traces_after = tuple(

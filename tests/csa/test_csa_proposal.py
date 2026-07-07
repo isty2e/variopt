@@ -120,7 +120,9 @@ class CSAProposalStateTests:
         assert next_state.leaf_stats[1].discounted_score_credit == 7.0
         assert next_state.local_displacement_leaf_stats == ()
 
-    def test_update_proposal_state_ignores_observations_without_registered_attribution(self) -> None:
+    def test_update_proposal_state_ignores_observations_without_registered_attribution(
+        self,
+    ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         observation = Observation(
             proposal=Proposal(candidate=4, proposal_id="p-2"),
@@ -133,7 +135,9 @@ class CSAProposalStateTests:
 
         assert next_state == state
 
-    def test_update_proposal_state_records_local_displacement_stats_separately(self) -> None:
+    def test_update_proposal_state_records_local_displacement_stats_separately(
+        self,
+    ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
             state,
@@ -167,7 +171,9 @@ class CSAProposalStateTests:
         assert next_state.leaf_stats[0].path == ("x",)
         assert len(next_state.local_displacement_leaf_stats) == 1
         assert next_state.local_displacement_leaf_stats[0].path == ("y",)
-        assert next_state.local_displacement_leaf_stats[0].discounted_score_credit == 7.0
+        assert (
+            next_state.local_displacement_leaf_stats[0].discounted_score_credit == 7.0
+        )
 
     def test_update_proposal_state_prefers_explicit_refinement_paths(self) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
@@ -571,7 +577,9 @@ class CSAProposalStateTests:
         assert weights[0] > weights[1]
         assert selected_paths == (("x",),)
 
-    def test_proposal_local_search_context_returns_none_without_policy_signal(self) -> None:
+    def test_proposal_local_search_context_returns_none_without_policy_signal(
+        self,
+    ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
 
         context = proposal_local_search_context(
@@ -615,9 +623,8 @@ class CSAProposalStateTests:
         )
 
         assert context == ProposalLocalSearchContext(
-                local_budget=2,
-                prioritized_leaf_paths=(("z",), ("y",), ("x",))
-            )
+            local_budget=2, prioritized_leaf_paths=(("z",), ("y",), ("x",))
+        )
 
     def test_proposal_local_search_context_can_disable_repeatedly_failing_paths(
         self,
@@ -648,9 +655,9 @@ class CSAProposalStateTests:
         )
 
         assert context == ProposalLocalSearchContext(
-                enabled=False,
-                prioritized_leaf_paths=(("x",), ("y",)),
-            )
+            enabled=False,
+            prioritized_leaf_paths=(("x",), ("y",)),
+        )
 
     def test_proposal_local_search_context_shapes_budget_from_supportive_paths(
         self,
@@ -739,10 +746,10 @@ class CSAProposalStateTests:
         )
 
         assert context == ProposalLocalSearchContext(
-                enabled=True,
-                local_budget=3,
-                prioritized_leaf_paths=(("y",), ("x",), ("z",)),
-            )
+            enabled=True,
+            local_budget=3,
+            prioritized_leaf_paths=(("y",), ("x",), ("z",)),
+        )
 
     def test_proposal_local_search_context_can_gate_mutation_during_cooldown(
         self,
@@ -776,11 +783,13 @@ class CSAProposalStateTests:
         )
 
         assert context == ProposalLocalSearchContext(
-                enabled=False,
-                prioritized_leaf_paths=(("x",), ("y",)),
-            )
+            enabled=False,
+            prioritized_leaf_paths=(("x",), ("y",)),
+        )
 
-    def test_infer_structured_local_displacement_leaf_paths_returns_changed_paths(self) -> None:
+    def test_infer_structured_local_displacement_leaf_paths_returns_changed_paths(
+        self,
+    ) -> None:
         space = TupleSpace(
             IntegerSpace(0, 9),
             IntegerSpace(0, 9),
@@ -869,9 +878,9 @@ class CSAProposalStateTests:
         )
 
         assert attribution == PlannedProposalAttribution(
-                source_score=5.0,
-                mutated_leaf_paths=(("x",),),
-            )
+            source_score=5.0,
+            mutated_leaf_paths=(("x",),),
+        )
 
     def test_mutation_family_weights_prefer_successful_family(self) -> None:
         family = (

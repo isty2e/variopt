@@ -13,6 +13,7 @@ ProjectMetadata = TypedDict(
     },
 )
 
+
 class PyprojectMetadata(TypedDict):
     """Typed subset of pyproject metadata required by packaging tests."""
 
@@ -113,7 +114,9 @@ class PackagingMetadataTests:
         build_config = cast(dict[str, object], hatch_config)["build"]
         targets = cast(dict[str, object], build_config)["targets"]
         sdist_config = cast(dict[str, object], targets)["sdist"]
-        excludes = set(cast(list[str], cast(dict[str, object], sdist_config)["exclude"]))
+        excludes = set(
+            cast(list[str], cast(dict[str, object], sdist_config)["exclude"])
+        )
 
         assert "/dist" in excludes
         assert "/tests" in excludes
@@ -128,7 +131,9 @@ class PackagingMetadataTests:
         build_config = cast(dict[str, object], hatch_config)["build"]
         targets = cast(dict[str, object], build_config)["targets"]
         sdist_config = cast(dict[str, object], targets)["sdist"]
-        excludes = set(cast(list[str], cast(dict[str, object], sdist_config)["exclude"]))
+        excludes = set(
+            cast(list[str], cast(dict[str, object], sdist_config)["exclude"])
+        )
 
         assert "uv.lock" in gitignore_entries
         assert "/uv.lock" in excludes

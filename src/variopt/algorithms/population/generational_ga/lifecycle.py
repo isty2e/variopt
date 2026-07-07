@@ -241,9 +241,8 @@ def ask_generational_ga(
     queued_stop = min(batch_size + queued_start, len(next_state.queued_proposals))
     proposals = next_state.queued_proposals[queued_start:queued_stop]
     remaining_queue_is_empty = queued_stop == len(next_state.queued_proposals)
-    compact_queue = (
-        not remaining_queue_is_empty
-        and queued_stop * 2 >= len(next_state.queued_proposals)
+    compact_queue = not remaining_queue_is_empty and queued_stop * 2 >= len(
+        next_state.queued_proposals
     )
     if remaining_queue_is_empty:
         queued_proposals: tuple[Proposal[CandidateT], ...] = ()
@@ -360,8 +359,7 @@ def ask_initial_generational_ga_population(
     proposal_count = min(batch_size, remaining_population)
     random_state = state.random_state.materialize()
     candidates = tuple(
-        runtime.resolved_sampler.sample(random_state)
-        for _ in range(proposal_count)
+        runtime.resolved_sampler.sample(random_state) for _ in range(proposal_count)
     )
     next_random_state = RandomStateSnapshot.from_random_state(random_state)
     proposals = tuple(

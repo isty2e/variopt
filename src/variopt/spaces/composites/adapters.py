@@ -399,15 +399,9 @@ class ValidatedCompositeRecordSpace(CompositeRecordSpace, Protocol):
 
 CategoricalScalarSpace: TypeAlias = CategoricalSpace[SpaceScalarValue]
 CompositeLeafChildSpace: TypeAlias = (
-    RealSpace
-    | IntegerSpace
-    | CategoricalScalarSpace
-    | PermutationSpace
+    RealSpace | IntegerSpace | CategoricalScalarSpace | PermutationSpace
 )
-CompositeNestedChildSpace: TypeAlias = (
-    CompositeSequenceSpace
-    | CompositeRecordSpace
-)
+CompositeNestedChildSpace: TypeAlias = CompositeSequenceSpace | CompositeRecordSpace
 CompositeChildSpace: TypeAlias = CompositeLeafChildSpace | CompositeNestedChildSpace
 
 
@@ -429,7 +423,9 @@ def is_categorical_child_space(
     return isinstance(space, CategoricalSpace)
 
 
-def is_record_composite_space(space: CompositeChildSpace) -> TypeGuard[CompositeRecordSpace]:
+def is_record_composite_space(
+    space: CompositeChildSpace,
+) -> TypeGuard[CompositeRecordSpace]:
     """Return whether one composite child space is record-shaped.
 
     Parameters
@@ -1203,7 +1199,9 @@ def leaf_value_at_validated_child_space(
     validation and topology contracts remain authoritative.
     """
     if isinstance(space, RealSpace):
-        return space.leaf_value_at_validated_path(require_real_candidate(candidate), path)
+        return space.leaf_value_at_validated_path(
+            require_real_candidate(candidate), path
+        )
 
     if isinstance(space, IntegerSpace):
         return space.leaf_value_at_validated_path(
@@ -1275,10 +1273,14 @@ def replace_leaf_values_in_child_space(
         not match the leaf contract.
     """
     if isinstance(space, RealSpace):
-        return space.replace_leaf_values(require_real_candidate(candidate), replacements)
+        return space.replace_leaf_values(
+            require_real_candidate(candidate), replacements
+        )
 
     if isinstance(space, IntegerSpace):
-        return space.replace_leaf_values(require_integer_candidate(candidate), replacements)
+        return space.replace_leaf_values(
+            require_integer_candidate(candidate), replacements
+        )
 
     if is_categorical_child_space(space):
         return space.replace_leaf_values(

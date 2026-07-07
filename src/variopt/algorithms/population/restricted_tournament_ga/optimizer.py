@@ -48,7 +48,8 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 @dataclass(frozen=True, slots=True)
-class RestrictedTournamentGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
+class RestrictedTournamentGeneticAlgorithmOptimizer(
+    FrozenGenericSlotsCompat,
     RunMethod[
         GenerationalGAOptimizerState[CandidateT],
         Proposal[CandidateT],
@@ -81,12 +82,20 @@ class RestrictedTournamentGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
     space: SearchSpace[BoundaryT, CandidateT]
     population_size: int
     diversity_metric: DiversityMetric[CandidateT]
-    crossover_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
-    mutation_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
-    profile: RestrictedTournamentGAProfile = field(default_factory=RestrictedTournamentGAProfile, kw_only=True)
+    crossover_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
+    mutation_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
+    profile: RestrictedTournamentGAProfile = field(
+        default_factory=RestrictedTournamentGAProfile, kw_only=True
+    )
     sampler: CandidateSampler[CandidateT] | None = field(default=None, kw_only=True)
     random_state: RandomSeed = None
-    resolved_profile: RestrictedTournamentGAResolvedProfile = field(init=False, repr=False)
+    resolved_profile: RestrictedTournamentGAResolvedProfile = field(
+        init=False, repr=False
+    )
     resolved_sampler: CandidateSampler[CandidateT] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -141,7 +150,9 @@ class RestrictedTournamentGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
         crossover_operator: VariationOperator[tuple[int, ...]] | None = None,
         mutation_operator: VariationOperator[tuple[int, ...]] | None = None,
         random_state: RandomSeed = None,
-    ) -> "RestrictedTournamentGeneticAlgorithmOptimizer[Sequence[int], tuple[int, ...]]":
+    ) -> (
+        "RestrictedTournamentGeneticAlgorithmOptimizer[Sequence[int], tuple[int, ...]]"
+    ):
         """Build a permutation-specialized restricted-tournament GA.
 
         Parameters
@@ -333,7 +344,9 @@ class RestrictedTournamentGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
 
         return GenerationalGAGenerationCommit(
             population=sort_generational_ga_population(tuple(next_population)),
-            random_state=RandomStateSnapshot.from_random_state(materialized_random_state),
+            random_state=RandomStateSnapshot.from_random_state(
+                materialized_random_state
+            ),
         )
 
     def _restricted_tournament_competitor_index(

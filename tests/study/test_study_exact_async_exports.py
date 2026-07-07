@@ -1,6 +1,5 @@
 """Tests for exact-async study package facade exports."""
 
-
 import variopt.study.exact_async as exact_async_package
 from variopt.study.exact_async import (
     StudyExactAsyncSessionLifecycle,
@@ -22,8 +21,12 @@ class StudyExactAsyncExportTests:
     """Regression tests for exact-async study facade identity."""
 
     def test_exact_async_facade_re_exports_artifact_symbols(self) -> None:
-        assert StudyExactAsyncSessionLifecycle is StudyExactAsyncSessionLifecycleSubmodule
-        assert StudyExactAsyncStepResumeHandle is StudyExactAsyncStepResumeHandleSubmodule
+        assert (
+            StudyExactAsyncSessionLifecycle is StudyExactAsyncSessionLifecycleSubmodule
+        )
+        assert (
+            StudyExactAsyncStepResumeHandle is StudyExactAsyncStepResumeHandleSubmodule
+        )
         assert StudyExactAsyncStepSession is StudyExactAsyncStepSessionSubmodule
 
     def test_exact_async_facade_omits_orchestration_helpers(self) -> None:

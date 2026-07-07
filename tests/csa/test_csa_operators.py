@@ -85,7 +85,9 @@ class ConditionalNumericPairSpace(
         self.tail_space.validate(candidate[1])
 
     @override
-    def sample(self, random_state: np.random.RandomState) -> ConditionalNumericCandidate:
+    def sample(
+        self, random_state: np.random.RandomState
+    ) -> ConditionalNumericCandidate:
         return (
             self.head_space.sample(random_state),
             self.tail_space.sample(random_state),
@@ -503,7 +505,9 @@ class OperatorTests:
                 random_state=rng(0),
             )
 
-    def test_differential_evolution_variation_matches_expected_numeric_donor(self) -> None:
+    def test_differential_evolution_variation_matches_expected_numeric_donor(
+        self,
+    ) -> None:
         space = ArraySpace(RealSpace(-10.0, 10.0), length=2)
         operator = DifferentialEvolutionVariation(
             space=space,
@@ -524,7 +528,9 @@ class OperatorTests:
 
         assert child == (2.0, 5.5)
 
-    def test_differential_evolution_variation_rejects_active_topology_mismatch(self) -> None:
+    def test_differential_evolution_variation_rejects_active_topology_mismatch(
+        self,
+    ) -> None:
         space = ConditionalNumericPairSpace(
             head_space=IntegerSpace(0, 9),
             tail_space=IntegerSpace(0, 9),
@@ -576,22 +582,34 @@ class OperatorTests:
         reset_operator = RandomResetMutation(space=space)
         bounded_operator = BoundedMutation(space=space)
 
-        assert reset_operator.apply(
-            parents=(candidate,),
-            random_state=rng(0),
-        ) == candidate
-        assert reset_operator.apply_from_validated_parents(
-            parents=(candidate,),
-            random_state=rng(0),
-        ) == candidate
-        assert bounded_operator.apply(
-            parents=(candidate,),
-            random_state=rng(0),
-        ) == candidate
-        assert bounded_operator.apply_from_validated_parents(
-            parents=(candidate,),
-            random_state=rng(0),
-        ) == candidate
+        assert (
+            reset_operator.apply(
+                parents=(candidate,),
+                random_state=rng(0),
+            )
+            == candidate
+        )
+        assert (
+            reset_operator.apply_from_validated_parents(
+                parents=(candidate,),
+                random_state=rng(0),
+            )
+            == candidate
+        )
+        assert (
+            bounded_operator.apply(
+                parents=(candidate,),
+                random_state=rng(0),
+            )
+            == candidate
+        )
+        assert (
+            bounded_operator.apply_from_validated_parents(
+                parents=(candidate,),
+                random_state=rng(0),
+            )
+            == candidate
+        )
 
     @pytest.mark.parametrize("mutation_kind", ["bounded", "reset"])
     @pytest.mark.parametrize("proposal_policy_enabled", [False, True])
@@ -686,8 +704,7 @@ class OptimizationSmokeTests:
             _requests(initial_proposals),
         )
         initial_best_value = min(
-            outcome.observation.value
-            for outcome in initial_outcomes
+            outcome.observation.value for outcome in initial_outcomes
         )
 
         optimizer = CSAOptimizer(

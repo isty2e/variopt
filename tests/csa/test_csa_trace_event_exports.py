@@ -1,6 +1,5 @@
 """Regression tests for CSA trace event exports."""
 
-
 from variopt.algorithms.population.csa.trace.events import (
     CSAEventTraceRecorder,
     CSAEventTraceState,

@@ -162,7 +162,9 @@ class ArraySpace(
         )
 
     @override
-    def sample(self, random_state: np.random.RandomState) -> tuple[ElementCandidateT, ...]:
+    def sample(
+        self, random_state: np.random.RandomState
+    ) -> tuple[ElementCandidateT, ...]:
         """Sample a canonical array candidate.
 
         Parameters
@@ -175,7 +177,9 @@ class ArraySpace(
         tuple[ElementCandidateT, ...]
             Canonical sampled array candidate.
         """
-        return tuple(self.element_space.sample(random_state) for _ in range(self.length))
+        return tuple(
+            self.element_space.sample(random_state) for _ in range(self.length)
+        )
 
     @override
     def leaf_paths(self) -> tuple[LeafPath, ...]:

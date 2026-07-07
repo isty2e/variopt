@@ -55,11 +55,17 @@ class CSACutoffSchedule:
 
     def __post_init__(self) -> None:
         """Reject invalid cutoff policy definitions."""
-        if self.initial_distance_cutoff is not None and self.initial_distance_cutoff < 0.0:
+        if (
+            self.initial_distance_cutoff is not None
+            and self.initial_distance_cutoff < 0.0
+        ):
             msg = "initial_distance_cutoff must be non-negative"
             raise ValueError(msg)
 
-        if self.minimum_distance_cutoff is not None and self.minimum_distance_cutoff < 0.0:
+        if (
+            self.minimum_distance_cutoff is not None
+            and self.minimum_distance_cutoff < 0.0
+        ):
             msg = "minimum_distance_cutoff must be non-negative"
             raise ValueError(msg)
 
@@ -152,7 +158,9 @@ class CSACutoffSchedule:
         distance_cutoff = self.initial_distance_cutoff
         if distance_cutoff is None:
             if average_distance is None:
-                msg = "average_distance is required when initial_distance_cutoff is unset"
+                msg = (
+                    "average_distance is required when initial_distance_cutoff is unset"
+                )
                 raise ValueError(msg)
 
             distance_cutoff = average_distance / self.initial_distance_divisor
@@ -163,14 +171,18 @@ class CSACutoffSchedule:
                 minimum_distance_cutoff = distance_cutoff
             else:
                 assert average_distance is not None
-                minimum_distance_cutoff = average_distance / self.minimum_distance_divisor
+                minimum_distance_cutoff = (
+                    average_distance / self.minimum_distance_divisor
+                )
 
         if minimum_distance_cutoff > distance_cutoff:
             distance_cutoff = minimum_distance_cutoff
 
         return float(distance_cutoff), float(minimum_distance_cutoff)
 
-    def reduce(self, *, distance_cutoff: float, minimum_distance_cutoff: float) -> float:
+    def reduce(
+        self, *, distance_cutoff: float, minimum_distance_cutoff: float
+    ) -> float:
         """Return the next cutoff after one decay step.
 
         Parameters
@@ -233,12 +245,8 @@ class CSACutoffSchedule:
         bool
             ``True`` when the cutoff schedule allows a cycle increment.
         """
-        return (
-            unused_entry_count <= self.stagnation_update_limit
-            and (
-                not self.cycle_increment_requires_minimum_cutoff
-                or cutoff_at_minimum
-            )
+        return unused_entry_count <= self.stagnation_update_limit and (
+            not self.cycle_increment_requires_minimum_cutoff or cutoff_at_minimum
         )
 
     def should_recover(

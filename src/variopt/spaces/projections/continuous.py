@@ -16,7 +16,9 @@ StructuredCandidateT = TypeVar("StructuredCandidateT", bound=SpaceCandidateValue
 
 
 @dataclass(frozen=True, slots=True)
-class ContinuousStructuredSpaceCodec(FrozenGenericSlotsCompat, Generic[BoundaryT, StructuredCandidateT]):
+class ContinuousStructuredSpaceCodec(
+    FrozenGenericSlotsCompat, Generic[BoundaryT, StructuredCandidateT]
+):
     """Coordinate-space codec for continuous structured candidates.
 
     Parameters
@@ -97,10 +99,7 @@ class ContinuousStructuredSpaceCodec(FrozenGenericSlotsCompat, Generic[BoundaryT
     @property
     def coordinate_bounds(self) -> tuple[tuple[float, float], ...]:
         """Return coordinate-space bounds in canonical leaf order."""
-        return tuple(
-            leaf_space.coordinate_bounds()
-            for leaf_space in self.leaf_spaces
-        )
+        return tuple(leaf_space.coordinate_bounds() for leaf_space in self.leaf_spaces)
 
     def coordinates_from_candidate(
         self,

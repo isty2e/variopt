@@ -1,6 +1,5 @@
 """Tests for CSA bank-growth policy and runtime behavior."""
 
-
 import pytest
 from typing_extensions import override
 
@@ -60,7 +59,9 @@ class CSABankGrowthRuntimeTests:
     def test_growth_state_from_dict_rejects_bool_and_non_finite_numbers(self) -> None:
         policy = CSABankGrowthPolicy()
 
-        with pytest.raises(TypeError, match="active_energy_gap_limit must be a JSON number"):
+        with pytest.raises(
+            TypeError, match="active_energy_gap_limit must be a JSON number"
+        ):
             _ = CSABankGrowthState[int].from_dict(
                 {
                     "active_energy_gap_limit": True,
@@ -87,7 +88,9 @@ class CSABankGrowthRuntimeTests:
                 policy=policy,
             )
 
-        with pytest.raises(TypeError, match="generation_growth_count must be a JSON integer"):
+        with pytest.raises(
+            TypeError, match="generation_growth_count must be a JSON integer"
+        ):
             _ = CSABankGrowthState[int].from_dict(
                 {
                     "active_energy_gap_limit": 1.0,

@@ -1,6 +1,5 @@
 """Facade regressions for the composite spaces package."""
 
-
 from variopt.spaces.composites import (
     ArraySpace,
     RecordCandidate,

@@ -26,8 +26,7 @@ class NumericSubspaceAttribution:
         """Normalize and validate numeric-subspace attribution."""
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
         normalized_source_coordinates = tuple(
-            float(coordinate)
-            for coordinate in self.source_coordinates
+            float(coordinate) for coordinate in self.source_coordinates
         )
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(self, "source_coordinates", normalized_source_coordinates)
@@ -58,8 +57,7 @@ class NumericSubspaceDisplacement:
         """Normalize and validate numeric-subspace displacement."""
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
         normalized_displacement_coordinates = tuple(
-            float(coordinate)
-            for coordinate in self.displacement_coordinates
+            float(coordinate) for coordinate in self.displacement_coordinates
         )
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(

@@ -137,9 +137,7 @@ class AttemptBatchEvaluator(Protocol[BoundaryT, CandidateT, StudyPayloadT]):
 
 
 @runtime_checkable
-class AttemptBatchSessionEvaluator(
-    Protocol[BoundaryT, CandidateT, StudyPayloadT]
-):
+class AttemptBatchSessionEvaluator(Protocol[BoundaryT, CandidateT, StudyPayloadT]):
     """Async evaluator capability that streams payload attempts by slot."""
 
     def execution_resources(self) -> ExecutionResources:
@@ -150,9 +148,7 @@ class AttemptBatchSessionEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
-    ]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyPayloadT]]:
         """Open a session that emits one-slot attempt batches."""
         ...
 
@@ -171,18 +167,14 @@ class ResumableAttemptBatchSessionEvaluator(
         self,
         problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
         requests: Sequence[EvaluationRequest[CandidateT]],
-    ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
-    ]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyPayloadT]]:
         """Open a session that emits one-slot attempt batches."""
         ...
 
     def resume_attempt_session(
         self,
         handle: EvaluationBatchResumeHandle,
-    ) -> EvaluationBatchSession[
-        EvaluationAttemptBatch[CandidateT, StudyPayloadT]
-    ]:
+    ) -> EvaluationBatchSession[EvaluationAttemptBatch[CandidateT, StudyPayloadT]]:
         """Resume a session that emits one-slot attempt batches."""
         ...
 
@@ -202,9 +194,7 @@ def supports_attempt_batches(
 
 def supports_attempt_batch_sessions(
     evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT],
-) -> TypeGuard[
-    AttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyPayloadT]
-]:
+) -> TypeGuard[AttemptBatchSessionEvaluator[BoundaryT, CandidateT, StudyPayloadT]]:
     """Return whether ``evaluator`` exposes attempt-aware async sessions."""
     return isinstance(evaluator, AttemptBatchSessionEvaluator)
 
@@ -238,10 +228,7 @@ def build_evaluation_requests(
         Canonical evaluation requests aligned with the input proposal order.
     """
     if proposal_evaluation_specs is None:
-        return tuple(
-            EvaluationRequest(proposal=proposal)
-            for proposal in proposals
-        )
+        return tuple(EvaluationRequest(proposal=proposal) for proposal in proposals)
 
     return tuple(
         EvaluationRequest(
@@ -301,9 +288,7 @@ def store_completion_group(
 
 
 def finalize_ordered_attempts(
-    ordered_attempts: list[
-        EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None
-    ],
+    ordered_attempts: list[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None],
 ) -> EvaluationAttemptBatch[CandidateT, StudyPayloadT]:
     """Return one fully populated ordered attempt batch.
 
@@ -472,8 +457,7 @@ def _validate_materialized_failure_slot(
         or materialized_attempt.evaluation_count != source_failure.evaluation_count
     ):
         msg = (
-            "materialized failure metadata must preserve exception and "
-            "evaluation_count"
+            "materialized failure metadata must preserve exception and evaluation_count"
         )
         raise ValueError(msg)
 
@@ -567,7 +551,10 @@ def _success_matches_expected_request(
     if success.request.proposal_id != expected_request.proposal_id:
         return False
 
-    if success.request.proposal_evaluation_spec != expected_request.proposal_evaluation_spec:
+    if (
+        success.request.proposal_evaluation_spec
+        != expected_request.proposal_evaluation_spec
+    ):
         return False
 
     if not _candidates_match(
@@ -593,7 +580,9 @@ def _candidates_match(
     if candidate_equal is None:
         return scalar_candidate_equality(left_candidate, right_candidate)
 
-    return _require_bool_candidate_match(candidate_equal(left_candidate, right_candidate))
+    return _require_bool_candidate_match(
+        candidate_equal(left_candidate, right_candidate)
+    )
 
 
 def _require_bool_candidate_match(candidates_match: object) -> bool:

@@ -250,7 +250,9 @@ def test_direct_kernel_preserves_mixed_attempt_batch() -> None:
 
 def make_int_request(candidate: int, proposal_id: str) -> EvaluationRequest[int]:
     """Return a typed integer evaluation request."""
-    return EvaluationRequest(proposal=Proposal(candidate=candidate, proposal_id=proposal_id))
+    return EvaluationRequest(
+        proposal=Proposal(candidate=candidate, proposal_id=proposal_id)
+    )
 
 
 def make_int_failure(
@@ -436,7 +438,9 @@ class RuntimeArtifactsTests:
                 failed_attempt_count=True,
             )
 
-        with pytest.raises(ValueError, match="failed_attempt_count must be non-negative"):
+        with pytest.raises(
+            ValueError, match="failed_attempt_count must be non-negative"
+        ):
             _ = KernelDiagnostics(
                 backend="local-search",
                 failed_attempt_count=-1,
@@ -586,7 +590,9 @@ class RuntimeArtifactsTests:
                 objective_scores=(cast(float, cast(object, np.bool_(True))),),
             )
 
-        with pytest.raises(ValueError, match="objective_values must contain only finite"):
+        with pytest.raises(
+            ValueError, match="objective_values must contain only finite"
+        ):
             _ = ObjectiveVectorPayload.from_objective_values(
                 objective_values=(float("inf"),),
                 directions=(OptimizationDirection.MINIMIZE,),
@@ -770,7 +776,9 @@ class RuntimeArtifactsTests:
                 candidate_equal=space_owned_candidates_equal,
             )
 
-    def test_evaluation_success_replace_reuses_explicit_candidate_equality(self) -> None:
+    def test_evaluation_success_replace_reuses_explicit_candidate_equality(
+        self,
+    ) -> None:
         source_candidate = SpaceOwnedEqualityCandidate(1)
         request_candidate = SpaceOwnedEqualityCandidate(2)
         request: EvaluationRequest[SpaceOwnedEqualityCandidate] = EvaluationRequest(
@@ -818,10 +826,14 @@ class RuntimeArtifactsTests:
             candidate_equal=space_owned_candidates_equal,
         )
         mismatched_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
-            EvaluationRequest(proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(3)))
+            EvaluationRequest(
+                proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(3))
+            )
         )
         matching_request: EvaluationRequest[SpaceOwnedEqualityCandidate] = (
-            EvaluationRequest(proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2)))
+            EvaluationRequest(
+                proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2))
+            )
         )
 
         with pytest.raises(ValueError, match="refinement refined_candidate must match"):
@@ -1537,11 +1549,15 @@ class RuntimeArtifactsTests:
         success = make_int_success(request_two)
         failure_one = make_int_failure(request_one)
         failure_three = make_int_failure(request_three)
-        attempts: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
-            attempts=(failure_one, success, failure_three),
+        attempts: EvaluationAttemptBatch[int, ObservationPayload] = (
+            EvaluationAttemptBatch(
+                attempts=(failure_one, success, failure_three),
+            )
         )
 
-        assert tuple(success.request for success in attempts.successes) == (request_two,)
+        assert tuple(success.request for success in attempts.successes) == (
+            request_two,
+        )
         assert tuple(failure.request for failure in attempts.failures) == (
             request_one,
             request_three,
@@ -1912,7 +1928,9 @@ class RuntimeArtifactsTests:
         assert observation.proposal.candidate == 4
         assert observation.candidate == 2
 
-    def test_materialize_success_records_preserves_existing_record_payload(self) -> None:
+    def test_materialize_success_records_preserves_existing_record_payload(
+        self,
+    ) -> None:
         request = make_int_request(candidate=7, proposal_id="p-7")
         record = LabelRecord(
             request=request,
@@ -1994,7 +2012,9 @@ class RuntimeArtifactsTests:
         assert materialized.failures == ()
         assert materialized.evaluation_count == 0
 
-    def test_materialize_attempt_batch_records_preserves_all_failure_batch(self) -> None:
+    def test_materialize_attempt_batch_records_preserves_all_failure_batch(
+        self,
+    ) -> None:
         request_one = make_int_request(candidate=1, proposal_id="p-1")
         request_two = make_int_request(candidate=2, proposal_id="p-2")
         failure_one = make_int_failure(request_one, evaluation_count=2)
@@ -2099,11 +2119,9 @@ class RuntimeArtifactsTests:
             objective_values=(1.0, 2.0),
             objective_scores=(1.0, -2.0),
         )
-        success: EvaluationSuccess[int, ObjectiveVectorRecord[int]] = (
-            EvaluationSuccess(
-                request=request,
-                payload=record,
-            )
+        success: EvaluationSuccess[int, ObjectiveVectorRecord[int]] = EvaluationSuccess(
+            request=request,
+            payload=record,
         )
         batch: EvaluationAttemptBatch[int, ObjectiveVectorRecord[int]] = (
             EvaluationAttemptBatch(
@@ -2346,8 +2364,10 @@ class RuntimeArtifactsTests:
     ) -> None:
         request = make_int_request(1, "p-1")
         failure = make_int_failure(request)
-        attempt: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
-            attempts=(failure,),
+        attempt: EvaluationAttemptBatch[int, ObservationPayload] = (
+            EvaluationAttemptBatch(
+                attempts=(failure,),
+            )
         )
 
         assert attempt.single_success_or_none() is None
@@ -2359,8 +2379,10 @@ class RuntimeArtifactsTests:
         request_two = make_int_request(2, "p-2")
         failure_one = make_int_failure(request_one)
         failure_two = make_int_failure(request_two)
-        attempt: EvaluationAttemptBatch[int, ObservationPayload] = EvaluationAttemptBatch(
-            attempts=(failure_one, failure_two),
+        attempt: EvaluationAttemptBatch[int, ObservationPayload] = (
+            EvaluationAttemptBatch(
+                attempts=(failure_one, failure_two),
+            )
         )
 
         with pytest.raises(ValueError, match="exactly one request"):
@@ -2454,7 +2476,9 @@ class RuntimeArtifactsTests:
         record_candidate = SpaceOwnedEqualityCandidate(1)
         refined_candidate = SpaceOwnedEqualityCandidate(1)
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=record_candidate,
             value=1.0,
             score=1.0,
@@ -2477,7 +2501,9 @@ class RuntimeArtifactsTests:
         self,
     ) -> None:
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -2499,7 +2525,9 @@ class RuntimeArtifactsTests:
         self,
     ) -> None:
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -2516,7 +2544,9 @@ class RuntimeArtifactsTests:
         record_candidate = SpaceOwnedEqualityCandidate(1)
         refined_candidate = SpaceOwnedEqualityCandidate(1)
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=record_candidate,
             value=1.0,
             score=1.0,
@@ -2541,7 +2571,9 @@ class RuntimeArtifactsTests:
         self,
     ) -> None:
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -2575,7 +2607,9 @@ class RuntimeArtifactsTests:
             return left_candidate.stable_id == right_candidate.stable_id
 
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -2605,7 +2639,9 @@ class RuntimeArtifactsTests:
         self,
     ) -> None:
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -2785,14 +2821,18 @@ class RuntimeArtifactsTests:
 
     def test_trace_append_returns_new_trace(self) -> None:
         initial = Trace()
-        event = TraceEvent(kind="evaluation", message="evaluated p-1", proposal_id="p-1")
+        event = TraceEvent(
+            kind="evaluation", message="evaluated p-1", proposal_id="p-1"
+        )
         updated = initial.append(event)
 
         assert initial.events == ()
         assert updated.events == (event,)
 
     def test_trace_constructor_copies_mutable_event_sequence(self) -> None:
-        event = TraceEvent(kind="evaluation", message="evaluated p-1", proposal_id="p-1")
+        event = TraceEvent(
+            kind="evaluation", message="evaluated p-1", proposal_id="p-1"
+        )
         extra_event = TraceEvent(
             kind="evaluation",
             message="evaluated p-2",
@@ -2807,7 +2847,9 @@ class RuntimeArtifactsTests:
         assert trace.events == (event,)
 
     def test_trace_replace_copies_mutable_event_sequence(self) -> None:
-        event = TraceEvent(kind="evaluation", message="evaluated p-1", proposal_id="p-1")
+        event = TraceEvent(
+            kind="evaluation", message="evaluated p-1", proposal_id="p-1"
+        )
         extra_event = TraceEvent(
             kind="evaluation",
             message="evaluated p-2",
@@ -2912,9 +2954,9 @@ class RuntimeArtifactsTests:
             ),
         )
         failure = make_int_failure(make_int_request(candidate=3, proposal_id="p-3"))
-        nondominated_successes: list[
-            EvaluationSuccess[int, ObjectiveVectorPayload]
-        ] = [success]
+        nondominated_successes: list[EvaluationSuccess[int, ObjectiveVectorPayload]] = [
+            success
+        ]
         successes: list[EvaluationSuccess[int, ObjectiveVectorPayload]] = [success]
         failures: list[EvaluationFailure[int]] = [failure]
 
@@ -3175,7 +3217,9 @@ class RuntimeArtifactsTests:
         assert report.evaluation_count == 3
         assert surface.evaluation_count == 3
 
-    def test_terminal_artifacts_reject_evaluation_count_below_failure_cost(self) -> None:
+    def test_terminal_artifacts_reject_evaluation_count_below_failure_cost(
+        self,
+    ) -> None:
         proposal_one = Proposal(candidate=4, proposal_id="p-1")
         observation = Observation(
             proposal=proposal_one,
@@ -3257,7 +3301,9 @@ class RuntimeArtifactsTests:
             score=16.0,
         )
         result = RunResult[int].from_observations((observation,))
-        invalid_failure = cast(EvaluationFailure[int], object.__new__(EvaluationFailure))
+        invalid_failure = cast(
+            EvaluationFailure[int], object.__new__(EvaluationFailure)
+        )
         object.__setattr__(invalid_failure, "request", make_int_request(2, "p-2"))
         object.__setattr__(
             invalid_failure,
@@ -3289,7 +3335,9 @@ class RuntimeArtifactsTests:
         object.__setattr__(invalid_snapshot, "exception_module", "")
         object.__setattr__(invalid_snapshot, "exception_qualname", "ValueError")
         object.__setattr__(invalid_snapshot, "message", "bad candidate")
-        invalid_failure = cast(EvaluationFailure[int], object.__new__(EvaluationFailure))
+        invalid_failure = cast(
+            EvaluationFailure[int], object.__new__(EvaluationFailure)
+        )
         object.__setattr__(invalid_failure, "request", make_int_request(2, "p-2"))
         object.__setattr__(invalid_failure, "exception", invalid_snapshot)
         object.__setattr__(invalid_failure, "evaluation_count", 1)
@@ -3990,7 +4038,9 @@ class RuntimeArtifactsTests:
             return False
 
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -4082,7 +4132,9 @@ class RuntimeArtifactsTests:
             return left_candidate.stable_id == right_candidate.stable_id
 
         observation: Observation[SpaceOwnedEqualityCandidate] = Observation(
-            proposal=Proposal(candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"),
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            ),
             candidate=SpaceOwnedEqualityCandidate(1),
             value=1.0,
             score=1.0,
@@ -4197,7 +4249,9 @@ class RuntimeArtifactsTests:
                 refinements=(refinement,),
             )
 
-    def test_nondominated_run_surface_from_report_preserves_frontier_order(self) -> None:
+    def test_nondominated_run_surface_from_report_preserves_frontier_order(
+        self,
+    ) -> None:
         record_one = ObjectiveVectorRecord.from_objective_values(
             proposal=Proposal(candidate=1, proposal_id="p-1"),
             candidate=1,
@@ -4290,7 +4344,10 @@ class RuntimeArtifactsTests:
         surface = NondominatedRunSurface[int].from_report(report)
 
         assert surface.records == report.records
-        assert tuple(success.request.candidate for success in surface.successes) == (3, 2)
+        assert tuple(success.request.candidate for success in surface.successes) == (
+            3,
+            2,
+        )
         assert surface.successes[0].request.proposal_id == "p-1"
         assert surface.refinements == (refinement, None)
 

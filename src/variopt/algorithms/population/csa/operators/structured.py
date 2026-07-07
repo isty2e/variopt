@@ -135,7 +135,8 @@ def is_validated_parent_variation_operator(
 
 
 @dataclass(frozen=True, slots=True)
-class UniformCrossover(FrozenGenericSlotsCompat,
+class UniformCrossover(
+    FrozenGenericSlotsCompat,
     VariationOperator[StructuredCandidateT],
     Generic[BoundaryT, StructuredCandidateT],
 ):
@@ -230,7 +231,8 @@ class UniformCrossover(FrozenGenericSlotsCompat,
 
 
 @dataclass(frozen=True, slots=True)
-class RandomResetMutation(FrozenGenericSlotsCompat,
+class RandomResetMutation(
+    FrozenGenericSlotsCompat,
     VariationOperator[StructuredCandidateT],
     Generic[BoundaryT, StructuredCandidateT],
 ):
@@ -405,7 +407,8 @@ class RandomResetMutation(FrozenGenericSlotsCompat,
 
 
 @dataclass(frozen=True, slots=True)
-class BoundedMutation(FrozenGenericSlotsCompat,
+class BoundedMutation(
+    FrozenGenericSlotsCompat,
     VariationOperator[StructuredCandidateT],
     Generic[BoundaryT, StructuredCandidateT],
 ):

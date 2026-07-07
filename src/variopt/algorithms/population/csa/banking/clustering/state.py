@@ -211,7 +211,9 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         if not self.requires_initialization(entries=entries):
             return self
 
-        cluster_distance = reference_average_distance / self.policy.cluster_distance_ratio
+        cluster_distance = (
+            reference_average_distance / self.policy.cluster_distance_ratio
+        )
         return type(self)(
             policy=self.policy,
             cluster_distance=cluster_distance,
@@ -303,7 +305,8 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
         return (
             nearest_distance >= distance_cutoff
-            and nearest_distance < self.remove_top_cutoff(distance_cutoff=distance_cutoff)
+            and nearest_distance
+            < self.remove_top_cutoff(distance_cutoff=distance_cutoff)
         )
 
     def select_cluster_update(

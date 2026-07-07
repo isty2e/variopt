@@ -261,7 +261,9 @@ class SpaceOwnedEqualityAsyncEvaluator(
             ObservationPayload,
         ],
         EvaluationRequest[SpaceOwnedEqualityCandidate],
-        EvaluationOutcome[SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]],
+        EvaluationOutcome[
+            SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]
+        ],
     ],
 ):
     """Async evaluator that returns space-equal distinct refinement candidates."""
@@ -436,7 +438,9 @@ def _make_space_owned_equality_outcome(
         ObservationPayload,
     ],
     request: EvaluationRequest[SpaceOwnedEqualityCandidate],
-) -> EvaluationOutcome[SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]]:
+) -> EvaluationOutcome[
+    SpaceOwnedEqualityCandidate, Observation[SpaceOwnedEqualityCandidate]
+]:
     record_candidate = SpaceOwnedEqualityCandidate(1)
     refinement_candidate = SpaceOwnedEqualityCandidate(1)
     return EvaluationOutcome(
@@ -959,7 +963,9 @@ class BatchQueueOptimizerState:
     ask_history: tuple[int, ...] = ()
 
 
-class BatchQueueOptimizer(RunMethod[BatchQueueOptimizerState, Proposal[int], Observation[int]]):
+class BatchQueueOptimizer(
+    RunMethod[BatchQueueOptimizerState, Proposal[int], Observation[int]]
+):
     """Toy optimizer that emits precomputed proposal batches."""
 
     _initial_batches: tuple[tuple[Proposal[int], ...], ...]
@@ -1494,8 +1500,7 @@ class PayloadAttemptBatchSession(
     ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         completion_groups = self.evaluator.poll_attempts(self.handle)
         self._completed_count += sum(
-            len(completion_group.outcomes)
-            for completion_group in completion_groups
+            len(completion_group.outcomes) for completion_group in completion_groups
         )
         return completion_groups
 
@@ -1782,8 +1787,7 @@ class _ResumableOutOfOrderBatchSession(
     ) -> Sequence[CompletionGroup[EvaluationOutcome[int, Observation[int]]]]:
         completion_groups = tuple(self.evaluator.poll(self.handle))
         self._completed_count += sum(
-            len(completion_group.outcomes)
-            for completion_group in completion_groups
+            len(completion_group.outcomes) for completion_group in completion_groups
         )
         return completion_groups
 
@@ -1820,8 +1824,7 @@ class _ResumableAttemptOutOfOrderBatchSession(
     ) -> Sequence[CompletionGroup[EvaluationAttemptBatch[int, ObservationPayload]]]:
         completion_groups = tuple(self.evaluator.poll_attempts(self.handle))
         self._completed_count += sum(
-            len(completion_group.outcomes)
-            for completion_group in completion_groups
+            len(completion_group.outcomes) for completion_group in completion_groups
         )
         return completion_groups
 

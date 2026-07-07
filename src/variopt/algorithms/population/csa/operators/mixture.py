@@ -18,7 +18,8 @@ from .validation import require_parent_count, sample_weighted_index
 
 
 @dataclass(frozen=True, slots=True)
-class MixtureVariation(FrozenGenericSlotsCompat,
+class MixtureVariation(
+    FrozenGenericSlotsCompat,
     VariationOperator[CandidateT],
     Generic[CandidateT],
 ):

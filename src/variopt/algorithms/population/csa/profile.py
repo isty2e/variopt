@@ -86,7 +86,11 @@ class CSAResolvedProfile(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
 
 @dataclass(frozen=True, slots=True)
-class CSAProfile(FrozenGenericSlotsCompat, AlgorithmProfile[CSAResolvedProfile[CandidateT]], Generic[CandidateT]):
+class CSAProfile(
+    FrozenGenericSlotsCompat,
+    AlgorithmProfile[CSAResolvedProfile[CandidateT]],
+    Generic[CandidateT],
+):
     """Boundary-level CSA configuration with named CSA presets.
 
     Parameters
@@ -405,9 +409,7 @@ class CSAProfile(FrozenGenericSlotsCompat, AlgorithmProfile[CSAResolvedProfile[C
             else self.clustering_policy
         )
         growth_policy = (
-            defaults.growth_policy
-            if self.growth_policy is None
-            else self.growth_policy
+            defaults.growth_policy if self.growth_policy is None else self.growth_policy
         )
         refresh_policy = (
             defaults.refresh_policy
@@ -417,8 +419,12 @@ class CSAProfile(FrozenGenericSlotsCompat, AlgorithmProfile[CSAResolvedProfile[C
         restart_lite = (
             defaults.restart_lite if self.restart_lite is None else self.restart_lite
         )
-        cycle_limit = defaults.cycle_limit if self.cycle_limit is None else self.cycle_limit
-        update_policy = defaults.update_policy if self.update_policy is None else self.update_policy
+        cycle_limit = (
+            defaults.cycle_limit if self.cycle_limit is None else self.cycle_limit
+        )
+        update_policy = (
+            defaults.update_policy if self.update_policy is None else self.update_policy
+        )
         if self.score_model is None:
             score_model: CSAScoreModel[CandidateT] = CSAScoreModel(
                 biased_potential=defaults.score_model_defaults.biased_potential,

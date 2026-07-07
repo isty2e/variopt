@@ -280,7 +280,9 @@ class CSAEngineStateTests:
         assert next_state.pending_proposals.is_empty
         assert state.pending_proposals.get("csa-0") == proposal
 
-    def test_consume_failed_pending_proposals_removes_all_inflight_registries(self) -> None:
+    def test_consume_failed_pending_proposals_removes_all_inflight_registries(
+        self,
+    ) -> None:
         proposal = Proposal(candidate=7, proposal_id="csa-0")
         state = build_engine_state()
         state = replace(
@@ -390,7 +392,9 @@ class CSAAskEngineTests:
 
         assert plan == CSAAskPlan(kind="dequeue_generation")
 
-    def test_commit_materialized_generation_begins_pool_and_dequeues_first_candidate(self) -> None:
+    def test_commit_materialized_generation_begins_pool_and_dequeues_first_candidate(
+        self,
+    ) -> None:
         state = build_engine_state()
         materialized_generation = CSAMaterializedGeneration(
             selection_state=SeedSelectionState(),

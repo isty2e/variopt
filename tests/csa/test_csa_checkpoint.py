@@ -364,7 +364,9 @@ class CSAEngineCheckpointTests:
                 score_model=state.scoring_state.model_state.score_model,
             )
 
-    def test_clustering_state_snapshot_rejects_bool_and_non_finite_numbers(self) -> None:
+    def test_clustering_state_snapshot_rejects_bool_and_non_finite_numbers(
+        self,
+    ) -> None:
         policy = CSAClusteringPolicy(enabled=True)
 
         with pytest.raises(TypeError, match="cluster_distance must be a JSON number"):
@@ -379,7 +381,9 @@ class CSAEngineCheckpointTests:
                 policy=policy,
             )
 
-        with pytest.raises(TypeError, match=r"cluster_labels\[0\] must be a JSON integer"):
+        with pytest.raises(
+            TypeError, match=r"cluster_labels\[0\] must be a JSON integer"
+        ):
             _ = CSAClusteringState[int].from_dict(
                 {"cluster_distance": 1.0, "cluster_labels": [True]},
                 policy=policy,
@@ -402,7 +406,9 @@ class CSAEngineCheckpointTests:
 
         score_model: CSAScoreModel[int] = CSAScoreModel()
 
-        with pytest.raises(TypeError, match="biased_potential_max must be a JSON number"):
+        with pytest.raises(
+            TypeError, match="biased_potential_max must be a JSON number"
+        ):
             _ = CSAScoreModelState[int].from_dict(
                 {
                     "biased_potential_max": True,
@@ -503,7 +509,9 @@ class CSAEngineCheckpointTests:
                 },
             )
 
-        with pytest.raises(TypeError, match="recent_failure_streak must be a JSON integer"):
+        with pytest.raises(
+            TypeError, match="recent_failure_streak must be a JSON integer"
+        ):
             _ = ProposalLeafStat.from_dict(
                 {
                     "path": ["x"],
@@ -520,7 +528,9 @@ class CSAEngineCheckpointTests:
                 discounted_score_credit=float("nan"),
             )
 
-        with pytest.raises(TypeError, match=r"path\[0\] must be a JSON integer or string"):
+        with pytest.raises(
+            TypeError, match=r"path\[0\] must be a JSON integer or string"
+        ):
             _ = ProposalLeafStat.from_dict(
                 {
                     "path": [True],
@@ -543,7 +553,9 @@ class CSAEngineCheckpointTests:
                 },
             )
 
-        with pytest.raises(ValueError, match="discounted_displacement_sum\\[0\\] must be finite"):
+        with pytest.raises(
+            ValueError, match="discounted_displacement_sum\\[0\\] must be finite"
+        ):
             _ = ProposalNumericSubspaceCovarianceStat.from_dict(
                 {
                     "leaf_paths": [["x"]],
@@ -595,12 +607,18 @@ class CSAEngineCheckpointTests:
                 },
             )
 
-        progression_snapshot = build_populated_engine_state().progression_state.to_dict()
+        progression_snapshot = (
+            build_populated_engine_state().progression_state.to_dict()
+        )
         progression_snapshot["refresh_mask"] = [True]
-        with pytest.raises(TypeError, match=r"refresh_mask\[0\] must be a JSON integer"):
+        with pytest.raises(
+            TypeError, match=r"refresh_mask\[0\] must be a JSON integer"
+        ):
             _ = CSAProgressionState.from_dict(progression_snapshot)
 
-        with pytest.raises(TypeError, match=r"used_entry_indices\[0\] must be a JSON integer"):
+        with pytest.raises(
+            TypeError, match=r"used_entry_indices\[0\] must be a JSON integer"
+        ):
             _ = SeedSelectionState.from_dict(
                 {
                     "used_entry_indices": [True],
@@ -779,7 +797,9 @@ class CSAEngineCheckpointTests:
                 },
             )
 
-    def test_checkpoint_snapshot_domain_guards_run_before_deep_shape_checks(self) -> None:
+    def test_checkpoint_snapshot_domain_guards_run_before_deep_shape_checks(
+        self,
+    ) -> None:
         state = build_populated_engine_state()
         engine_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
         engine_snapshot["format"] = "other"
@@ -836,7 +856,9 @@ class CSAEngineCheckpointTests:
                 policy=CSAProposalPolicy(),
             )
 
-    def test_checkpoint_snapshot_nested_container_boundaries_use_field_paths(self) -> None:
+    def test_checkpoint_snapshot_nested_container_boundaries_use_field_paths(
+        self,
+    ) -> None:
         with pytest.raises(TypeError, match=r"leaf_paths\[0\] must be a JSON array"):
             _ = ProposalNumericSubspaceCovarianceStat.from_dict(
                 {
@@ -877,8 +899,18 @@ class CSAEngineCheckpointTests:
     @pytest.mark.parametrize(
         ("field_name", "field_value", "expected_error", "match"),
         [
-            ("distance_cutoff", True, TypeError, "distance_cutoff must be a JSON number"),
-            ("distance_cutoff", float("inf"), ValueError, "distance_cutoff must be finite"),
+            (
+                "distance_cutoff",
+                True,
+                TypeError,
+                "distance_cutoff must be a JSON number",
+            ),
+            (
+                "distance_cutoff",
+                float("inf"),
+                ValueError,
+                "distance_cutoff must be finite",
+            ),
             (
                 "minimum_distance_cutoff",
                 float("nan"),

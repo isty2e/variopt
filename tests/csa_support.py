@@ -367,7 +367,9 @@ def make_optimizer(
     space: SearchSpace[int, int],
     diversity_metric: DiversityMetric[int],
     bank_capacity: int,
-    perturbation_schedule: LegacyPerturbationConfig | CSAPerturbationSchedule[int] | None = None,
+    perturbation_schedule: LegacyPerturbationConfig
+    | CSAPerturbationSchedule[int]
+    | None = None,
     variation_operator: VariationOperator[int] | None = None,
     initial_variation_operator: VariationOperator[int] | None = None,
     mutation_operators: Sequence[VariationOperator[int]] = (),
@@ -450,16 +452,12 @@ def make_optimizer(
         else CSAAcceptancePolicy()
     )
     growth_policy = (
-        kwargs["growth_policy"]
-        if "growth_policy" in kwargs
-        else CSABankGrowthPolicy()
+        kwargs["growth_policy"] if "growth_policy" in kwargs else CSABankGrowthPolicy()
     )
     restart_lite = kwargs["restart_lite"] if "restart_lite" in kwargs else True
     cycle_limit = kwargs["cycle_limit"] if "cycle_limit" in kwargs else 3
     update_policy = (
-        kwargs["update_policy"]
-        if "update_policy" in kwargs
-        else CSABankUpdatePolicy()
+        kwargs["update_policy"] if "update_policy" in kwargs else CSABankUpdatePolicy()
     )
     score_model: CSAScoreModel[int] = (
         kwargs["score_model"] if "score_model" in kwargs else CSAScoreModel()
@@ -486,11 +484,11 @@ def make_optimizer(
 
     return CSAOptimizerDriver.create(
         CSAOptimizer(
-        space=space,
-        diversity_metric=diversity_metric,
-        bank_capacity=bank_capacity,
-        profile=profile,
-        random_state=random_state,
+            space=space,
+            diversity_metric=diversity_metric,
+            bank_capacity=bank_capacity,
+            profile=profile,
+            random_state=random_state,
         )
     )
 
@@ -545,7 +543,7 @@ class CSAOptimizerDriver:
                 self.engine_state.banking_state,
                 reference_bank=reference_bank,
             ),
-    )
+        )
 
     @property
     def cutoff_state(self) -> CSACutoffState:
@@ -644,9 +642,6 @@ class CSAOptimizerDriver:
         return cycle_increment
 
 
-
-
-
 class CSAOptimizerTestCase:
     """Shared white-box helpers for CSA optimizer tests."""
 
@@ -689,7 +684,9 @@ class CSAOptimizerTestCase:
                 )
             )
 
-        pytest.fail("failed to enter refresh mode within the expected number of generations")
+        pytest.fail(
+            "failed to enter refresh mode within the expected number of generations"
+        )
 
     def enter_stage_growth(
         self,

@@ -59,8 +59,7 @@ class RecordSpace(
         self._fields = tuple(fields.items())
         self._field_names = tuple(fields)
         self._field_indices = {
-            name: index
-            for index, name in enumerate(self._field_names)
+            name: index for index, name in enumerate(self._field_names)
         }
         self._child_spaces_by_name = dict(self._fields)
 
@@ -116,9 +115,8 @@ class RecordSpace(
 
         actual_names = tuple(raw_mapping.keys())
 
-        if (
-            set(actual_names) != set(self._field_names)
-            or len(actual_names) != len(self._field_names)
+        if set(actual_names) != set(self._field_names) or len(actual_names) != len(
+            self._field_names
         ):
             msg = "record candidate keys must exactly match the declared fields"
             raise ValueError(msg)
@@ -383,8 +381,13 @@ class RecordSpace(
             return candidate
 
         for segment in grouped_replacements:
-            if not isinstance(segment, str) or segment not in self._child_spaces_by_name:
-                msg = f"replacement path references an unknown record field: {segment!r}"
+            if (
+                not isinstance(segment, str)
+                or segment not in self._child_spaces_by_name
+            ):
+                msg = (
+                    f"replacement path references an unknown record field: {segment!r}"
+                )
                 raise TypeError(msg)
 
         replaced_entries: list[tuple[str, SpaceCandidateValue]] = []

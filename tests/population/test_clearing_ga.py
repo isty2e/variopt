@@ -311,7 +311,9 @@ class ClearingGeneticAlgorithmOptimizerTests:
                 _ = random_state
                 return parents[0]
 
-        with pytest.raises(ValueError, match="mutation_operator arity must be exactly 1"):
+        with pytest.raises(
+            ValueError, match="mutation_operator arity must be exactly 1"
+        ):
             _ = ClearingGeneticAlgorithmOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=4,
@@ -340,18 +342,24 @@ class ClearingGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         assert tuple(member.candidate for member in state.population) == (0, 1, 8, 9)
 
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert state.generation_index == 1
         assert tuple(member.candidate for member in state.population) == (0, 1, 7, 9)
         assert len(state.population) == 4
 
-    def test_clearing_optimizer_rejects_failure_attempts_without_consuming_pending(self) -> None:
+    def test_clearing_optimizer_rejects_failure_attempts_without_consuming_pending(
+        self,
+    ) -> None:
         optimizer = ClearingGeneticAlgorithmOptimizer(
             space=IntegerSpace(0, 10),
             population_size=4,
@@ -367,8 +375,10 @@ class ClearingGeneticAlgorithmOptimizerTests:
             request=request,
             exception=ValueError("failed"),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(failure,),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(failure,),
+            )
         )
 
         with pytest.raises(UnsupportedEvaluationFailureError):
@@ -403,11 +413,15 @@ class ClearingGeneticAlgorithmOptimizerTests:
         )
 
         clearing_pool = tuple(
-            GenerationalGAPopulationMember(candidate=value, value=float(value), score=float(value))
+            GenerationalGAPopulationMember(
+                candidate=value, value=float(value), score=float(value)
+            )
             for value in (0, 1, 2, 6, 7, 10)
         )
         species_pool = tuple(
-            GenerationalGAPopulationMember(candidate=value, value=float(value), score=float(value))
+            GenerationalGAPopulationMember(
+                candidate=value, value=float(value), score=float(value)
+            )
             for value in (0, 1, 2, 6, 7, 10)
         )
 
@@ -420,7 +434,12 @@ class ClearingGeneticAlgorithmOptimizerTests:
             offspring=(),
         )
 
-        assert tuple(member.candidate for member in clearing_population) == (0, 2, 6, 10)
+        assert tuple(member.candidate for member in clearing_population) == (
+            0,
+            2,
+            6,
+            10,
+        )
         assert tuple(member.candidate for member in species_population) == (0, 1, 6, 10)
 
     def test_clearing_backfill_updates_running_distances_incrementally(self) -> None:
@@ -582,10 +601,12 @@ class ClearingGeneticAlgorithmOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=6)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert len(state.population) == 6
         assert all(
-                tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
-                for member in state.population
-            )
+            tuple(sorted(member.candidate)) == (0, 1, 2, 3, 4, 5)
+            for member in state.population
+        )

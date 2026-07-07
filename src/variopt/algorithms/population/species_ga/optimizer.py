@@ -40,7 +40,8 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 @dataclass(frozen=True, slots=True)
-class SpeciesConservingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
+class SpeciesConservingGeneticAlgorithmOptimizer(
+    FrozenGenericSlotsCompat,
     RunMethod[
         GenerationalGAOptimizerState[CandidateT],
         Proposal[CandidateT],
@@ -73,8 +74,12 @@ class SpeciesConservingGeneticAlgorithmOptimizer(FrozenGenericSlotsCompat,
     space: SearchSpace[BoundaryT, CandidateT]
     population_size: int
     diversity_metric: DiversityMetric[CandidateT]
-    crossover_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
-    mutation_operator: VariationOperator[CandidateT] | None = field(default=None, kw_only=True)
+    crossover_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
+    mutation_operator: VariationOperator[CandidateT] | None = field(
+        default=None, kw_only=True
+    )
     profile: SpeciesGAProfile = field(default_factory=SpeciesGAProfile, kw_only=True)
     sampler: CandidateSampler[CandidateT] | None = field(default=None, kw_only=True)
     random_state: RandomSeed = None

@@ -53,7 +53,10 @@ def scalar_candidate_equality(
         msg = "candidate equality must produce a scalar truth value"
         raise TypeError(msg) from error
 
-    if type(equality_result) is not bool and getattr(equality_result, "shape", None) != ():
+    if (
+        type(equality_result) is not bool
+        and getattr(equality_result, "shape", None) != ()
+    ):
         msg = "candidate equality must produce a scalar truth value"
         raise TypeError(msg)
 

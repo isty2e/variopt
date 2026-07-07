@@ -20,8 +20,8 @@ StudyExactAsyncSessionLifecycle = Literal[
 
 
 @dataclass(frozen=True, slots=True)
-class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
-    Generic[CandidateT, RunMethodStateT, StudyPayloadT]
+class StudyExactAsyncStepResumeHandle(
+    FrozenGenericSlotsCompat, Generic[CandidateT, RunMethodStateT, StudyPayloadT]
 ):
     """Study-owned resume handle for one suspended exact-async step session.
 
@@ -69,9 +69,7 @@ class StudyExactAsyncStepResumeHandle(FrozenGenericSlotsCompat,
             msg = "ordered_attempts must align with evaluator_handle"
             raise ValueError(msg)
 
-        completed_count = sum(
-            attempt is not None for attempt in self.ordered_attempts
-        )
+        completed_count = sum(attempt is not None for attempt in self.ordered_attempts)
         if completed_count != self.evaluator_handle.completed_count:
             msg = (
                 "ordered_attempts completion count must match "

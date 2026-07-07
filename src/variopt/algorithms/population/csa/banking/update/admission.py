@@ -106,7 +106,9 @@ def admit_observation(
             penalty_ratio=policy.crowding_penalty_ratio,
             niche_quality_policy=policy.niche_quality_policy,
         )
-        far_worst_index = max(range(len(removal_scores)), key=removal_scores.__getitem__)
+        far_worst_index = max(
+            range(len(removal_scores)), key=removal_scores.__getitem__
+        )
     else:
         far_worst_index = worst_index(bank.entries)
     if new_entry.value < bank.entries[far_worst_index].value:

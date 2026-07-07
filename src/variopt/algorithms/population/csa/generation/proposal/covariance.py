@@ -169,10 +169,7 @@ def sample_covariance_guided_candidate(
         for index, path in enumerate(descriptor.leaf_paths)
     )
     clipped_delta = descriptor.clip_coordinate_deltas(
-        tuple(
-            policy.numeric_covariance_strength * delta
-            for delta in masked_delta
-        ),
+        tuple(policy.numeric_covariance_strength * delta for delta in masked_delta),
         max_coordinate_fraction=max_coordinate_fraction,
     )
     source_coordinates = descriptor.coordinates_from_candidate(source_candidate)
@@ -242,8 +239,7 @@ def sample_covariance_delta(
     )
     dimension = int(sampled_delta.size)
     return tuple(
-        float(cast(np.float64, sampled_delta[index]))
-        for index in range(dimension)
+        float(cast(np.float64, sampled_delta[index])) for index in range(dimension)
     )
 
 
@@ -277,7 +273,9 @@ def stabilize_covariance_matrix(
         dtype=np.float64,
     )
     dimension = int(stabilized_eigenvalues.size)
-    stabilized_diagonal: FloatMatrix = np.zeros((dimension, dimension), dtype=np.float64)
+    stabilized_diagonal: FloatMatrix = np.zeros(
+        (dimension, dimension), dtype=np.float64
+    )
     np.fill_diagonal(stabilized_diagonal, stabilized_eigenvalues)
     eigenvector_transpose = _transpose_float_matrix(eigenvectors)
     stabilized_covariance: FloatMatrix = np.asarray(

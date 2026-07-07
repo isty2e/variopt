@@ -121,9 +121,7 @@ class EvaluationBatchSession(ABC, Generic[EvaluationT]):
         normalized_timeout = normalize_wait_timeout(timeout)
 
         deadline = (
-            None
-            if normalized_timeout is None
-            else monotonic() + normalized_timeout
+            None if normalized_timeout is None else monotonic() + normalized_timeout
         )
         while True:
             completion_groups = self.poll()

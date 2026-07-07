@@ -78,7 +78,9 @@ def is_space_scalar_value(value: SpaceCandidateValue) -> TypeGuard[SpaceScalarVa
 
 
 @dataclass(frozen=True, slots=True)
-class StructuredDiscreteNeighborhood(FrozenGenericSlotsCompat, Generic[BoundaryT, StructuredCandidateT]):
+class StructuredDiscreteNeighborhood(
+    FrozenGenericSlotsCompat, Generic[BoundaryT, StructuredCandidateT]
+):
     """Canonical neighborhood metadata for discrete structured local search.
 
     Parameters

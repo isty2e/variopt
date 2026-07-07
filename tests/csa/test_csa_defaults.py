@@ -111,8 +111,12 @@ class CSADefaultComponentTests:
 
         regular_operator = defaults.perturbation_schedule.regular_family[0].operator
         initial_operator = defaults.perturbation_schedule.initial_family[0].operator
-        first_mutation_operator = defaults.perturbation_schedule.mutation_family[0].operator
-        second_mutation_operator = defaults.perturbation_schedule.mutation_family[1].operator
+        first_mutation_operator = defaults.perturbation_schedule.mutation_family[
+            0
+        ].operator
+        second_mutation_operator = defaults.perturbation_schedule.mutation_family[
+            1
+        ].operator
 
         assert isinstance(regular_operator, OrderCrossover)
         assert isinstance(initial_operator, OrderCrossover)
@@ -153,12 +157,22 @@ class CSADefaultComponentTests:
 
         assert isinstance(optimizer.sampler, SearchSpaceSampler)
         assert isinstance(optimizer.diversity_metric, StructuredSpaceDiversityMetric)
-        assert optimizer.resolved_profile.perturbation_schedule == defaults.perturbation_schedule
-        assert optimizer.create_initial_state().proposal_state.policy == CSAProposalPolicy()
+        assert (
+            optimizer.resolved_profile.perturbation_schedule
+            == defaults.perturbation_schedule
+        )
+        assert (
+            optimizer.create_initial_state().proposal_state.policy
+            == CSAProposalPolicy()
+        )
         assert optimizer.resolved_profile.max_bank_capacity == 24
-        assert optimizer.resolved_profile.update_policy.far_update_mode == "crowding_aware"
+        assert (
+            optimizer.resolved_profile.update_policy.far_update_mode == "crowding_aware"
+        )
 
-    def test_from_space_defaults_infers_joung_2018_default_schedule_from_profile(self) -> None:
+    def test_from_space_defaults_infers_joung_2018_default_schedule_from_profile(
+        self,
+    ) -> None:
         space = IntegerSpace(-10, 10)
         defaults = derive_csa_defaults(
             space,
@@ -173,7 +187,10 @@ class CSADefaultComponentTests:
         )
 
         assert optimizer.resolved_profile.seed_count == 6
-        assert optimizer.resolved_profile.perturbation_schedule == defaults.perturbation_schedule
+        assert (
+            optimizer.resolved_profile.perturbation_schedule
+            == defaults.perturbation_schedule
+        )
 
     def test_from_space_defaults_respects_explicit_overrides(self) -> None:
         space = IntegerSpace(-10, 10)

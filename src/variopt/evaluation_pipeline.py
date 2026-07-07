@@ -129,7 +129,11 @@ def _compatibility_record_from_payload(
     *,
     request: EvaluationRequest[CandidateT],
     payload: ProposalEvaluationRecordT | ObservationPayload | ObjectiveVectorPayload,
-) -> ProposalEvaluationRecordT | Observation[CandidateT] | ObjectiveVectorRecord[CandidateT]:
+) -> (
+    ProposalEvaluationRecordT
+    | Observation[CandidateT]
+    | ObjectiveVectorRecord[CandidateT]
+):
     if isinstance(payload, ObservationPayload):
         return Observation(
             request=request,

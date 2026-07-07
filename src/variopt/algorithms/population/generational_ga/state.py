@@ -134,9 +134,7 @@ class GenerationalGAMemberBuffer(FrozenGenericSlotsCompat, Generic[CandidateT]):
         tuple[GenerationalGAPopulationMember[CandidateT], ...]
             Materialized member sequence.
         """
-        batches: list[
-            tuple[GenerationalGAPopulationMember[CandidateT], ...]
-        ] = []
+        batches: list[tuple[GenerationalGAPopulationMember[CandidateT], ...]] = []
         node: GenerationalGAMemberBuffer[CandidateT] | None = self
         while node is not None:
             if len(node.latest_batch) > 0:

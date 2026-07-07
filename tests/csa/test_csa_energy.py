@@ -36,10 +36,12 @@ class CSAAcceptanceRuntimeTests:
         runtime = CSAAcceptanceState.from_policy(CSAAcceptancePolicy())
 
         assert not (runtime.requires_random_state)
-        assert not (runtime.should_accept(
+        assert not (
+            runtime.should_accept(
                 trial_score=11.0,
                 reference_score=10.0,
-            ))
+            )
+        )
 
     def test_positive_temperature_can_accept_uphill_trial(self) -> None:
         runtime = CSAAcceptanceState.from_policy(

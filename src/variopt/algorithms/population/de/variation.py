@@ -289,10 +289,8 @@ def differential_leaf_value(
         If an integer leaf receives non-canonical integer values.
     """
     if isinstance(space, RealSpace):
-        donor_value = (
-            float(base_value)
-            + mutation_factor
-            * (float(differential_value_a) - float(differential_value_b))
+        donor_value = float(base_value) + mutation_factor * (
+            float(differential_value_a) - float(differential_value_b)
         )
         return min(space.high, max(space.low, donor_value))
 
@@ -304,10 +302,8 @@ def differential_leaf_value(
         msg = "integer differential evolution requires canonical integer leaf values"
         raise TypeError(msg)
 
-    donor_value = (
-        float(base_value)
-        + mutation_factor
-        * (float(differential_value_a) - float(differential_value_b))
+    donor_value = float(base_value) + mutation_factor * (
+        float(differential_value_a) - float(differential_value_b)
     )
     rounded_value = int(round(donor_value))
     return min(space.high, max(space.low, rounded_value))

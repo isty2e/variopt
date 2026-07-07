@@ -191,7 +191,9 @@ class StudyExactAsyncTests:
         )
         state = optimizer.create_initial_state()
 
-        with pytest.raises(ValueError, match="ordered_async execution models require an AsyncEvaluator"):
+        with pytest.raises(
+            ValueError, match="ordered_async execution models require an AsyncEvaluator"
+        ):
             _ = study.step(
                 state,
                 execution_model=EXACT_ASYNC_EXECUTION_MODEL,
@@ -220,12 +222,14 @@ class StudyExactAsyncTests:
             execution_model=EXACT_ASYNC_EXECUTION_MODEL,
         )
 
-        assert tuple(observation.proposal.proposal_id for observation in observations) == ("p-1", "p-2")
+        assert tuple(
+            observation.proposal.proposal_id for observation in observations
+        ) == ("p-1", "p-2")
         assert tuple(observation.value for observation in observations) == (16.0, 4.0)
         assert tuple(
-                observation.proposal.proposal_id
-                for observation in next_state.tell_history[0]
-            ) == ("p-1", "p-2")
+            observation.proposal.proposal_id
+            for observation in next_state.tell_history[0]
+        ) == ("p-1", "p-2")
 
     def test_step_exact_async_opens_batch_session(self) -> None:
         problem = Problem(
@@ -452,7 +456,9 @@ class StudyExactAsyncTests:
             execution_model=EXACT_ASYNC_EXECUTION_MODEL,
         )
 
-        assert tuple(observation.proposal.proposal_id for observation in report.records) == (
+        assert tuple(
+            observation.proposal.proposal_id for observation in report.records
+        ) == (
             "p-1",
             "p-2",
         )
@@ -465,9 +471,9 @@ class StudyExactAsyncTests:
         assert first_refinement.source_candidate == 4
         assert second_refinement.source_candidate == 2
         assert tuple(
-                observation.proposal.proposal_id
-                for observation in next_state.tell_history[0]
-            ) == ("p-1", "p-2")
+            observation.proposal.proposal_id
+            for observation in next_state.tell_history[0]
+        ) == ("p-1", "p-2")
 
     def test_run_exact_async_preserves_evaluator_refinement_order(self) -> None:
         problem = Problem(
@@ -495,7 +501,9 @@ class StudyExactAsyncTests:
             execution_model=EXACT_ASYNC_EXECUTION_MODEL,
         )
 
-        assert tuple(observation.proposal.proposal_id for observation in report.records) == (
+        assert tuple(
+            observation.proposal.proposal_id for observation in report.records
+        ) == (
             "p-1",
             "p-2",
         )
@@ -510,9 +518,9 @@ class StudyExactAsyncTests:
         assert second_refinement.source_candidate == 2
         assert second_refinement.refined_candidate == 2
         assert tuple(
-                observation.proposal.proposal_id
-                for observation in next_state.tell_history[0]
-            ) == ("p-1", "p-2")
+            observation.proposal.proposal_id
+            for observation in next_state.tell_history[0]
+        ) == ("p-1", "p-2")
 
     def test_run_exact_async_records_out_of_order_attempt_failures(self) -> None:
         problem = Problem(
@@ -577,11 +585,16 @@ class StudyExactAsyncTests:
             execution_model=EXACT_ASYNC_EXECUTION_MODEL,
         )
 
-        assert tuple(observation.proposal.proposal_id for observation in result.observations) == (
+        assert tuple(
+            observation.proposal.proposal_id for observation in result.observations
+        ) == (
             "p-1",
             "p-2",
         )
-        assert tuple(observation.candidate for observation in result.observations) == (4, 2)
+        assert tuple(observation.candidate for observation in result.observations) == (
+            4,
+            2,
+        )
         assert len(result.refinements) == 2
         first_refinement = result.refinements[0]
         second_refinement = result.refinements[1]
@@ -592,9 +605,9 @@ class StudyExactAsyncTests:
         assert second_refinement.source_candidate == 2
         assert second_refinement.refined_candidate == 2
         assert tuple(
-                observation.proposal.proposal_id
-                for observation in next_state.tell_history[0]
-            ) == ("p-1", "p-2")
+            observation.proposal.proposal_id
+            for observation in next_state.tell_history[0]
+        ) == ("p-1", "p-2")
 
     def test_open_exact_async_step_session_rejects_non_resumable_async_evaluator(
         self,
@@ -609,7 +622,10 @@ class StudyExactAsyncTests:
         evaluator = OutOfOrderAsyncEvaluator()
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
-        with pytest.raises(TypeError, match="study-level resumable exact_async orchestration requires a ResumableAsyncEvaluator"):
+        with pytest.raises(
+            TypeError,
+            match="study-level resumable exact_async orchestration requires a ResumableAsyncEvaluator",
+        ):
             _ = study.open_exact_async_step_session(
                 optimizer.create_initial_state(),
                 batch_size=1,
@@ -654,7 +670,10 @@ class StudyExactAsyncTests:
             kernel=RecordingKernel(),
         )
 
-        with pytest.raises(ValueError, match="study-level resumable exact_async orchestration currently requires DirectKernel"):
+        with pytest.raises(
+            ValueError,
+            match="study-level resumable exact_async orchestration currently requires DirectKernel",
+        ):
             _ = study.open_exact_async_step_session(
                 optimizer.create_initial_state(),
                 batch_size=1,
@@ -686,23 +705,25 @@ class StudyExactAsyncTests:
         resume_handle = session.suspend()
 
         assert session.state() == EvaluationBatchSessionState(
-                request_count=2,
-                completed_count=1,
-                pending_count=1,
-                lifecycle="suspended",
-            )
+            request_count=2,
+            completed_count=1,
+            pending_count=1,
+            lifecycle="suspended",
+        )
         assert len(first_completion_groups) == 1
         assert first_completion_groups[0].start_index == 1
 
         resumed_session = study.resume_exact_async_step_session(resume_handle)
         observations, next_state = resumed_session.finish()
 
-        assert tuple(observation.proposal.proposal_id for observation in observations) == ("p-1", "p-2")
+        assert tuple(
+            observation.proposal.proposal_id for observation in observations
+        ) == ("p-1", "p-2")
         assert tuple(observation.value for observation in observations) == (16.0, 4.0)
         assert tuple(
-                observation.proposal.proposal_id
-                for observation in next_state.tell_history[0]
-            ) == ("p-1", "p-2")
+            observation.proposal.proposal_id
+            for observation in next_state.tell_history[0]
+        ) == ("p-1", "p-2")
 
     @pytest.mark.parametrize("method_name", ["poll", "wait"])
     @pytest.mark.parametrize("malformation", ["overlap", "out_of_bounds"])
@@ -884,7 +905,9 @@ class StudyExactAsyncTests:
         observations, next_state = resumed_session.finish()
 
         assert all(isinstance(observation, Observation) for observation in observations)
-        assert tuple(observation.proposal.proposal_id for observation in observations) == (
+        assert tuple(
+            observation.proposal.proposal_id for observation in observations
+        ) == (
             "p-1",
             "p-2",
         )
@@ -942,9 +965,9 @@ class StudyExactAsyncTests:
         assert first_resumed_outcome.refinement.source_candidate == 4
         assert second_resumed_outcome.refinement.source_candidate == 2
         assert tuple(
-                observation.proposal.proposal_id
-                for observation in next_state.tell_history[0]
-            ) == ("p-1", "p-2")
+            observation.proposal.proposal_id
+            for observation in next_state.tell_history[0]
+        ) == ("p-1", "p-2")
 
     def test_suspend_and_resume_exact_async_step_session_preserves_outcome_feedback_order(
         self,
@@ -974,7 +997,9 @@ class StudyExactAsyncTests:
         resumed_session = study.resume_exact_async_step_session(resume_handle)
         observations, _ = resumed_session.finish()
 
-        assert tuple(observation.proposal.proposal_id for observation in observations) == (
+        assert tuple(
+            observation.proposal.proposal_id for observation in observations
+        ) == (
             "p-1",
             "p-2",
         )

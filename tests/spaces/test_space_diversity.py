@@ -270,7 +270,9 @@ class StructuredSpaceDiversityMetricTests:
             _ = metric.distance(2, 7.0)
 
     def test_real_space_distance_respects_log_scale(self) -> None:
-        metric = StructuredSpaceDiversityMetric(space=RealSpace(1.0, 100.0, scale="log"))
+        metric = StructuredSpaceDiversityMetric(
+            space=RealSpace(1.0, 100.0, scale="log")
+        )
 
         distance = metric.distance(1.0, 10.0)
 
@@ -392,14 +394,19 @@ class StructuredSpaceDiversityMetricTests:
 
         assert approx_equal(distance, math.sqrt(0.5))
 
-    def test_permutation_space_distance_handles_diagonal_full_and_size_one(self) -> None:
+    def test_permutation_space_distance_handles_diagonal_full_and_size_one(
+        self,
+    ) -> None:
         metric = StructuredSpaceDiversityMetric(space=PermutationSpace(size=3))
 
         assert metric.distance((0, 1, 2), (0, 1, 2)) == 0.0
         assert metric.distance((0, 1, 2), (1, 2, 0)) == 1.0
-        assert StructuredSpaceDiversityMetric(
-            space=PermutationSpace(size=1),
-        ).distance((0,), (0,)) == 0.0
+        assert (
+            StructuredSpaceDiversityMetric(
+                space=PermutationSpace(size=1),
+            ).distance((0,), (0,))
+            == 0.0
+        )
 
     def test_permutation_space_distance_ignores_label_gap_magnitude(self) -> None:
         space = PermutationSpace(size=5)
@@ -437,7 +444,9 @@ class StructuredSpaceDiversityMetricTests:
             right,
         )
 
-    def test_composite_permutation_generic_geometry_uses_child_mismatch_parts(self) -> None:
+    def test_composite_permutation_generic_geometry_uses_child_mismatch_parts(
+        self,
+    ) -> None:
         space = TupleSpace(PermutationSpace(size=3), CategoricalSpace(("x", "y")))
         left = space.normalize(((0, 1, 2), "x"))
         right = space.normalize(((2, 1, 0), "y"))
@@ -449,7 +458,9 @@ class StructuredSpaceDiversityMetricTests:
             shared_leaf_count=4,
         )
 
-    def test_nested_permutation_generic_geometry_uses_child_mismatch_parts(self) -> None:
+    def test_nested_permutation_generic_geometry_uses_child_mismatch_parts(
+        self,
+    ) -> None:
         space = TupleSpace(
             PermutationSpace(size=3),
             TupleSpace(PermutationSpace(size=3), CategoricalSpace(("x", "y"))),
@@ -464,7 +475,9 @@ class StructuredSpaceDiversityMetricTests:
             shared_leaf_count=7,
         )
 
-    def test_array_permutation_generic_geometry_uses_element_mismatch_parts(self) -> None:
+    def test_array_permutation_generic_geometry_uses_element_mismatch_parts(
+        self,
+    ) -> None:
         space = ArraySpace(PermutationSpace(size=3), length=2)
         left = space.normalize(((0, 1, 2), (0, 1, 2)))
         right = space.normalize(((2, 1, 0), (1, 2, 0)))
@@ -523,7 +536,9 @@ class StructuredSpaceDiversityMetricTests:
         expected = math.sqrt((0.5 * 0.5 + 1.0) / 2.0)
         assert approx_equal(distance, expected)
 
-    def test_custom_structured_space_can_opt_into_compiled_geometry_provider(self) -> None:
+    def test_custom_structured_space_can_opt_into_compiled_geometry_provider(
+        self,
+    ) -> None:
         compiled_parts = StructuredDistanceParts(
             overlap_squared_distance=0.25,
             shared_leaf_count=2,
@@ -625,7 +640,9 @@ class StructuredSpaceDiversityMetricTests:
 
         assert approx_equal(validated_distance, public_distance)
 
-    def test_all_categorical_record_validated_distance_preserves_exact_types(self) -> None:
+    def test_all_categorical_record_validated_distance_preserves_exact_types(
+        self,
+    ) -> None:
         space = RecordSpace(
             integer_choice=CategoricalSpace((1, 2)),
             float_choice=CategoricalSpace((1.0, 2.0)),
@@ -721,13 +738,17 @@ class StructuredSpaceDiversityMetricTests:
         with pytest.raises(ValueError, match="choices must be unique"):
             _ = CategoricalSpace((1, 1.0))
 
-    def test_empty_composite_spaces_are_rejected_before_geometry_compilation(self) -> None:
+    def test_empty_composite_spaces_are_rejected_before_geometry_compilation(
+        self,
+    ) -> None:
         with pytest.raises(ValueError, match="TupleSpace requires at least one"):
             _ = TupleSpace()
         with pytest.raises(ValueError, match="RecordSpace requires at least one"):
             _ = RecordSpace()
 
-    def test_generic_geometry_returns_distance_parts_for_active_topology_mismatch(self) -> None:
+    def test_generic_geometry_returns_distance_parts_for_active_topology_mismatch(
+        self,
+    ) -> None:
         space = ConditionalBranchSpace(
             mode_space=CategoricalSpace(("tree", "mlp")),
             depth_space=IntegerSpace(1, 5),
@@ -739,10 +760,10 @@ class StructuredSpaceDiversityMetricTests:
         )
 
         assert parts == StructuredDistanceParts(
-                overlap_squared_distance=1.0,
-                shared_leaf_count=1,
-                topology_mismatch_leaf_count=1,
-            )
+            overlap_squared_distance=1.0,
+            shared_leaf_count=1,
+            topology_mismatch_leaf_count=1,
+        )
 
     def test_conditional_space_reports_inactive_leaf_path(self) -> None:
         space = ConditionalBranchSpace(

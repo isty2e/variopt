@@ -151,7 +151,9 @@ class GenerationalGALifecycleTests:
                 generation_index=-1,
             )
 
-        with pytest.raises(ValueError, match="queued_proposal_index must be non-negative"):
+        with pytest.raises(
+            ValueError, match="queued_proposal_index must be non-negative"
+        ):
             _ = GenerationalGAOptimizerState(
                 variant=GenerationalGAVariant.NATIVE,
                 random_state=random_state,
@@ -241,10 +243,14 @@ class GenerationalGALifecycleTests:
             random_state=native_state.random_state,
         )
 
-        with pytest.raises(ValueError, match="state variant does not match optimizer variant"):
+        with pytest.raises(
+            ValueError, match="state variant does not match optimizer variant"
+        ):
             _ = native_optimizer.ask(clearing_state, batch_size=1)
 
-        with pytest.raises(ValueError, match="state variant does not match optimizer variant"):
+        with pytest.raises(
+            ValueError, match="state variant does not match optimizer variant"
+        ):
             _ = native_optimizer.tell(
                 clearing_state,
                 (),
@@ -323,12 +329,16 @@ class GenerationalGALifecycleTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
 
-        with pytest.raises(RuntimeError, match="next population size must match population_size"):
+        with pytest.raises(
+            RuntimeError, match="next population size must match population_size"
+        ):
             _ = tell_generational_ga(
                 state,
                 tuple(outcome.observation for outcome in outcomes),

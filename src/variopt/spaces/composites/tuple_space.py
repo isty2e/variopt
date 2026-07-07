@@ -166,7 +166,9 @@ class TupleSpace(
         )
 
     @override
-    def sample(self, random_state: np.random.RandomState) -> tuple[SpaceCandidateValue, ...]:
+    def sample(
+        self, random_state: np.random.RandomState
+    ) -> tuple[SpaceCandidateValue, ...]:
         """Sample a canonical tuple candidate.
 
         Parameters

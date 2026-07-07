@@ -1,6 +1,5 @@
 """Tests for joblib evaluator facade exports."""
 
-
 import variopt.evaluators.joblib as joblib_package
 from variopt.evaluators import AsyncJoblibEvaluator, JoblibEvaluator
 from variopt.evaluators.joblib import (
@@ -29,4 +28,7 @@ class JoblibExportTests:
 
     def test_package_facade_omits_async_request_input(self) -> None:
         assert not (hasattr(joblib_package, "AsyncJoblibRequestInput"))
-        assert AsyncJoblibRequestInputSubmodule.__module__ == "variopt.evaluators.joblib.batches"
+        assert (
+            AsyncJoblibRequestInputSubmodule.__module__
+            == "variopt.evaluators.joblib.batches"
+        )

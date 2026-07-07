@@ -266,12 +266,14 @@ def first_improving_pair_move_success(
                             failed_attempts=tuple(failed_attempts),
                             budget_exhausted=True,
                         )
-                    proposed_candidate = space.replace_leaf_values_in_validated_candidate(
-                        candidate,
-                        {
-                            left_path: left_replacement,
-                            right_path: right_replacement,
-                        },
+                    proposed_candidate = (
+                        space.replace_leaf_values_in_validated_candidate(
+                            candidate,
+                            {
+                                left_path: left_replacement,
+                                right_path: right_replacement,
+                            },
+                        )
                     )
                     proposed_attempt = runtime.evaluate_candidate_attempt(
                         candidate=proposed_candidate,
@@ -345,10 +347,10 @@ def run_structured_variable_neighborhood_stage_once(
             runtime=runtime,
             candidate=candidate,
             current_score=current_score,
-                leaf_schedule=leaf_schedule,
-                proposal_evaluation_spec=proposal_evaluation_spec,
-                reserved_count=reserved_count,
-            )
+            leaf_schedule=leaf_schedule,
+            proposal_evaluation_spec=proposal_evaluation_spec,
+            reserved_count=reserved_count,
+        )
         if scan_result.budget_exhausted:
             return StructuredVariableNeighborhoodStageAttempt(
                 improved_success=None,

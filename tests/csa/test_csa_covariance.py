@@ -58,7 +58,9 @@ class NumericSubspaceDescriptorTests:
 class CSAProposalCovarianceTests:
     """Regression tests for CSA-private covariance proposal adaptation."""
 
-    def test_update_proposal_state_records_numeric_covariance_displacement(self) -> None:
+    def test_update_proposal_state_records_numeric_covariance_displacement(
+        self,
+    ) -> None:
         policy = CSAProposalPolicy(
             enabled=True,
             score_decay=1.0,
@@ -101,9 +103,9 @@ class CSAProposalCovarianceTests:
         covariance_stat = next_state.numeric_covariance_stats[0]
         assert covariance_stat.observation_count == 1
         assert covariance_stat.effective_mean(
-                current_update_index=next_state.update_index,
-                score_decay=1.0,
-            ) == (1.0, -1.0)
+            current_update_index=next_state.update_index,
+            score_decay=1.0,
+        ) == (1.0, -1.0)
 
     def test_covariance_guided_candidate_masks_unselected_paths(self) -> None:
         space = TupleSpace(

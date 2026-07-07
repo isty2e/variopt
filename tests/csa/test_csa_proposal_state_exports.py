@@ -1,6 +1,5 @@
 """Regression tests for CSA proposal-state export boundaries."""
 
-
 from variopt.algorithms.population.csa.generation.proposal.policy import (
     CSAProposalPolicy,
 )

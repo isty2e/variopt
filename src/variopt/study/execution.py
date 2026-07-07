@@ -759,9 +759,7 @@ def _evaluate_step_feedback(
         remaining_before=remaining_before,
         reported_evaluation_count=reported_evaluation_count,
     )
-    feedback_attempts = study.attempt_materializer.materialize_attempts(
-        kernel_attempts
-    )
+    feedback_attempts = study.attempt_materializer.materialize_attempts(kernel_attempts)
     validate_materialized_attempts(
         kernel_attempts,
         feedback_attempts,
@@ -976,9 +974,7 @@ def run(
         if initial_state is None
         else initial_state
     )
-    safe_snapshot: (
-        CheckpointSafeRunSnapshot[RunMethodStateT] | None
-    ) = None
+    safe_snapshot: CheckpointSafeRunSnapshot[RunMethodStateT] | None = None
     unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
         safe_snapshot = CheckpointSafeRunSnapshot(
@@ -1053,8 +1049,7 @@ def run(
                     ),
                 ),
                 evaluation_count=(
-                    reported_evaluation_count_total
-                    + step_feedback.evaluation_count
+                    reported_evaluation_count_total + step_feedback.evaluation_count
                 ),
                 state=step_feedback.post_ask_state,
                 safe_snapshot=safe_snapshot,

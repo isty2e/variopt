@@ -31,30 +31,18 @@ class CSAAcceptancePolicy:
 
     def __post_init__(self) -> None:
         """Reject invalid acceptance-policy configuration."""
-        if (
-            not isfinite(self.initial_temperature)
-            or self.initial_temperature < 0.0
-        ):
+        if not isfinite(self.initial_temperature) or self.initial_temperature < 0.0:
             msg = "initial_temperature must be a finite non-negative float"
             raise ValueError(msg)
 
-        if (
-            not isfinite(self.reduction_factor)
-            or self.reduction_factor <= 0.0
-        ):
+        if not isfinite(self.reduction_factor) or self.reduction_factor <= 0.0:
             msg = "reduction_factor must be a finite positive float"
             raise ValueError(msg)
 
-        if (
-            not isfinite(self.minimum_temperature)
-            or self.minimum_temperature < 0.0
-        ):
+        if not isfinite(self.minimum_temperature) or self.minimum_temperature < 0.0:
             msg = "minimum_temperature must be a finite non-negative float"
             raise ValueError(msg)
 
-        if (
-            not isfinite(self.boltzmann_constant)
-            or self.boltzmann_constant <= 0.0
-        ):
+        if not isfinite(self.boltzmann_constant) or self.boltzmann_constant <= 0.0:
             msg = "boltzmann_constant must be a finite positive float"
             raise ValueError(msg)

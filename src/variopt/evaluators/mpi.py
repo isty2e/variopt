@@ -216,10 +216,13 @@ class MpiEvaluator(
     """
 
     max_workers: int | None = None
-    _executor_factory: MpiExecutorFactory[
-        CandidateT,
-        RequestAlignedEvaluationRecord,
-    ] | None = field(
+    _executor_factory: (
+        MpiExecutorFactory[
+            CandidateT,
+            RequestAlignedEvaluationRecord,
+        ]
+        | None
+    ) = field(
         default=None,
         repr=False,
     )
@@ -258,7 +261,9 @@ class MpiEvaluator(
         )
         return executor_class(max_workers=self.max_workers)
 
-    def _create_executor(self) -> MpiExecutor[
+    def _create_executor(
+        self,
+    ) -> MpiExecutor[
         CandidateT,
         RequestAlignedEvaluationRecord,
     ]:
@@ -372,7 +377,9 @@ class MpiEvaluator(
     def _resolve_ordered_outcome(
         self,
         *,
-        future: MpiFuture[EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]],
+        future: MpiFuture[
+            EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]
+        ],
         expected_index: int,
     ) -> EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]:
         """Return one future result and verify logical batch alignment."""
@@ -385,9 +392,7 @@ class MpiEvaluator(
     def _resolve_ordered_attempt(
         self,
         *,
-        future: MpiFuture[
-            EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]
-        ],
+        future: MpiFuture[EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]],
         expected_index: int,
     ) -> EvaluationAttemptBatch[CandidateT, MpiEvaluationPayloadT]:
         """Return one future attempt and verify logical batch alignment."""

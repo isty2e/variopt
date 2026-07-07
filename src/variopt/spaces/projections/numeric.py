@@ -51,10 +51,7 @@ class HomogeneousNumericSubspaceDescriptor(
     @property
     def coordinate_bounds(self) -> tuple[tuple[float, float], ...]:
         """Return coordinate-space bounds in canonical leaf order."""
-        return tuple(
-            leaf_space.coordinate_bounds()
-            for leaf_space in self.leaf_spaces
-        )
+        return tuple(leaf_space.coordinate_bounds() for leaf_space in self.leaf_spaces)
 
     @property
     def coordinate_spans(self) -> tuple[float, ...]:
@@ -244,7 +241,11 @@ def compile_homogeneous_numeric_subspace(
     if not space.has_static_topology():
         return None
 
-    normalized_leaf_paths = tuple(space.leaf_paths() if leaf_paths is None else tuple(tuple(path) for path in leaf_paths))
+    normalized_leaf_paths = tuple(
+        space.leaf_paths()
+        if leaf_paths is None
+        else tuple(tuple(path) for path in leaf_paths)
+    )
     if len(normalized_leaf_paths) == 0:
         return None
 
@@ -256,7 +257,9 @@ def compile_homogeneous_numeric_subspace(
         leaf_spaces.append(leaf_space)
 
     first_leaf_space = leaf_spaces[0]
-    if any(type(leaf_space) is not type(first_leaf_space) for leaf_space in leaf_spaces[1:]):
+    if any(
+        type(leaf_space) is not type(first_leaf_space) for leaf_space in leaf_spaces[1:]
+    ):
         return None
 
     return HomogeneousNumericSubspaceDescriptor(

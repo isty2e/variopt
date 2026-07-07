@@ -57,9 +57,9 @@ def evaluate_batch_exact_async(
         msg = "exact_async evaluator must expose attempt-batch sessions"
         raise TypeError(msg)
 
-    ordered_attempts: list[
-        EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None
-    ] = [None] * attempt_session.handle.request_count
+    ordered_attempts: list[EvaluationAttemptBatch[CandidateT, StudyPayloadT] | None] = [
+        None
+    ] * attempt_session.handle.request_count
     completed_count = 0
     try:
         while completed_count < attempt_session.handle.request_count:

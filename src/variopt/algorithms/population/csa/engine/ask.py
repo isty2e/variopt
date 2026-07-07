@@ -341,10 +341,12 @@ def materialize_generation(
             seed_index=seed_index,
             partner_count=partner_count,
             partner_mask=partner_mask,
-            distance_between_indices=lambda left_index, right_index: require_valid_distance(
-                diversity_metric.distance(
-                    entries[left_index].candidate,
-                    entries[right_index].candidate,
+            distance_between_indices=lambda left_index, right_index: (
+                require_valid_distance(
+                    diversity_metric.distance(
+                        entries[left_index].candidate,
+                        entries[right_index].candidate,
+                    )
                 )
             ),
             weighted_partner_selection=weighted_partner_selection,

@@ -63,8 +63,7 @@ def validate_outcome_refinement_alignment(
         record_candidate=cast(CandidateT, outcome.record.candidate),
         refined_candidate=outcome.refinement.refined_candidate,
         mismatch_message=(
-            "refinement refined_candidate must match the outcome "
-            "record candidate"
+            "refinement refined_candidate must match the outcome record candidate"
         ),
         candidate_equal=candidate_equal,
     )
@@ -260,8 +259,10 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
         """Return whether the current refinement pair was already checked."""
         return (
             self.refinement is not None
-            and self._validated_record_candidate is not _UNVALIDATED_REFINEMENT_CANDIDATE
-            and self._validated_refined_candidate is not _UNVALIDATED_REFINEMENT_CANDIDATE
+            and self._validated_record_candidate
+            is not _UNVALIDATED_REFINEMENT_CANDIDATE
+            and self._validated_refined_candidate
+            is not _UNVALIDATED_REFINEMENT_CANDIDATE
             and self._validated_record_candidate is self.record.candidate
             and self._validated_refined_candidate is self.refinement.refined_candidate
         )
@@ -342,6 +343,7 @@ def evaluation_outcome_setstate(
                 dataclass_field.name,
                 _UNVALIDATED_REFINEMENT_CANDIDATE,
             )
+
 
 setattr(EvaluationOutcome, "__getstate__", evaluation_outcome_getstate)
 setattr(EvaluationOutcome, "__setstate__", evaluation_outcome_setstate)

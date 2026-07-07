@@ -69,7 +69,9 @@ class ConditionalNumericPairSpace(
         self.tail_space.validate(candidate[1])
 
     @override
-    def sample(self, random_state: np.random.RandomState) -> ConditionalNumericCandidate:
+    def sample(
+        self, random_state: np.random.RandomState
+    ) -> ConditionalNumericCandidate:
         return (
             self.head_space.sample(random_state),
             self.tail_space.sample(random_state),
@@ -170,32 +172,44 @@ class DifferentialEvolutionOptimizerTests:
     """Regression tests for the native DE optimizer."""
 
     def test_profile_rejects_invalid_fields(self) -> None:
-        with pytest.raises(ValueError, match="mutation_range low must not exceed mutation_range high"):
+        with pytest.raises(
+            ValueError, match="mutation_range low must not exceed mutation_range high"
+        ):
             _ = DEProfile(mutation_range=(1.0, 0.5))
 
         with pytest.raises(ValueError, match="mutation_range low must be non-negative"):
             _ = DEProfile(mutation_range=(-0.1, 0.5))
 
-        with pytest.raises(ValueError, match="recombination_probability must be between 0.0 and 1.0"):
+        with pytest.raises(
+            ValueError, match="recombination_probability must be between 0.0 and 1.0"
+        ):
             _ = DEProfile(recombination_probability=1.5)
 
         with pytest.raises(ValueError, match="n_cross must be positive"):
             _ = DEProfile(n_cross=0)
 
     def test_optimizer_rejects_invalid_space_and_shape(self) -> None:
-        with pytest.raises(ValueError, match="population_size must be at least 4 for differential evolution"):
+        with pytest.raises(
+            ValueError,
+            match="population_size must be at least 4 for differential evolution",
+        ):
             _ = DifferentialEvolutionOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=3,
             )
 
-        with pytest.raises(TypeError, match="space must contain only numeric leaves for differential evolution"):
+        with pytest.raises(
+            TypeError,
+            match="space must contain only numeric leaves for differential evolution",
+        ):
             _ = DifferentialEvolutionOptimizer(
                 space=CategoricalSpace(("a", "b")),
                 population_size=4,
             )
 
-        with pytest.raises(ValueError, match="n_cross must not exceed the number of editable leaves"):
+        with pytest.raises(
+            ValueError, match="n_cross must not exceed the number of editable leaves"
+        ):
             _ = DifferentialEvolutionOptimizer(
                 space=IntegerSpace(0, 10),
                 population_size=4,
@@ -224,17 +238,20 @@ class DifferentialEvolutionOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert len(state.population) == 0
         assert tuple(
-                evaluation.member.candidate
-                for evaluation in state.buffered_evaluations
-            ) == (5, 4)
+            evaluation.member.candidate for evaluation in state.buffered_evaluations
+        ) == (5, 4)
 
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert tuple(member.candidate for member in state.population) == (5, 4, 3, 2)
         assert len(state.buffered_evaluations) == 0
@@ -253,17 +270,22 @@ class DifferentialEvolutionOptimizerTests:
             request=request,
             exception=ValueError("failed"),
         )
-        attempts: EvaluationAttemptBatch[int, Observation[int]] = EvaluationAttemptBatch(
-            attempts=(failure,),
+        attempts: EvaluationAttemptBatch[int, Observation[int]] = (
+            EvaluationAttemptBatch(
+                attempts=(failure,),
+            )
         )
 
         with pytest.raises(UnsupportedEvaluationFailureError):
             _ = optimizer.tell_attempts(state, attempts)
 
-        assert tuple(
-            pending_evaluation.proposal
-            for pending_evaluation in state.pending_evaluations
-        ) == proposals
+        assert (
+            tuple(
+                pending_evaluation.proposal
+                for pending_evaluation in state.pending_evaluations
+            )
+            == proposals
+        )
 
     def test_optimizer_replaces_targets_only_when_trials_improve(self) -> None:
         optimizer = DifferentialEvolutionOptimizer(
@@ -283,28 +305,34 @@ class DifferentialEvolutionOptimizerTests:
         state = optimizer.create_initial_state()
         proposals, state = optimizer.ask(state, batch_size=4)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         initial_population = state.population
 
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
         assert len(state.population) == 4
 
         proposals, state = optimizer.ask(state, batch_size=2)
         outcomes = evaluator.evaluate(problem, _requests(proposals))
-        state = optimizer.tell(state, tuple(outcome.observation for outcome in outcomes))
+        state = optimizer.tell(
+            state, tuple(outcome.observation for outcome in outcomes)
+        )
 
         assert state.generation_index == 1
         assert len(state.population) == 4
         assert all(
-                member.score <= initial_member.score
-                for member, initial_member in zip(
-                    state.population,
-                    initial_population,
-                    strict=True,
-                )
+            member.score <= initial_member.score
+            for member, initial_member in zip(
+                state.population,
+                initial_population,
+                strict=True,
             )
+        )
 
     def test_optimizer_is_deterministic_for_one_seed(self) -> None:
         optimizer_a = DifferentialEvolutionOptimizer(
@@ -327,13 +355,21 @@ class DifferentialEvolutionOptimizerTests:
 
         proposals_a, state_a = optimizer_a.ask(state_a, batch_size=4)
         proposals_b, state_b = optimizer_b.ask(state_b, batch_size=4)
-        assert tuple(proposal.candidate for proposal in proposals_a) == tuple(proposal.candidate for proposal in proposals_b)
+        assert tuple(proposal.candidate for proposal in proposals_a) == tuple(
+            proposal.candidate for proposal in proposals_b
+        )
 
         outcomes_a = evaluator.evaluate(problem, _requests(proposals_a))
         outcomes_b = evaluator.evaluate(problem, _requests(proposals_b))
-        state_a = optimizer_a.tell(state_a, tuple(outcome.observation for outcome in outcomes_a))
-        state_b = optimizer_b.tell(state_b, tuple(outcome.observation for outcome in outcomes_b))
+        state_a = optimizer_a.tell(
+            state_a, tuple(outcome.observation for outcome in outcomes_a)
+        )
+        state_b = optimizer_b.tell(
+            state_b, tuple(outcome.observation for outcome in outcomes_b)
+        )
 
         proposals_a, state_a = optimizer_a.ask(state_a, batch_size=4)
         proposals_b, state_b = optimizer_b.ask(state_b, batch_size=4)
-        assert tuple(proposal.candidate for proposal in proposals_a) == tuple(proposal.candidate for proposal in proposals_b)
+        assert tuple(proposal.candidate for proposal in proposals_a) == tuple(
+            proposal.candidate for proposal in proposals_b
+        )

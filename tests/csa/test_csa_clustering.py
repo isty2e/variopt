@@ -97,7 +97,9 @@ class RejectingDistance(DiversityMetric[int]):
 class CSAClusteringRuntimeTests:
     """Regression tests for CSA clustering semantics."""
 
-    def test_explicit_cutoff_initialization_does_not_infer_average_distance(self) -> None:
+    def test_explicit_cutoff_initialization_does_not_infer_average_distance(
+        self,
+    ) -> None:
         bank = Bank(
             capacity=2,
             entries=(
@@ -128,7 +130,9 @@ class CSAClusteringRuntimeTests:
         assert next_state.minimum_distance_cutoff == 1.0
         assert next_state.previous_score_gap == 10.0
 
-    def test_explicit_initial_cutoff_mirrors_missing_minimum_without_inference(self) -> None:
+    def test_explicit_initial_cutoff_mirrors_missing_minimum_without_inference(
+        self,
+    ) -> None:
         bank = Bank(
             capacity=2,
             entries=(
@@ -323,7 +327,9 @@ class CSAClusteringRuntimeTests:
                 policy=growth_policy,
                 active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
             ),
-            clustering_state=CSAClusteringState(policy=CSAClusteringPolicy(enabled=False)),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=False)
+            ),
             base_bank_capacity=2,
             masked_seed_indices=frozenset(),
             random_state=np.random.RandomState(0),
@@ -348,7 +354,9 @@ class CSAClusteringRuntimeTests:
 
         assert next_runtime.cluster_labels == (1, 2, 1)
 
-    def test_close_replacement_inherits_nearest_cluster_when_target_differs(self) -> None:
+    def test_close_replacement_inherits_nearest_cluster_when_target_differs(
+        self,
+    ) -> None:
         runtime: CSAClusteringState[int] = CSAClusteringState(
             policy=CSAClusteringPolicy(enabled=True),
             cluster_distance=3.0,
@@ -396,7 +404,9 @@ class CSAClusteringRuntimeTests:
 
         assert next_runtime.cluster_labels == (1, 3, 2)
 
-    def test_largest_cluster_mode_separates_comparison_and_removal_targets(self) -> None:
+    def test_largest_cluster_mode_separates_comparison_and_removal_targets(
+        self,
+    ) -> None:
         runtime: CSAClusteringState[int] = CSAClusteringState(
             policy=CSAClusteringPolicy(
                 enabled=True,
@@ -416,7 +426,9 @@ class CSAClusteringRuntimeTests:
         assert decision.comparison_score == 10.0
         assert decision.remove_index == 4
 
-    def test_cluster_update_largest_cluster_mode_replaces_largest_cluster_worst(self) -> None:
+    def test_cluster_update_largest_cluster_mode_replaces_largest_cluster_worst(
+        self,
+    ) -> None:
         batch_result = run_cluster_batch(
             bank=Bank(
                 capacity=5,
@@ -450,7 +462,9 @@ class CSAClusteringRuntimeTests:
         assert batch_result.bank.entries[1].candidate == 1
         assert batch_result.clustering_state.cluster_labels == (1, 1, 2, 2, 1)
 
-    def test_cluster_update_current_cluster_mode_replaces_current_cluster_worst(self) -> None:
+    def test_cluster_update_current_cluster_mode_replaces_current_cluster_worst(
+        self,
+    ) -> None:
         batch_result = run_cluster_batch(
             bank=Bank(
                 capacity=5,
@@ -583,7 +597,11 @@ class CSAClusteringRuntimeTests:
             distance_cutoff=5.0,
         )
 
-        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 10, 30)
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (
+            0,
+            10,
+            30,
+        )
 
     def test_crowded_worst_far_update_preserves_isolated_worst_entry(self) -> None:
         batch_result = run_cluster_batch(
@@ -608,7 +626,11 @@ class CSAClusteringRuntimeTests:
             update_policy=CSABankUpdatePolicy(far_update_mode="crowded_worst"),
         )
 
-        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 1, 100)
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (
+            0,
+            1,
+            100,
+        )
 
     def test_crowding_aware_far_update_can_replace_isolated_worst_entry(self) -> None:
         batch_result = run_cluster_batch(
@@ -633,7 +655,11 @@ class CSAClusteringRuntimeTests:
             update_policy=CSABankUpdatePolicy(far_update_mode="crowding_aware"),
         )
 
-        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 1, 20)
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (
+            0,
+            1,
+            20,
+        )
 
     def test_crowding_aware_far_update_can_penalize_poor_crowded_niche(self) -> None:
         batch_result = run_cluster_batch(
@@ -666,7 +692,12 @@ class CSAClusteringRuntimeTests:
             ),
         )
 
-        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 1, 100, 20)
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (
+            0,
+            1,
+            100,
+            20,
+        )
 
     def test_crowding_aware_best_mean_mode_runs(self) -> None:
         best_mean_result = run_cluster_batch(
@@ -700,7 +731,9 @@ class CSAClusteringRuntimeTests:
         )
         assert len(best_mean_result.bank.entries) == 4
 
-    def test_bank_distance_workspace_is_shared_across_scoring_and_crowding(self) -> None:
+    def test_bank_distance_workspace_is_shared_across_scoring_and_crowding(
+        self,
+    ) -> None:
         diversity_metric = CountingAbsoluteDistance()
 
         batch_result = run_cluster_batch(
@@ -820,7 +853,9 @@ class CSAClusteringRuntimeTests:
         assert rebased_workspace.distance(0, 1) == 100.0
         assert diversity_metric.call_count == 2
 
-    def test_batch_distance_workspace_is_reused_across_rejected_observations(self) -> None:
+    def test_batch_distance_workspace_is_reused_across_rejected_observations(
+        self,
+    ) -> None:
         diversity_metric = CountingAbsoluteDistance()
         bank_candidates = (0, 10, 100)
 
@@ -923,19 +958,32 @@ class CSAClusteringRuntimeTests:
             diversity_metric=diversity_metric,
         )
 
-        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 1, 30)
-        assert bank_pair_call_counts(
-            diversity_metric,
-            candidates=(0, 1, 20, 100),
-        )[(0, 1)] == 1
-        assert bank_pair_call_counts(
-            diversity_metric,
-            candidates=(0, 1, 20, 100),
-        )[(0, 20)] == 1
-        assert bank_pair_call_counts(
-            diversity_metric,
-            candidates=(0, 1, 20, 100),
-        )[(1, 20)] == 1
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (
+            0,
+            1,
+            30,
+        )
+        assert (
+            bank_pair_call_counts(
+                diversity_metric,
+                candidates=(0, 1, 20, 100),
+            )[(0, 1)]
+            == 1
+        )
+        assert (
+            bank_pair_call_counts(
+                diversity_metric,
+                candidates=(0, 1, 20, 100),
+            )[(0, 20)]
+            == 1
+        )
+        assert (
+            bank_pair_call_counts(
+                diversity_metric,
+                candidates=(0, 1, 20, 100),
+            )[(1, 20)]
+            == 1
+        )
 
     def test_batch_distance_workspace_seeds_appended_trial_distances(self) -> None:
         diversity_metric = CountingAbsoluteDistance()
@@ -984,15 +1032,25 @@ class CSAClusteringRuntimeTests:
             diversity_metric=diversity_metric,
         )
 
-        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (0, 10, 20)
-        assert bank_pair_call_counts(
-            diversity_metric,
-            candidates=(0, 10, 20),
-        )[(0, 20)] == 1
-        assert bank_pair_call_counts(
-            diversity_metric,
-            candidates=(0, 10, 20),
-        )[(10, 20)] == 1
+        assert tuple(entry.candidate for entry in batch_result.bank.entries) == (
+            0,
+            10,
+            20,
+        )
+        assert (
+            bank_pair_call_counts(
+                diversity_metric,
+                candidates=(0, 10, 20),
+            )[(0, 20)]
+            == 1
+        )
+        assert (
+            bank_pair_call_counts(
+                diversity_metric,
+                candidates=(0, 10, 20),
+            )[(10, 20)]
+            == 1
+        )
 
     def test_unchanged_aligned_clustering_skips_recluster_distance_work(self) -> None:
         bank = Bank(
@@ -1215,9 +1273,7 @@ def run_cluster_batch_many(
     else:
         resolved_score_model = score_model
     resolved_update_policy = (
-        CSABankUpdatePolicy()
-        if update_policy is None
-        else update_policy
+        CSABankUpdatePolicy() if update_policy is None else update_policy
     )
     growth_policy = CSABankGrowthPolicy()
     resolved_growth_state = (
@@ -1244,9 +1300,7 @@ def run_cluster_batch_many(
         ),
         observations=observations,
         diversity_metric=(
-            AbsoluteDistance()
-            if diversity_metric is None
-            else diversity_metric
+            AbsoluteDistance() if diversity_metric is None else diversity_metric
         ),
         infer_average_distance=lambda entries: infer_average_distance(entries),
         infer_score_gap=infer_constant_score_gap,
@@ -1288,9 +1342,7 @@ def run_empty_cluster_batch(
         ),
         observations=(),
         diversity_metric=(
-            AbsoluteDistance()
-            if diversity_metric is None
-            else diversity_metric
+            AbsoluteDistance() if diversity_metric is None else diversity_metric
         ),
         infer_average_distance=infer_average_distance,
         infer_score_gap=infer_constant_score_gap,

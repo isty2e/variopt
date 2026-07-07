@@ -71,9 +71,7 @@ def _leaf_local_search_signals(
     leaf_paths: Sequence[LeafPath],
 ) -> tuple[_LeafLocalSearchSignal, ...]:
     """Return local-search support signals for one structured leaf family."""
-    leaf_stats_by_path = {
-        leaf_stat.path: leaf_stat for leaf_stat in state.leaf_stats
-    }
+    leaf_stats_by_path = {leaf_stat.path: leaf_stat for leaf_stat in state.leaf_stats}
     local_displacement_leaf_stats_by_path = {
         leaf_stat.path: leaf_stat for leaf_stat in state.local_displacement_leaf_stats
     }
@@ -263,12 +261,9 @@ def proposal_local_search_context(
         state=state,
         leaf_paths=normalized_leaf_paths,
     )
-    signals_by_path = {
-        signal.path: signal for signal in signals
-    }
-    if (
-        attribution is None
-        and not any(signal.total_score_credit > 0.0 for signal in signals)
+    signals_by_path = {signal.path: signal for signal in signals}
+    if attribution is None and not any(
+        signal.total_score_credit > 0.0 for signal in signals
     ):
         return None
 
@@ -277,8 +272,7 @@ def proposal_local_search_context(
     available_leaf_paths = set(normalized_leaf_paths)
     weights = mutation_leaf_weights(state=state, leaf_paths=normalized_leaf_paths)
     weights_by_path = {
-        path: weights[index]
-        for index, path in enumerate(normalized_leaf_paths)
+        path: weights[index] for index, path in enumerate(normalized_leaf_paths)
     }
     mutated_signals: list[_LeafLocalSearchSignal] = []
     if attribution is not None:
@@ -290,10 +284,7 @@ def proposal_local_search_context(
             if normalized_path in available_leaf_paths
         )
         mutated_signals = sorted(
-            (
-                signals_by_path[path]
-                for path in dict.fromkeys(unique_mutated_paths)
-            ),
+            (signals_by_path[path] for path in dict.fromkeys(unique_mutated_paths)),
             key=lambda signal: (
                 _is_in_failure_cooldown(signal=signal, state=state),
                 signal.recent_failure_streak,
@@ -337,16 +328,14 @@ def proposal_local_search_context(
         key=lambda item: (item[0], item[1], item[2], item[3]),
     )
     prioritized_leaf_paths.extend(
-        path
-        for _, _, _, _, path in weighted_remaining_leaf_paths
+        path for _, _, _, _, path in weighted_remaining_leaf_paths
     )
 
     local_search_enabled = True
     local_budget: int | None = None
     if len(mutated_signals) > 0:
         local_search_enabled = (
-            supporting_mutated_signal_count > 0
-            or eligible_mutated_signal_count > 0
+            supporting_mutated_signal_count > 0 or eligible_mutated_signal_count > 0
         )
         if local_search_enabled:
             local_budget = min(
@@ -511,9 +500,7 @@ def sample_mutation_family_indices(
 
     if not state.policy.enabled:
         return tuple(
-            index
-            for index, spec in enumerate(family)
-            for _ in range(spec.count)
+            index for index, spec in enumerate(family) for _ in range(spec.count)
         )
 
     weights = mutation_family_weights(state=state, family=family)
@@ -566,7 +553,8 @@ def update_proposal_state(
         Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
     ) = None,
     infer_numeric_subspace_displacement: (
-        Callable[[ProposalAttribution, CandidateT], NumericSubspaceDisplacement | None] | None
+        Callable[[ProposalAttribution, CandidateT], NumericSubspaceDisplacement | None]
+        | None
     ) = None,
 ) -> CSAProposalState:
     """Return the next proposal-adaptation state for one observation batch.
@@ -602,9 +590,7 @@ def update_proposal_state(
     if explicit_local_displacement_leaf_paths is not None:
         explicit_path_tuple = tuple(explicit_local_displacement_leaf_paths)
         if len(explicit_path_tuple) != len(observations):
-            msg = (
-                "explicit_local_displacement_leaf_paths must align with observations"
-            )
+            msg = "explicit_local_displacement_leaf_paths must align with observations"
             raise ValueError(msg)
 
     next_state = state
@@ -682,8 +668,7 @@ def infer_structured_local_displacement_leaf_paths(
         path
         for path in space.leaf_paths()
         if (
-            (path in proposal_active_leaf_paths)
-            != (path in observed_active_leaf_paths)
+            (path in proposal_active_leaf_paths) != (path in observed_active_leaf_paths)
         )
         or (
             path in proposal_active_leaf_paths

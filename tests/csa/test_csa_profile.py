@@ -121,10 +121,10 @@ class CSAProfileTests:
         assert resolved.growth_policy.enabled
         assert resolved.growth_policy.maximum_capacity == 9
         assert resolved.refresh_policy == CSARefreshPolicy(
-                mode="adaptive_refresh",
-                preserve_fraction=0.5,
-                newcomer_first_round=False,
-            )
+            mode="adaptive_refresh",
+            preserve_fraction=0.5,
+            newcomer_first_round=False,
+        )
         assert resolved.update_policy.minimum_significant_score_gap == 5.0
         assert resolved.update_policy.local_update_mode == "disabled"
         assert resolved.proposal_policy.enabled

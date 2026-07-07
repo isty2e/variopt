@@ -119,7 +119,9 @@ class SpaceCandidateSerializationTests:
 
         assert restored == candidate
 
-    def test_legacy_escape_marker_mapping_without_format_stays_plain_mapping(self) -> None:
+    def test_legacy_escape_marker_mapping_without_format_stays_plain_mapping(
+        self,
+    ) -> None:
         restored = space_candidate_from_dict(
             {
                 "__variopt_mapping__": {
