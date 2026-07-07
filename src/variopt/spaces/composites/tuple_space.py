@@ -66,6 +66,22 @@ class TupleSpace(
         return self._spaces
 
     @override
+    def __eq__(self, other: object) -> bool:
+        """Return whether two tuple spaces declare the same child spaces."""
+        if type(self) is not TupleSpace:
+            return self is other
+        if type(other) is not TupleSpace:
+            return False
+        return self._spaces == other._spaces
+
+    @override
+    def __hash__(self) -> int:
+        """Return a hash derived from the tuple-space declaration."""
+        if type(self) is not TupleSpace:
+            return object.__hash__(self)
+        return hash((TupleSpace, self._spaces))
+
+    @override
     def normalize(
         self,
         raw_candidate: Sequence[SpaceBoundaryValue],
