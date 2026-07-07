@@ -161,6 +161,62 @@ class BankUpdatePolicyTests:
         assert second_distance == 3.0
         assert metric.call_count == 1
 
+    def test_distance_workspace_seeds_entry_distances(self) -> None:
+        entries = (
+            BankEntry(candidate=1, value=1.0),
+            BankEntry(candidate=4, value=2.0),
+            BankEntry(candidate=8, value=3.0),
+        )
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=metric,
+        )
+
+        workspace.seed_entry_distances(
+            entry_index=1,
+            distances=(3.0, float("nan"), 4.0),
+        )
+
+        assert workspace.distance(0, 1) == 3.0
+        assert workspace.distance(1, 0) == 3.0
+        assert workspace.distance(1, 1) == 0.0
+        assert workspace.distance(1, 2) == 4.0
+        assert workspace.distance(2, 1) == 4.0
+        assert metric.call_count == 0
+
+    def test_distance_workspace_seed_rejects_invalid_nonself_distance(self) -> None:
+        entries = (
+            BankEntry(candidate=1, value=1.0),
+            BankEntry(candidate=4, value=2.0),
+        )
+        workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=CountingDistance(),
+        )
+
+        with pytest.raises(ValueError, match="distance must be finite"):
+            workspace.seed_entry_distances(
+                entry_index=0,
+                distances=(0.0, float("nan")),
+            )
+
+    def test_distance_workspace_seed_rejects_misaligned_distances(self) -> None:
+        entries = (
+            BankEntry(candidate=1, value=1.0),
+            BankEntry(candidate=4, value=2.0),
+        )
+        workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=CountingDistance(),
+        )
+
+        with pytest.raises(ValueError, match="align one-to-one"):
+            workspace.seed_entry_distances(
+                entry_index=0,
+                distances=(0.0,),
+            )
+
     def test_distance_workspace_uses_structured_metric_for_canonical_entries(
         self,
         monkeypatch: pytest.MonkeyPatch,
