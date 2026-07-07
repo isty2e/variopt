@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal, TypeVar
 
 import numpy as np
 import pytest
@@ -25,6 +26,7 @@ from variopt.algorithms.population.csa import (
     CSAPerturbationSchedule,
     CSAPerturbationSpec,
     CSAProfile,
+    CSAProposalPolicy,
     DifferentialEvolutionVariation,
     MixtureVariation,
     RandomResetMutation,
@@ -48,12 +50,13 @@ from variopt.spaces import (
 from variopt.spaces.types import SpaceCandidateValue
 
 ConditionalNumericCandidate = tuple[int, int]
+RequestCandidateT = TypeVar("RequestCandidateT")
 
 
 def _requests(
-    proposals: tuple[Proposal[int], ...],
-) -> tuple[EvaluationRequest[int], ...]:
-    """Lower scalar proposal fixtures into canonical evaluation requests."""
+    proposals: tuple[Proposal[RequestCandidateT], ...],
+) -> tuple[EvaluationRequest[RequestCandidateT], ...]:
+    """Lower proposal fixtures into canonical evaluation requests."""
     return tuple(EvaluationRequest(proposal=proposal) for proposal in proposals)
 
 
@@ -151,6 +154,39 @@ class ConditionalNumericPairSpace(
                 raise TypeError(msg)
             tail_value = self.tail_space.normalize(replacement)
         return (head_value, tail_value)
+
+
+@dataclass(frozen=True)
+class NoActiveNumericPairSpace(ConditionalNumericPairSpace):
+    """Test-only structured space whose valid candidates expose no active leaves."""
+
+    @override
+    def active_leaf_paths(
+        self,
+        candidate: ConditionalNumericCandidate,
+    ) -> tuple[LeafPath, ...]:
+        self.validate(candidate)
+        return ()
+
+
+class ConditionalNumericPairDistance(DiversityMetric[ConditionalNumericCandidate]):
+    """Manhattan distance over test-only conditional numeric pairs."""
+
+    @override
+    def distance(
+        self,
+        left: ConditionalNumericCandidate,
+        right: ConditionalNumericCandidate,
+    ) -> float:
+        return float(abs(left[0] - right[0]) + abs(left[1] - right[1]))
+
+
+class ConditionalNumericPairObjective(Objective[ConditionalNumericCandidate]):
+    """Quadratic objective over test-only conditional numeric pairs."""
+
+    @override
+    def evaluate(self, candidate: ConditionalNumericCandidate) -> float:
+        return float(candidate[0] * candidate[0] + candidate[1] * candidate[1])
 
 
 class IntegerAbsoluteDistance(DiversityMetric[int]):
@@ -528,6 +564,96 @@ class OperatorTests:
 
         assert operator.arity == 2
         assert child == 9
+
+    def test_builtin_mutations_preserve_candidate_when_active_topology_is_empty(
+        self,
+    ) -> None:
+        space = NoActiveNumericPairSpace(
+            head_space=IntegerSpace(0, 0),
+            tail_space=IntegerSpace(0, 0),
+        )
+        candidate = (0, 0)
+        reset_operator = RandomResetMutation(space=space)
+        bounded_operator = BoundedMutation(space=space)
+
+        assert reset_operator.apply(
+            parents=(candidate,),
+            random_state=rng(0),
+        ) == candidate
+        assert reset_operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=rng(0),
+        ) == candidate
+        assert bounded_operator.apply(
+            parents=(candidate,),
+            random_state=rng(0),
+        ) == candidate
+        assert bounded_operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=rng(0),
+        ) == candidate
+
+    @pytest.mark.parametrize("mutation_kind", ["bounded", "reset"])
+    @pytest.mark.parametrize("proposal_policy_enabled", [False, True])
+    def test_csa_ask_preserves_seed_when_active_topology_is_empty(
+        self,
+        proposal_policy_enabled: bool,
+        mutation_kind: Literal["bounded", "reset"],
+    ) -> None:
+        space = NoActiveNumericPairSpace(
+            head_space=IntegerSpace(0, 0),
+            tail_space=IntegerSpace(0, 0),
+        )
+        mutation_operator = (
+            BoundedMutation(space=space)
+            if mutation_kind == "bounded"
+            else RandomResetMutation(space=space)
+        )
+        optimizer = CSAOptimizer(
+            space=space,
+            diversity_metric=ConditionalNumericPairDistance(),
+            bank_capacity=2,
+            profile=CSAProfile(
+                perturbation_schedule=CSAPerturbationSchedule(
+                    mutation_family=(CSAPerturbationSpec(mutation_operator),),
+                    shuffle_children=False,
+                ),
+                proposal_policy=CSAProposalPolicy(enabled=proposal_policy_enabled),
+                seed_count=1,
+                cutoff_schedule=CSACutoffSchedule(
+                    initial_distance_cutoff=1.0,
+                    minimum_distance_cutoff=1.0,
+                ),
+            ),
+            random_state=0,
+        )
+        problem = Problem(space=space, objective=ConditionalNumericPairObjective())
+        evaluator = SequentialEvaluator[
+            ConditionalNumericCandidate,
+            ConditionalNumericCandidate,
+        ]()
+        state = optimizer.create_initial_state()
+
+        initial_proposals, state = optimizer.ask(state, batch_size=2)
+        initial_outcomes = evaluator.evaluate(
+            problem,
+            _requests(initial_proposals),
+        )
+        state = optimizer.tell(
+            state,
+            tuple(outcome.observation for outcome in initial_outcomes),
+        )
+        proposals, state = optimizer.ask(state, batch_size=1)
+        proposal_id = proposals[0].proposal_id
+        assert proposal_id is not None
+        attribution = state.proposal_state.get_pending_attribution(proposal_id)
+
+        assert tuple(proposal.candidate for proposal in proposals) == ((0, 0),)
+        if proposal_policy_enabled:
+            assert attribution is not None
+            assert attribution.mutated_leaf_paths == ()
+        else:
+            assert attribution is None
 
 
 class OptimizationSmokeTests:

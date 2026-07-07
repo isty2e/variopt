@@ -48,10 +48,14 @@ def random_reset_mutation(
     -------
     CandidateT
         Mutated child with selected leaves redrawn from their declared spaces.
+        Returns ``candidate`` unchanged when no leaves are currently active.
     """
     if validate_candidate:
         space.validate(candidate)
     editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
+    if len(editable_paths) == 0:
+        return candidate
+
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
         max_exchange_fraction=max_exchange_fraction,
@@ -147,10 +151,14 @@ def bounded_mutation(
     -------
     CandidateT
         Mutated child with selected leaves perturbed relative to the parent.
+        Returns ``candidate`` unchanged when no leaves are currently active.
     """
     if validate_candidate:
         space.validate(candidate)
     editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
+    if len(editable_paths) == 0:
+        return candidate
+
     exchange_count = sample_exchange_count(
         leaf_count=len(editable_paths),
         max_exchange_fraction=max_perturbation_fraction,
