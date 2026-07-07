@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Mapping
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Generic
 
 from typing_extensions import Self
@@ -48,21 +48,29 @@ class CSAPendingProposals(FrozenGenericSlotsCompat, Generic[CandidateT]):
     """
 
     proposals: tuple[Proposal[CandidateT], ...] = ()
+    _proposal_by_id: dict[str, Proposal[CandidateT]] = field(
+        init=False,
+        repr=False,
+        compare=False,
+        default_factory=dict,
+    )
 
     def __post_init__(self) -> None:
         """Reject duplicate or unkeyed pending proposals."""
-        seen_ids: set[str] = set()
+        proposal_by_id: dict[str, Proposal[CandidateT]] = {}
         for proposal in self.proposals:
             proposal_id = proposal.proposal_id
             if proposal_id is None:
                 msg = "pending proposals must carry proposal ids"
                 raise ValueError(msg)
 
-            if proposal_id in seen_ids:
+            if proposal_id in proposal_by_id:
                 msg = "pending proposals must have distinct proposal ids"
                 raise ValueError(msg)
 
-            seen_ids.add(proposal_id)
+            proposal_by_id[proposal_id] = proposal
+
+        object.__setattr__(self, "_proposal_by_id", proposal_by_id)
 
     @property
     def is_empty(self) -> bool:
@@ -83,11 +91,7 @@ class CSAPendingProposals(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Matching pending proposal, or ``None`` when no such proposal is
             registered.
         """
-        for proposal in self.proposals:
-            if proposal.proposal_id == proposal_id:
-                return proposal
-
-        return None
+        return self._proposal_by_id.get(proposal_id)
 
     def add(self, proposal: Proposal[CandidateT]) -> Self:
         """Return a registry with one additional pending proposal.
@@ -112,7 +116,7 @@ class CSAPendingProposals(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "pending proposals must carry proposal ids"
             raise ValueError(msg)
 
-        if self.get(proposal_id) is not None:
+        if proposal_id in self._proposal_by_id:
             msg = "pending proposals must have distinct proposal ids"
             raise ValueError(msg)
 
@@ -404,9 +408,7 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             assert proposal_id is not None
             next_generation_state = self.generation_state.register_proposal(proposal_id)
 
-        next_pending_proposals = CSAPendingProposals[CandidateT](
-            proposals=self.pending_proposals.proposals + (proposal,),
-        )
+        next_pending_proposals = self.pending_proposals.add(proposal)
 
         return replace(
             self,

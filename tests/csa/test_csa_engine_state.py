@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from typing_extensions import override
 
 from variopt import Observation, Proposal
 from variopt.algorithms.population.csa.banking.bank import Bank, BankEntry
@@ -65,6 +66,15 @@ from variopt.algorithms.population.csa.selection.state import (
 from variopt.randomness import RandomStateSnapshot
 
 
+class EqualityHostileCandidate:
+    """Candidate that fails the test if proposal equality is used accidentally."""
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        del other
+        raise AssertionError("candidate equality must not be used")
+
+
 class CSAPendingProposalsTests:
     """Regression tests for canonical pending-proposal registry behavior."""
 
@@ -77,6 +87,58 @@ class CSAPendingProposalsTests:
 
         with pytest.raises(ValueError, match="distinct proposal ids"):
             _ = CSAPendingProposals[int](proposals=(proposal, proposal))
+
+    def test_lookup_returns_identity_without_candidate_equality(self) -> None:
+        proposals: tuple[Proposal[EqualityHostileCandidate], ...] = (
+            Proposal(candidate=EqualityHostileCandidate(), proposal_id="csa-0"),
+            Proposal(candidate=EqualityHostileCandidate(), proposal_id="csa-1"),
+            Proposal(candidate=EqualityHostileCandidate(), proposal_id="csa-2"),
+        )
+        registry = CSAPendingProposals[EqualityHostileCandidate](proposals=proposals)
+
+        assert registry.get("csa-1") is proposals[1]
+        assert registry.get("missing") is None
+
+    def test_add_rejects_duplicate_ids_without_candidate_equality(self) -> None:
+        registry = CSAPendingProposals[EqualityHostileCandidate](
+            proposals=(
+                Proposal(candidate=EqualityHostileCandidate(), proposal_id="csa-0"),
+            ),
+        )
+        duplicate = Proposal(
+            candidate=EqualityHostileCandidate(),
+            proposal_id="csa-0",
+        )
+
+        with pytest.raises(ValueError, match="distinct proposal ids"):
+            _ = registry.add(duplicate)
+
+    def test_add_appends_and_updates_lookup_index(self) -> None:
+        first = Proposal(candidate=1, proposal_id="csa-0")
+        second = Proposal(candidate=2, proposal_id="csa-1")
+        registry = CSAPendingProposals[int](proposals=(first,))
+
+        next_registry = registry.add(second)
+
+        assert next_registry.proposals == (first, second)
+        assert next_registry.get("csa-0") is first
+        assert next_registry.get("csa-1") is second
+        assert registry.get("csa-1") is None
+
+    def test_remove_many_preserves_order_and_rebuilds_lookup_index(self) -> None:
+        proposals = tuple(
+            Proposal(candidate=index, proposal_id=f"csa-{index}") for index in range(5)
+        )
+        registry = CSAPendingProposals[int](proposals=proposals)
+
+        next_registry = registry.remove_many({"csa-1", "csa-3", "missing"})
+
+        assert next_registry.proposals == (proposals[0], proposals[2], proposals[4])
+        assert next_registry.get("csa-0") is proposals[0]
+        assert next_registry.get("csa-1") is None
+        assert next_registry.get("csa-2") is proposals[2]
+        assert next_registry.get("csa-3") is None
+        assert next_registry.get("csa-4") is proposals[4]
 
 
 class GenerationQueueTests:
