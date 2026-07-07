@@ -589,6 +589,24 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     trace: Trace = field(default_factory=Trace)
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
+    _records_cache: tuple[RunRecordT, ...] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _refinements_cache: (
+        tuple[
+            CandidateRefinement[CandidateT] | None,
+            ...,
+        ]
+        | None
+    ) = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
@@ -618,6 +636,8 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
         object.__setattr__(self, "evaluation_count", evaluation_count)
         object.__setattr__(self, "trace", Trace() if trace is None else trace)
         object.__setattr__(self, "failures", _optional_failure_tuple(failures))
+        object.__setattr__(self, "_records_cache", None)
+        object.__setattr__(self, "_refinements_cache", None)
         self.__post_init__(candidate_equal)
 
     def __post_init__(
@@ -651,12 +671,20 @@ class RunReport(FrozenGenericSlotsCompat, Generic[CandidateT, RunRecordT]):
     @property
     def records(self) -> tuple[RunRecordT, ...]:
         """Return successful attempts as request-aligned record projections."""
-        return materialize_success_records(self.successes)
+        cached_records = self._records_cache
+        if cached_records is None:
+            cached_records = materialize_success_records(self.successes)
+            object.__setattr__(self, "_records_cache", cached_records)
+        return cached_records
 
     @property
     def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
         """Return success-aligned refinement provenance."""
-        return _success_refinements(self.successes)
+        cached_refinements = self._refinements_cache
+        if cached_refinements is None:
+            cached_refinements = _success_refinements(self.successes)
+            object.__setattr__(self, "_refinements_cache", cached_refinements)
+        return cached_refinements
 
     @classmethod
     def from_successes(
@@ -771,6 +799,30 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     trace: Trace = field(default_factory=Trace)
     failures: tuple[EvaluationFailure[CandidateT], ...] = ()
     candidate_equal: InitVar[CandidateEquality[CandidateT] | None] = None
+    _observations_cache: tuple[Observation[CandidateT], ...] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _best_observation_cache: Observation[CandidateT] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _refinements_cache: (
+        tuple[
+            CandidateRefinement[CandidateT] | None,
+            ...,
+        ]
+        | None
+    ) = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
@@ -840,6 +892,9 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
         object.__setattr__(self, "evaluation_count", evaluation_count)
         object.__setattr__(self, "trace", Trace() if trace is None else trace)
         object.__setattr__(self, "failures", _optional_failure_tuple(failures))
+        object.__setattr__(self, "_observations_cache", None)
+        object.__setattr__(self, "_best_observation_cache", None)
+        object.__setattr__(self, "_refinements_cache", None)
         self.__post_init__(post_init_candidate_equal)
 
     def __post_init__(
@@ -902,19 +957,33 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
     @property
     def observations(self) -> tuple[Observation[CandidateT], ...]:
         """Return scalar observations projected from request-owned successes."""
-        return tuple(_observation_from_success(success) for success in self.successes)
+        cached_observations = self._observations_cache
+        if cached_observations is None:
+            cached_observations = tuple(
+                _observation_from_success(success) for success in self.successes
+            )
+            object.__setattr__(self, "_observations_cache", cached_observations)
+        return cached_observations
 
     @property
     def best_observation(self) -> Observation[CandidateT] | None:
         """Return the best scalar observation projection, if any."""
         if self.best_success is None:
             return None
-        return _observation_from_success(self.best_success)
+        cached_observation = self._best_observation_cache
+        if cached_observation is None:
+            cached_observation = _observation_from_success(self.best_success)
+            object.__setattr__(self, "_best_observation_cache", cached_observation)
+        return cached_observation
 
     @property
     def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
         """Return success-aligned refinement provenance."""
-        return _success_refinements(self.successes)
+        cached_refinements = self._refinements_cache
+        if cached_refinements is None:
+            cached_refinements = _success_refinements(self.successes)
+            object.__setattr__(self, "_refinements_cache", cached_refinements)
+        return cached_refinements
 
     @classmethod
     def from_successes(
@@ -1143,6 +1212,36 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         EvaluationSuccess[CandidateT, ObjectiveVectorPayload],
         ...,
     ] = field(default=(), init=False, repr=False, compare=False)
+    _records_cache: tuple[ObjectiveVectorRecord[CandidateT], ...] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _nondominated_records_cache: (
+        tuple[
+            ObjectiveVectorRecord[CandidateT],
+            ...,
+        ]
+        | None
+    ) = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _refinements_cache: (
+        tuple[
+            CandidateRefinement[CandidateT] | None,
+            ...,
+        ]
+        | None
+    ) = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def __init__(
         self,
@@ -1221,6 +1320,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
         object.__setattr__(self, "failures", _optional_failure_tuple(failures))
         object.__setattr__(self, "_validated_frontier_source_successes", ())
         object.__setattr__(self, "_validated_frontier_successes", ())
+        object.__setattr__(self, "_records_cache", None)
+        object.__setattr__(self, "_nondominated_records_cache", None)
+        object.__setattr__(self, "_refinements_cache", None)
         self.__post_init__(post_init_candidate_equal)
 
     @classmethod
@@ -1249,6 +1351,9 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 "failures": failures,
                 "_validated_frontier_source_successes": successes,
                 "_validated_frontier_successes": nondominated_successes,
+                "_records_cache": None,
+                "_nondominated_records_cache": None,
+                "_refinements_cache": None,
             },
         )
         surface.__post_init__(candidate_equal)
@@ -1321,20 +1426,34 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
     @property
     def records(self) -> tuple[ObjectiveVectorRecord[CandidateT], ...]:
         """Return vector records projected from request-owned successes."""
-        return tuple(_vector_record_from_success(success) for success in self.successes)
+        cached_records = self._records_cache
+        if cached_records is None:
+            cached_records = tuple(
+                _vector_record_from_success(success) for success in self.successes
+            )
+            object.__setattr__(self, "_records_cache", cached_records)
+        return cached_records
 
     @property
     def nondominated_records(self) -> tuple[ObjectiveVectorRecord[CandidateT], ...]:
         """Return nondominated vector record projections."""
-        return tuple(
-            _vector_record_from_success(success)
-            for success in self.nondominated_successes
-        )
+        cached_records = self._nondominated_records_cache
+        if cached_records is None:
+            cached_records = tuple(
+                _vector_record_from_success(success)
+                for success in self.nondominated_successes
+            )
+            object.__setattr__(self, "_nondominated_records_cache", cached_records)
+        return cached_records
 
     @property
     def refinements(self) -> tuple[CandidateRefinement[CandidateT] | None, ...]:
         """Return success-aligned refinement provenance."""
-        return _success_refinements(self.successes)
+        cached_refinements = self._refinements_cache
+        if cached_refinements is None:
+            cached_refinements = _success_refinements(self.successes)
+            object.__setattr__(self, "_refinements_cache", cached_refinements)
+        return cached_refinements
 
     @classmethod
     def from_successes(
@@ -1494,6 +1613,8 @@ def run_report_getstate(
         self.evaluation_count,
         self.trace,
         self.failures,
+        None,
+        None,
     ]
 
 
@@ -1505,6 +1626,9 @@ def run_result_getstate(self: RunResult[CandidateT]) -> list[object | None]:
         self.evaluation_count,
         self.trace,
         self.failures,
+        None,
+        None,
+        None,
     ]
 
 
@@ -1520,6 +1644,9 @@ def nondominated_run_surface_getstate(
         self.failures,
         (),
         (),
+        None,
+        None,
+        None,
     ]
 
 
@@ -1539,12 +1666,20 @@ def terminal_surface_setstate(
         object.__setattr__(self, dataclass_field.name, value)
 
     if isinstance(self, RunReport):
+        object.__setattr__(self, "_records_cache", None)
+        object.__setattr__(self, "_refinements_cache", None)
         self.__post_init__(None)
     elif isinstance(self, RunResult):
+        object.__setattr__(self, "_observations_cache", None)
+        object.__setattr__(self, "_best_observation_cache", None)
+        object.__setattr__(self, "_refinements_cache", None)
         self.__post_init__(None)
     else:
         object.__setattr__(self, "_validated_frontier_source_successes", ())
         object.__setattr__(self, "_validated_frontier_successes", ())
+        object.__setattr__(self, "_records_cache", None)
+        object.__setattr__(self, "_nondominated_records_cache", None)
+        object.__setattr__(self, "_refinements_cache", None)
         self.__post_init__(None)
 
 

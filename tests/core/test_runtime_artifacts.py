@@ -286,6 +286,42 @@ def make_int_success(
     )
 
 
+def make_int_observation(
+    candidate: int,
+    proposal_id: str,
+    *,
+    proposal_candidate: int | None = None,
+) -> Observation[int]:
+    """Return a typed scalar observation for terminal-surface tests."""
+    return Observation(
+        proposal=Proposal(
+            candidate=candidate if proposal_candidate is None else proposal_candidate,
+            proposal_id=proposal_id,
+        ),
+        candidate=candidate,
+        value=float(candidate),
+        score=float(candidate),
+    )
+
+
+def make_int_vector_record(
+    candidate: int,
+    proposal_id: str,
+    *,
+    proposal_candidate: int | None = None,
+) -> ObjectiveVectorRecord[int]:
+    """Return a typed one-dimensional vector record for terminal-surface tests."""
+    return ObjectiveVectorRecord.from_objective_values(
+        proposal=Proposal(
+            candidate=candidate if proposal_candidate is None else proposal_candidate,
+            proposal_id=proposal_id,
+        ),
+        candidate=candidate,
+        objective_values=(float(candidate),),
+        directions=(OptimizationDirection.MINIMIZE,),
+    )
+
+
 def make_vector_record_success(
     record: ObjectiveVectorRecord[int],
     *,
@@ -3170,6 +3206,237 @@ class RuntimeArtifactsTests:
         assert result.evaluation_count == 2
         assert report.evaluation_count == 2
         assert surface.evaluation_count == 2
+
+    def test_terminal_projection_properties_cache_materialized_views(self) -> None:
+        observation = make_int_observation(
+            candidate=3,
+            proposal_id="p-1",
+            proposal_candidate=4,
+        )
+        vector_record = make_int_vector_record(
+            candidate=3,
+            proposal_id="v-1",
+            proposal_candidate=4,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+        result = RunResult[int].from_observations(
+            (observation,),
+            refinements=(refinement,),
+        )
+        report = RunReport[int, Observation[int]].from_records(
+            (observation,),
+            refinements=(refinement,),
+        )
+        surface = NondominatedRunSurface[int].from_records(
+            (vector_record,),
+            refinements=(refinement,),
+        )
+
+        assert result.observations is result.observations
+        assert result.best_observation is result.best_observation
+        assert result.refinements is result.refinements
+        assert report.records is report.records
+        assert report.refinements is report.refinements
+        assert surface.records is surface.records
+        assert surface.nondominated_records is surface.nondominated_records
+        assert surface.refinements is surface.refinements
+
+    def test_terminal_projection_caches_are_not_pickled(self) -> None:
+        observation = make_int_observation(
+            candidate=3,
+            proposal_id="p-1",
+            proposal_candidate=4,
+        )
+        vector_record = make_int_vector_record(
+            candidate=3,
+            proposal_id="v-1",
+            proposal_candidate=4,
+        )
+        refinement = CandidateRefinement(
+            source_candidate=4,
+            refined_candidate=3,
+            changed_leaf_paths=((),),
+        )
+        result = RunResult[int].from_observations(
+            (observation,),
+            refinements=(refinement,),
+        )
+        report = RunReport[int, Observation[int]].from_records(
+            (observation,),
+            refinements=(refinement,),
+        )
+        surface = NondominatedRunSurface[int].from_records(
+            (vector_record,),
+            refinements=(refinement,),
+        )
+        _ = result.observations
+        _ = result.best_observation
+        _ = result.refinements
+        _ = report.records
+        _ = report.refinements
+        _ = surface.records
+        _ = surface.nondominated_records
+        _ = surface.refinements
+
+        cache_fields_by_surface: tuple[tuple[object, tuple[str, ...]], ...] = (
+            (
+                result,
+                (
+                    "_observations_cache",
+                    "_best_observation_cache",
+                    "_refinements_cache",
+                ),
+            ),
+            (report, ("_records_cache", "_refinements_cache")),
+            (
+                surface,
+                (
+                    "_records_cache",
+                    "_nondominated_records_cache",
+                    "_refinements_cache",
+                ),
+            ),
+        )
+        for terminal_surface, cache_field_names in cache_fields_by_surface:
+            pickle_state = terminal_surface_pickle_hooks(
+                terminal_surface
+            ).__getstate__()
+            field_names = tuple(
+                dataclass_field.name for dataclass_field in fields(terminal_surface)
+            )
+
+            assert all(
+                pickle_state[field_names.index(cache_field_name)] is None
+                for cache_field_name in cache_field_names
+            )
+
+    def test_terminal_projection_caches_reset_after_replace(self) -> None:
+        observation = make_int_observation(candidate=1, proposal_id="p-1")
+        replacement_observation = make_int_observation(candidate=2, proposal_id="p-2")
+        vector_record = make_int_vector_record(candidate=1, proposal_id="v-1")
+        replacement_vector_record = make_int_vector_record(
+            candidate=2,
+            proposal_id="v-2",
+        )
+        result = RunResult[int].from_observations((observation,))
+        report = RunReport[int, Observation[int]].from_records((observation,))
+        surface = NondominatedRunSurface[int].from_records((vector_record,))
+        replacement_report = RunReport[int, Observation[int]].from_records(
+            (replacement_observation,)
+        )
+        replacement_surface = NondominatedRunSurface[int].from_records(
+            (replacement_vector_record,)
+        )
+        cached_observations = result.observations
+        cached_records = report.records
+        cached_surface_records = surface.records
+
+        updated_result = replace(result, observations=(replacement_observation,))
+        updated_report = replace(
+            report,
+            successes=replacement_report.successes,
+            evaluation_count=replacement_report.evaluation_count,
+        )
+        updated_surface = replace(
+            surface,
+            nondominated_successes=replacement_surface.nondominated_successes,
+            successes=replacement_surface.successes,
+            evaluation_count=replacement_surface.evaluation_count,
+        )
+
+        assert updated_result.observations == (replacement_observation,)
+        assert updated_result.observations is not cached_observations
+        assert updated_report.records == (replacement_observation,)
+        assert updated_report.records is not cached_records
+        assert updated_surface.records == (replacement_vector_record,)
+        assert updated_surface.records is not cached_surface_records
+
+    def test_terminal_projection_caches_reset_after_pickle_round_trip(self) -> None:
+        observation = make_int_observation(candidate=1, proposal_id="p-1")
+        vector_record = make_int_vector_record(candidate=1, proposal_id="v-1")
+        result = RunResult[int].from_observations((observation,))
+        report = RunReport[int, Observation[int]].from_records((observation,))
+        surface = NondominatedRunSurface[int].from_records((vector_record,))
+        cached_observations = result.observations
+        cached_records = report.records
+        cached_surface_records = surface.records
+
+        restored_result = cast(RunResult[int], pickle.loads(pickle.dumps(result)))
+        restored_report = cast(
+            RunReport[int, Observation[int]],
+            pickle.loads(pickle.dumps(report)),
+        )
+        restored_surface = cast(
+            NondominatedRunSurface[int],
+            pickle.loads(pickle.dumps(surface)),
+        )
+
+        assert restored_result.observations == cached_observations
+        assert restored_result.observations is restored_result.observations
+        assert restored_result.observations is not cached_observations
+        assert restored_report.records == cached_records
+        assert restored_report.records is restored_report.records
+        assert restored_report.records is not cached_records
+        assert restored_surface.records == cached_surface_records
+        assert restored_surface.records is restored_surface.records
+        assert restored_surface.records is not cached_surface_records
+
+    def test_terminal_surface_setstate_ignores_injected_projection_caches(
+        self,
+    ) -> None:
+        observation = make_int_observation(candidate=1, proposal_id="p-1")
+        stale_observation = make_int_observation(candidate=99, proposal_id="stale")
+        vector_record = make_int_vector_record(candidate=1, proposal_id="v-1")
+        stale_vector_record = make_int_vector_record(
+            candidate=99,
+            proposal_id="stale-vector",
+        )
+        result = RunResult[int].from_observations((observation,))
+        report = RunReport[int, Observation[int]].from_records((observation,))
+        surface = NondominatedRunSurface[int].from_records((vector_record,))
+
+        result_state = terminal_surface_pickle_state_with_field(
+            result,
+            field_name="_observations_cache",
+            value=(stale_observation,),
+        )
+        result_field_names = tuple(
+            dataclass_field.name for dataclass_field in fields(result)
+        )
+        result_state[result_field_names.index("_best_observation_cache")] = (
+            stale_observation
+        )
+        terminal_surface_pickle_hooks(result).__setstate__(result_state)
+
+        report_state = terminal_surface_pickle_state_with_field(
+            report,
+            field_name="_records_cache",
+            value=(stale_observation,),
+        )
+        terminal_surface_pickle_hooks(report).__setstate__(report_state)
+
+        surface_state = terminal_surface_pickle_state_with_field(
+            surface,
+            field_name="_records_cache",
+            value=(stale_vector_record,),
+        )
+        surface_field_names = tuple(
+            dataclass_field.name for dataclass_field in fields(surface)
+        )
+        surface_state[surface_field_names.index("_nondominated_records_cache")] = (
+            stale_vector_record,
+        )
+        terminal_surface_pickle_hooks(surface).__setstate__(surface_state)
+
+        assert result.observations == (observation,)
+        assert result.best_observation == observation
+        assert report.records == (observation,)
+        assert surface.records == (vector_record,)
+        assert surface.nondominated_records == (vector_record,)
 
     def test_terminal_artifacts_default_count_includes_failure_cost(self) -> None:
         proposal = Proposal(candidate=4, proposal_id="p-1")
