@@ -9,8 +9,10 @@ on:
       - "mkdocs.yml"
       - "CHANGELOG.md"
       - "pyproject.toml"
+      - ".gitignore"
       - ".github/scripts/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/docs.yml"
   push:
     branches: [main]
     paths:
@@ -20,8 +22,10 @@ on:
       - "mkdocs.yml"
       - "CHANGELOG.md"
       - "pyproject.toml"
+      - ".gitignore"
       - ".github/scripts/**"
       - ".github/workflows/ci.yml"
+      - ".github/workflows/docs.yml"
 
 jobs:
   quality:

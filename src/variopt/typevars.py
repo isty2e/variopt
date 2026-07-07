@@ -5,7 +5,6 @@ from typing import TypeVar
 CandidateT = TypeVar("CandidateT")
 EvaluationT = TypeVar("EvaluationT")
 EvaluationRequestT = TypeVar("EvaluationRequestT")
-EvaluationRecordT = TypeVar("EvaluationRecordT")
 InputT = TypeVar("InputT", contravariant=True)
 ObservationT = TypeVar("ObservationT")
 ProblemT = TypeVar("ProblemT")

@@ -126,3 +126,21 @@ usage cycle.
   relevant release.
 - The docs build is gated by `mkdocs build --strict` in CI so that renamed or
   removed public names surface as autoref failures before release.
+
+## Repository Workflow Policy
+
+`pyproject.toml` is the authoritative dependency and package-metadata source
+for this library. A checkout may contain a local `uv.lock` for developer
+convenience, but that file is intentionally ignored by git and excluded from
+source distributions. CI resolves from `pyproject.toml` rather than enforcing a
+project lockfile. If the project later needs locked CI resolution, the lockfile
+policy should change explicitly and the lockfile should become tracked release
+metadata.
+
+CI action references use version tags rather than commit SHAs. That is an
+accepted tradeoff for the current library workflow because the workflows run
+tests, docs builds, wheel builds, and installed-package smoke checks; they do
+not publish releases or deploy documentation. Changes to workflow action
+versions are reviewed as repository changes. The docs workflow currently builds
+the MkDocs site only; publication of rendered documentation is outside the CI
+contract.
