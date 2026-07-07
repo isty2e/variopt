@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal, cast
 
+import numpy as np
 import pytest
 from typing_extensions import override
 
@@ -216,6 +217,42 @@ class BankUpdatePolicyTests:
                 entry_index=0,
                 distances=(0.0,),
             )
+
+    @pytest.mark.parametrize("entry_count", [8, 1024])
+    def test_bank_select_parents_is_seed_reproducible_without_replacement(
+        self,
+        entry_count: int,
+    ) -> None:
+        bank = Bank(
+            capacity=entry_count,
+            entries=tuple(
+                BankEntry(candidate=index, value=float(index))
+                for index in range(entry_count)
+            ),
+        )
+
+        first = bank.select_parents(4, np.random.RandomState(123))
+        second = bank.select_parents(4, np.random.RandomState(123))
+
+        assert first == second
+        assert len(first) == 4
+        assert len(set(first)) == 4
+        assert all(candidate in range(entry_count) for candidate in first)
+
+    def test_bank_select_parents_full_arity_returns_all_candidates(self) -> None:
+        entry_count = 1024
+        bank = Bank(
+            capacity=entry_count,
+            entries=tuple(
+                BankEntry(candidate=index, value=float(index))
+                for index in range(entry_count)
+            ),
+        )
+
+        selected = bank.select_parents(entry_count, np.random.RandomState(123))
+
+        assert len(selected) == entry_count
+        assert set(selected) == set(range(entry_count))
 
     def test_distance_workspace_uses_structured_metric_for_canonical_entries(
         self,
