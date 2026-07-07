@@ -27,7 +27,6 @@ from ....execution import (
 from ....json_types import JSONDict, JSONValue
 from ....kernel import ProposalLocalSearchContext
 from ....methods import RunMethod
-from ....outcomes import EvaluationOutcome
 from ....randomness import (
     RandomSeed,
     RandomStateSnapshot,
@@ -644,50 +643,6 @@ class CSAOptimizer(
             observations,
         )
 
-    def tell_outcomes(
-        self,
-        state: CSAEngineState[CandidateT],
-        outcomes: Sequence[
-            EvaluationOutcome[OutcomeCandidateT, Observation[CandidateT]]
-        ],
-    ) -> CSAEngineState[CandidateT]:
-        """Advance CSA state with full outcomes when refinement metadata exists.
-
-        Parameters
-        ----------
-        state : CSAEngineState[CandidateT]
-            Current immutable engine state.
-        outcomes : Sequence[EvaluationOutcome[OutcomeCandidateT, Observation[CandidateT]]]
-            Evaluation outcomes aligned with currently pending proposals.
-
-        Returns
-        -------
-        CSAEngineState[CandidateT]
-            Updated immutable engine state after score, bank, and lifecycle
-            updates.
-        """
-        observations: list[Observation[CandidateT]] = []
-        explicit_paths: list[tuple[LeafPath, ...] | None] | None = None
-        for outcome_index, outcome in enumerate(outcomes):
-            observations.append(outcome.record)
-            refinement = outcome.refinement
-            if explicit_paths is not None:
-                explicit_paths.append(
-                    None if refinement is None else refinement.changed_leaf_paths
-                )
-            elif refinement is not None:
-                explicit_paths = [None for _index in range(outcome_index)]
-                explicit_paths.append(refinement.changed_leaf_paths)
-
-        if explicit_paths is None:
-            return self.tell(state, tuple(observations))
-
-        return self._tell_with_explicit_local_displacements(
-            state,
-            tuple(observations),
-            explicit_local_displacement_leaf_paths=tuple(explicit_paths),
-        )
-
     def _tell_successes(
         self,
         state: CSAEngineState[CandidateT],
@@ -764,6 +719,9 @@ class CSAOptimizer(
         ):
             return self._tell_with_explicit_local_displacements(next_state, ())
 
+        # A fully issued generation can fail without producing buffered
+        # observations. Failed proposal consumption already resets that runtime
+        # to an idle, checkpoint-safe state; there is no bank evidence to apply.
         return next_state
 
     def _validate_failed_attempt_proposal_ids(
@@ -800,10 +758,6 @@ class CSAOptimizer(
             pending_proposal = state.pending_proposals.get(proposal_id)
             if pending_proposal is None:
                 msg = "failed attempt does not correspond to a pending proposal"
-                raise ValueError(msg)
-
-            if pending_proposal is not proposal and pending_proposal != proposal:
-                msg = "failed attempt proposal does not match the pending proposal"
                 raise ValueError(msg)
 
             failed_proposal_ids.add(proposal_id)
