@@ -31,6 +31,10 @@ from tests.csa_support import (
     select_partner_indices,
     should_use_reference_primary,
 )
+from variopt.randomness import (
+    random_state_choice_indices_without_replacement,
+    random_state_randints,
+)
 
 
 @final
@@ -44,6 +48,25 @@ class CountingDistance(DiversityMetric[int]):
     def distance(self, left: int, right: int) -> float:
         self.call_count += 1
         return float(abs(left - right))
+
+
+def select_partner_indices_materialized_reference(
+    *,
+    entries: tuple[BankEntry[int], ...],
+    seed_index: int,
+    partner_count: int,
+    random_state: np.random.RandomState,
+) -> tuple[int, ...]:
+    """Select partners through the pre-fast-path materialized-index contract."""
+    available_indices = tuple(
+        index for index in range(len(entries)) if index != seed_index
+    )
+    selected_positions = random_state_choice_indices_without_replacement(
+        random_state,
+        len(available_indices),
+        partner_count,
+    )
+    return tuple(available_indices[position] for position in selected_positions)
 
 
 class CSASelectionTests(CSAOptimizerTestCase):
@@ -241,6 +264,42 @@ class CSASelectionTests(CSAOptimizerTestCase):
         )
 
         assert partner_indices == (1,)
+
+    def test_unmasked_partner_selection_preserves_rng_trajectory(self) -> None:
+        entries = tuple(
+            BankEntry(candidate=index, value=float(index))
+            for index in range(32)
+        )
+        fast_random_state = np.random.RandomState(17)
+        fallback_random_state = np.random.RandomState(17)
+
+        fast_indices = select_partner_indices(
+            entries=entries,
+            seed_index=11,
+            partner_count=4,
+            partner_mask=frozenset(),
+            distance_between_indices=lambda left, right: float(abs(left - right)),
+            weighted_partner_selection=False,
+            random_state=fast_random_state,
+        )
+        fallback_indices = select_partner_indices_materialized_reference(
+            entries=entries,
+            seed_index=11,
+            partner_count=4,
+            random_state=fallback_random_state,
+        )
+
+        assert fast_indices == fallback_indices
+        fast_followup = random_state_randints(fast_random_state, 0, 1_000_000, 16)
+        fallback_followup = random_state_randints(
+            fallback_random_state,
+            0,
+            1_000_000,
+            16,
+        )
+        assert fast_followup.shape == fallback_followup.shape
+        assert fast_followup.dtype == fallback_followup.dtype
+        assert fast_followup.tobytes() == fallback_followup.tobytes()
 
     def test_initial_variation_uses_bank_primary_after_first_cycle(self) -> None:
         optimizer = make_optimizer(

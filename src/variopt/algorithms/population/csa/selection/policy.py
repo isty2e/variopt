@@ -187,9 +187,33 @@ def select_partner_indices(
     if partner_count <= 0:
         return ()
 
+    entry_count = len(entries)
+    if (
+        not weighted_partner_selection
+        and not partner_mask
+        and 0 <= seed_index < entry_count
+    ):
+        available_count = entry_count - 1
+        if available_count < partner_count:
+            msg = "bank does not contain enough partners for the requested arity"
+            raise ValueError(msg)
+
+        # Preserve the materialized-list RNG trajectory by drawing positions
+        # from the same ``entry_count - 1`` population, then remapping over the
+        # skipped seed index.
+        selected_positions = random_state_choice_indices_without_replacement(
+            random_state,
+            available_count,
+            partner_count,
+        )
+        return tuple(
+            position if position < seed_index else position + 1
+            for position in selected_positions
+        )
+
     available_indices = [
         index
-        for index in range(len(entries))
+        for index in range(entry_count)
         if index != seed_index and index not in partner_mask
     ]
     if len(available_indices) < partner_count:
