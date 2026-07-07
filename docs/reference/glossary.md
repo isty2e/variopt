@@ -65,7 +65,9 @@ values; execution layers own request identity, success/failure attempt
 recording, and compatibility projection into request-aligned payloads while
 legacy record-consuming APIs remain. Specialisations include
 `ScalarEvaluationProtocol`, `ObservationEvaluationProtocol`, and
-`InteractionEvaluationProtocol`. See
+`InteractionEvaluationProtocol`. Direction-free protocols do not accept scalar
+optimization direction; pass `direction` only for `Objective` or
+`ObservationEvaluationProtocol` problem inputs. See
 [`EvaluationProtocol`][variopt.EvaluationProtocol].
 
 ## ObservationPayload
