@@ -38,6 +38,11 @@ format. Stability guarantees for the public surface are documented in the
   rejects equal-but-different scalar runtime types, and non-finite categorical
   float choices or non-canonical structured scalar values are rejected at the
   relevant space boundary.
+- Structured space declarations now reject more malformed metadata at
+  construction time. `RealSpace` bounds must be canonical `float` values,
+  `ArraySpace.length` must be a positive canonical `int`, and structured
+  candidate JSON codecs reject cyclic or excessively deep container payloads
+  instead of relying on interpreter recursion limits.
 - CSA checkpoint JSON codecs now fail loudly on malformed numeric payloads.
   Boolean values are no longer accepted where checkpoint fields require JSON
   integers or numbers, and non-finite bank/growth/clustering numeric values are

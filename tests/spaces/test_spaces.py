@@ -293,6 +293,23 @@ class SearchSpaceTests:
         with pytest.raises(ValueError):
             _ = RealSpace(low=0.0, high=1.0, scale="log")
 
+    @pytest.mark.parametrize(
+        ("low", "high"),
+        [
+            (cast(float, 0), 1.0),
+            (0.0, cast(float, 1)),
+            (cast(float, True), 1.0),
+            (0.0, cast(float, np.float64(1.0))),
+        ],
+    )
+    def test_real_space_rejects_noncanonical_bounds(
+        self,
+        low: float,
+        high: float,
+    ) -> None:
+        with pytest.raises(TypeError, match="canonical floats"):
+            _ = RealSpace(low=low, high=high)
+
     def test_integer_space_rejects_bool(self) -> None:
         space = IntegerSpace(low=0, high=3)
 
@@ -627,6 +644,11 @@ class SearchSpaceTests:
 
         with pytest.raises(TypeError):
             _ = ArraySpace(IntegerSpace(0, 9), length=cast(int, 2.5))
+
+    @pytest.mark.parametrize("length", [0, -1])
+    def test_array_space_rejects_non_positive_length(self, length: int) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            _ = ArraySpace(IntegerSpace(0, 9), length=length)
 
     def test_array_space_sampling_is_deterministic_for_same_seed(self) -> None:
         space = ArraySpace(RealSpace(-1.0, 1.0), length=4)

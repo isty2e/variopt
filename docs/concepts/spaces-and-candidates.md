@@ -38,7 +38,9 @@ that affect sampling and normalization transparently.
 Composite spaces compose leaf spaces into richer structures. A `RecordSpace`
 produces `RecordCandidate` mapping values with named fields; a `TupleSpace`
 produces `tuple` candidates; an `ArraySpace` produces fixed-length
-homogeneous sequences.
+homogeneous sequences with a positive declared length. Declaration metadata is
+canonical: for example, `RealSpace` bounds are floats, while integer bounds
+belong to `IntegerSpace`.
 
 Built-in structured spaces also expose validated-candidate leaf traversal hooks.
 These are operation-local fast paths for optimizers and kernels that already

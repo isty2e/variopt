@@ -119,12 +119,18 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
 
         Raises
         ------
+        TypeError
+            If bounds are not canonical floats.
         ValueError
             If bounds are non-finite, out of order, incompatible with the
             declared scale, or if ``scale`` is not supported.
         """
-        low = float(self.low)
-        high = float(self.high)
+        if type(self.low) is not float or type(self.high) is not float:
+            msg = "RealSpace bounds must be canonical floats"
+            raise TypeError(msg)
+
+        low = self.low
+        high = self.high
 
         if not np.isfinite(low) or not np.isfinite(high):
             msg = "RealSpace bounds must be finite"
