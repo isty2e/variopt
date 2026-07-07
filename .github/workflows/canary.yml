@@ -1,0 +1,73 @@
+name: dependency canary
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+jobs:
+  latest-resolution:
+    name: latest dependency resolution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: false
+      - name: Lint with latest compatible dependencies
+        run: uv run --upgrade --python 3.13 --extra test ruff check pyproject.toml src tests .github/scripts
+      - name: Type check with latest compatible dependencies
+        run: uv run --upgrade --python 3.13 --extra test basedpyright src tests .github/scripts
+      - name: Test with latest compatible dependencies
+        run: uv run --upgrade --python 3.13 --extra test pytest tests -q
+      - name: Build docs with latest compatible dependencies
+        run: uv run --upgrade --python 3.13 --extra docs mkdocs build --strict
+      - name: Build wheel
+        run: uv build --wheel
+      - name: Smoke installed base wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_path="$(ls dist/*.whl)"
+          smoke_dir="${RUNNER_TEMP}/variopt-base-canary"
+          python -m venv "${smoke_dir}"
+          "${smoke_dir}/bin/python" -m pip install --upgrade pip
+          "${smoke_dir}/bin/python" -m pip install "${wheel_path}"
+          cd "${RUNNER_TEMP}"
+          "${smoke_dir}/bin/python" "${GITHUB_WORKSPACE}/.github/scripts/smoke_imports.py" \
+            --surface base \
+            --surface joblib-private
+
+  mpi-latest-resolution:
+    name: latest MPI extra resolution
+    runs-on: ubuntu-latest
+    needs: latest-resolution
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: false
+      - name: Install MPI runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+      - name: Build wheel
+        run: uv build --wheel
+      - name: Smoke installed MPI extra
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_path="$(ls dist/*.whl)"
+          smoke_dir="${RUNNER_TEMP}/variopt-mpi-canary"
+          python -m venv "${smoke_dir}"
+          "${smoke_dir}/bin/python" -m pip install --upgrade pip
+          "${smoke_dir}/bin/python" -m pip install "${wheel_path}[mpi]"
+          cd "${RUNNER_TEMP}"
+          "${smoke_dir}/bin/python" "${GITHUB_WORKSPACE}/.github/scripts/smoke_imports.py" \
+            --surface mpi
