@@ -6,7 +6,7 @@ from typing import Protocol, TypeAlias, final, runtime_checkable
 import pytest
 from typing_extensions import override
 
-import variopt.study.stale_async as stale_async_execution
+import variopt.study.assimilation as study_assimilation
 from tests.study_support import (
     AttemptOutOfOrderAsyncEvaluator,
     FailingCandidateObjective,
@@ -923,7 +923,7 @@ class StudyStaleAsyncTests:
             evaluator=evaluator,
         )
         trace_counter = StaleAsyncTraceFactoryCounter()
-        monkeypatch.setattr(stale_async_execution, "Trace", trace_counter)
+        monkeypatch.setattr(study_assimilation, "Trace", trace_counter)
 
         report, final_state = study.run(
             max_evaluations=3,

@@ -8,7 +8,7 @@ from typing import Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 import pytest
 from typing_extensions import override
 
-import variopt.study.execution as study_execution
+import variopt.study.assimilation as study_assimilation
 from tests.study_support import (
     BatchQueueOptimizer,
     BatchQueueOptimizerState,
@@ -1926,7 +1926,7 @@ class StudyTests:
             evaluator=evaluator,
         )
         trace_counter = TraceFactoryCounter()
-        monkeypatch.setattr(study_execution, "Trace", trace_counter)
+        monkeypatch.setattr(study_assimilation, "Trace", trace_counter)
 
         report, final_state = study.run(
             max_evaluations=5,

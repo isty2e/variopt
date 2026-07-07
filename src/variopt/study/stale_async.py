@@ -10,15 +10,10 @@ from typing_extensions import TypeVar
 from ..artifacts import (
     EvaluationAttemptBatch,
     EvaluationAttemptMaterializer,
-    EvaluationFailure,
     EvaluationRequest,
-    EvaluationSuccess,
     Proposal,
     ProposalEvaluationSpec,
     RunReport,
-    Trace,
-    TraceEvent,
-    materialize_success_records,
 )
 from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
 from ..execution import (
@@ -31,6 +26,11 @@ from ..methods import RunMethod
 from ..problem import Problem
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
+from .assimilation import (
+    StudyAssimilatedStep,
+    StudyRunHistory,
+    materialize_feedback_attempts,
+)
 from .common import (
     CheckpointSafeRunSnapshot,
     StudyEvaluator,
@@ -38,14 +38,7 @@ from .common import (
     StudyRecordT,
     build_evaluation_requests,
     supports_attempt_batch_sessions,
-    trace_value_for_records,
     validate_aligned_attempts,
-    validate_materialized_attempts,
-)
-from .failures import (
-    RunExecutionFailed,
-    build_checkpoint_safe_report_or_raise_cause,
-    build_run_report_or_raise_cause,
 )
 from .validation import require_async_evaluator, validate_execution_request
 
@@ -387,9 +380,7 @@ def run_stale_async(
 
     _validate_stale_async_run_request(study, batch_size=batch_size)
 
-    successes: list[EvaluationSuccess[CandidateT, StudyRecordT]] = []
-    failures: list[EvaluationFailure[CandidateT]] = []
-    trace_events: list[TraceEvent] = []
+    run_history = StudyRunHistory[CandidateT, RunMethodStateT, StudyRecordT]()
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
     )
@@ -402,13 +393,7 @@ def run_stale_async(
     safe_snapshot: CheckpointSafeRunSnapshot[RunMethodStateT] | None = None
     unsafe_since_safe_snapshot = False
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
-        safe_snapshot = CheckpointSafeRunSnapshot(
-            success_count=0,
-            failure_count=0,
-            trace_event_count=0,
-            evaluation_count=0,
-            state=state,
-        )
+        safe_snapshot = run_history.checkpoint_snapshot(state)
     active_sessions: list[StaleAsyncActiveBatchSession[CandidateT, StudyPayloadT]] = []
 
     try:
@@ -454,16 +439,11 @@ def run_stale_async(
                 if len(completed_groups) > 0:
                     completed_any = True
                 for completed_group in completed_groups:
-                    feedback_group = study.attempt_materializer.materialize_attempts(
-                        completed_group
-                    )
-                    validate_materialized_attempts(
+                    feedback_group = materialize_feedback_attempts(
                         completed_group,
-                        feedback_group,
+                        study.attempt_materializer,
                         candidate_equal=study.problem.space.candidates_equal,
                     )
-                    group_successes = feedback_group.successes
-                    group_records = materialize_success_records(group_successes)
                     group_evaluation_count = completed_group.evaluation_count
                     if evaluation_budget is not None:
                         unmetered_evaluation_count = (
@@ -471,21 +451,18 @@ def run_stale_async(
                         )
                         if unmetered_evaluation_count > 0:
                             evaluation_budget.consume(unmetered_evaluation_count)
+                        step_evaluation_count = group_evaluation_count
                     else:
                         record_budget_remaining -= completed_group.attempt_count
-                    successes.extend(group_successes)
-                    failures.extend(feedback_group.failures)
-                    trace_events.append(
-                        TraceEvent(
-                            kind="study.step",
-                            message=(
-                                f"completed {feedback_group.attempt_count} attempt(s): "
-                                f"{len(group_records)} succeeded, "
-                                f"{len(feedback_group.failures)} failed"
-                            ),
-                            value=trace_value_for_records(group_records),
-                        ),
+                        step_evaluation_count = completed_group.attempt_count
+                    step = StudyAssimilatedStep[
+                        CandidateT,
+                        StudyRecordT,
+                    ].from_attempts(
+                        feedback_group,
+                        evaluation_count=step_evaluation_count,
                     )
+                    run_history.append_step(step)
                     next_state = study.run_method.tell_attempts(
                         state,
                         feedback_group,
@@ -495,24 +472,12 @@ def run_stale_async(
                         stop_at_checkpoint_boundary
                         and study.run_method.is_checkpoint_safe_state(state)
                     ):
-                        safe_snapshot = CheckpointSafeRunSnapshot(
-                            success_count=len(successes),
-                            failure_count=len(failures),
-                            trace_event_count=len(trace_events),
-                            evaluation_count=(
-                                max_evaluations - record_budget_remaining
-                                if evaluation_budget is None
-                                else max_evaluations - evaluation_budget.remaining
-                            ),
-                            state=state,
-                        )
+                        safe_snapshot = run_history.checkpoint_snapshot(state)
                         if unsafe_since_safe_snapshot:
                             _cancel_active_stale_async_sessions(active_sessions)
                             return (
-                                safe_snapshot.to_report(
-                                    successes=successes,
-                                    failures=failures,
-                                    trace_events=trace_events,
+                                run_history.checkpoint_report(
+                                    safe_snapshot,
                                     candidate_equal=(
                                         study.problem.space.candidates_equal
                                     ),
@@ -559,10 +524,8 @@ def run_stale_async(
         _cancel_active_stale_async_sessions(active_sessions)
         if stop_at_checkpoint_boundary and safe_snapshot is not None:
             return (
-                safe_snapshot.to_report(
-                    successes=successes,
-                    failures=failures,
-                    trace_events=trace_events,
+                run_history.checkpoint_report(
+                    safe_snapshot,
                     candidate_equal=study.problem.space.candidates_equal,
                 ),
                 safe_snapshot.state,
@@ -570,47 +533,18 @@ def run_stale_async(
         raise
     except Exception as exception:
         _cancel_active_stale_async_sessions(active_sessions)
-        partial_report = build_run_report_or_raise_cause(
-            cause=exception,
-            successes=tuple(successes),
-            evaluation_count=(
-                max_evaluations - record_budget_remaining
-                if evaluation_budget is None
-                else max_evaluations - evaluation_budget.remaining
-            ),
-            trace=Trace(events=tuple(trace_events)),
-            failures=tuple(failures),
-            candidate_equal=study.problem.space.candidates_equal,
+        current_evaluation_count = (
+            max_evaluations - record_budget_remaining
+            if evaluation_budget is None
+            else max_evaluations - evaluation_budget.remaining
         )
-        checkpoint_safe_report: (
-            RunReport[
-                CandidateT,
-                StudyRecordT,
-            ]
-            | None
-        ) = None
-        checkpoint_safe_state: RunMethodStateT | None = None
-        if safe_snapshot is not None:
-            checkpoint_safe_report = build_checkpoint_safe_report_or_raise_cause(
-                cause=exception,
-                snapshot=safe_snapshot,
-                successes=successes,
-                failures=failures,
-                trace_events=trace_events,
-                candidate_equal=study.problem.space.candidates_equal,
-            )
-            checkpoint_safe_state = safe_snapshot.state
-        raise RunExecutionFailed[
-            CandidateT,
-            RunMethodStateT,
-            StudyRecordT,
-        ](
-            partial_report=partial_report,
-            partial_state=state,
-            checkpoint_safe_report=checkpoint_safe_report,
-            checkpoint_safe_state=checkpoint_safe_state,
+        run_history.raise_run_execution_failed(
             cause=exception,
-        ) from exception
+            state=state,
+            safe_snapshot=safe_snapshot,
+            candidate_equal=study.problem.space.candidates_equal,
+            evaluation_count=current_evaluation_count,
+        )
     except BaseException:
         _cancel_active_stale_async_sessions(active_sessions)
         raise
@@ -624,25 +558,15 @@ def run_stale_async(
             )
             raise RuntimeError(msg)
         return (
-            safe_snapshot.to_report(
-                successes=successes,
-                failures=failures,
-                trace_events=trace_events,
+            run_history.checkpoint_report(
+                safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             ),
             safe_snapshot.state,
         )
 
     return (
-        RunReport[CandidateT, StudyRecordT].from_successes(
-            successes=successes,
-            evaluation_count=(
-                max_evaluations - record_budget_remaining
-                if evaluation_budget is None
-                else max_evaluations - evaluation_budget.remaining
-            ),
-            trace=Trace(events=tuple(trace_events)),
-            failures=tuple(failures),
+        run_history.to_report(
             candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
