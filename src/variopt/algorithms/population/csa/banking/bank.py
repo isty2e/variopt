@@ -19,7 +19,10 @@ from .....json_types import (
     require_json_mapping,
     require_json_optional_str,
 )
-from .....randomness import random_state_permutation_indices
+from .....randomness import (
+    random_state_choice_indices_without_replacement,
+    random_state_permutation_indices,
+)
 from .....typevars import CandidateT
 
 
@@ -252,7 +255,23 @@ class Bank(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "bank does not contain enough entries for the requested arity"
             raise ValueError(msg)
 
-        indices = random_state_permutation_indices(random_state, len(self.entries))
+        entry_count = len(self.entries)
+        # ``choice`` avoids materializing a full permutation only for strict
+        # large-subset sampling. Whole-bank selection is exactly a permutation,
+        # and small banks benchmark faster on the lower-overhead permutation path.
+        strict_subset_choice_entry_threshold = 512
+        selects_entire_bank = arity == entry_count
+        small_bank_prefers_permutation = (
+            entry_count < strict_subset_choice_entry_threshold
+        )
+        if selects_entire_bank or small_bank_prefers_permutation:
+            indices = random_state_permutation_indices(random_state, entry_count)[:arity]
+        else:
+            indices = random_state_choice_indices_without_replacement(
+                random_state,
+                entry_count,
+                arity,
+            )
         return tuple(
-            self.entries[index].candidate for index in indices[:arity]
+            self.entries[index].candidate for index in indices
         )
