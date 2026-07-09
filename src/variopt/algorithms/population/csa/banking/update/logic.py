@@ -30,7 +30,43 @@ from ..queries import (
 )
 from .admission import admit_observation, replace_bank_entry
 from .policy import CSABankUpdatePolicy
-from .result import BankUpdateResult, changed_indices, significant_update_indices
+from .result import (
+    BankAdmissionResult,
+    BankUpdateResult,
+    CSABankTransition,
+    CSABankTransitionRoute,
+    changed_indices,
+    significant_update_indices,
+)
+
+
+def _require_transition_observations(
+    *,
+    bank: Bank[CandidateT],
+    observations: Sequence[Observation[CandidateT]],
+) -> tuple[tuple[Observation[CandidateT], str], ...]:
+    """Return stable observation/id pairs suitable for transition reduction."""
+    existing_proposal_ids = {
+        entry.proposal_id for entry in bank.entries if entry.proposal_id is not None
+    }
+    batch_proposal_ids: set[str] = set()
+    validated_observations: list[tuple[Observation[CandidateT], str]] = []
+    for observation in observations:
+        proposal_id = observation.proposal.proposal_id
+        if proposal_id is None:
+            msg = "bank-update observations must reference proposal ids"
+            raise ValueError(msg)
+        if proposal_id in existing_proposal_ids:
+            msg = "bank-update proposal ids must not already exist in the bank"
+            raise ValueError(msg)
+        if proposal_id in batch_proposal_ids:
+            msg = "bank-update observations must have distinct proposal ids"
+            raise ValueError(msg)
+
+        batch_proposal_ids.add(proposal_id)
+        validated_observations.append((observation, proposal_id))
+
+    return tuple(validated_observations)
 
 
 def apply_bank_update_batch(
@@ -67,7 +103,8 @@ def apply_bank_update_batch(
     state : CSAProgressionState
         Current progression state, including cutoff metadata.
     observations : Sequence[Observation[CandidateT]]
-        Observations to reduce against the shadow bank.
+        Observations to reduce against the shadow bank. Every observation must
+        carry a distinct proposal id not already present in ``bank``.
     diversity_metric : DiversityMetric[CandidateT]
         Diversity metric used for distances and crowding.
     infer_average_distance : Callable[[Sequence[BankEntry[CandidateT]]], float]
@@ -99,7 +136,17 @@ def apply_bank_update_batch(
     -------
     BankUpdateResult[CandidateT]
         Final bank-update result after applying the full observation batch.
+
+    Raises
+    ------
+    ValueError
+        If an observation lacks a proposal id, proposal ids repeat within the
+        batch, or an observation id already exists in ``bank``.
     """
+    validated_observations = _require_transition_observations(
+        bank=bank,
+        observations=observations,
+    )
     previous_bank = bank
     shadow_bank = bank
     shadow_state = state
@@ -107,6 +154,7 @@ def apply_bank_update_batch(
     shadow_growth_state = growth_state
     shadow_clustering_state = clustering_state
     distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
+    transitions: list[CSABankTransition] = []
     if shadow_clustering_state.requires_initialization(entries=shadow_bank.entries):
         # Guard before calling ensure_initialized: Python evaluates arguments
         # eagerly, so this branch owns average-distance inference laziness.
@@ -116,8 +164,18 @@ def apply_bank_update_batch(
             diversity_metric=diversity_metric,
         )
 
-    for observation in observations:
+    for observation, proposal_id in validated_observations:
         bank_before_step = shadow_bank
+        if shadow_bank.is_full and shadow_clustering_state.requires_initialization(
+            entries=shadow_bank.entries,
+        ):
+            # Earlier observations may have filled a partial shadow bank. Delay
+            # rebuilding stale labels until full-bank logic actually needs them.
+            shadow_clustering_state = shadow_clustering_state.ensure_initialized(
+                entries=shadow_bank.entries,
+                reference_average_distance=infer_average_distance(shadow_bank.entries),
+                diversity_metric=diversity_metric,
+            )
         shadow_state = initialize_cutoff_if_needed(
             bank=shadow_bank,
             state=shadow_state,
@@ -130,23 +188,32 @@ def apply_bank_update_batch(
             active_distance_cutoff = shadow_state.distance_cutoff
 
         if not shadow_bank.is_full:
-            shadow_bank = admit_observation(
+            next_bank = admit_observation(
                 policy=update_policy,
                 bank=shadow_bank,
                 observation=observation,
                 diversity_metric=diversity_metric,
                 distance_cutoff=active_distance_cutoff,
             )
+            admission_result = BankAdmissionResult(
+                bank=next_bank,
+                score_model_state=shadow_score_model_state,
+                growth_state=shadow_growth_state,
+                clustering_state=shadow_clustering_state,
+                distance_workspace=distance_workspace,
+                transition=CSABankTransition(
+                    proposal_id=proposal_id,
+                    route="initial",
+                    disposition="appended",
+                    target_index=len(bank_before_step.entries),
+                    survived_batch=False,
+                ),
+            )
         else:
-            (
-                shadow_bank,
-                shadow_score_model_state,
-                shadow_growth_state,
-                shadow_clustering_state,
-                distance_workspace,
-            ) = admit_full_bank_observation(
+            admission_result = admit_full_bank_observation(
                 bank=shadow_bank,
                 observation=observation,
+                proposal_id=proposal_id,
                 diversity_metric=diversity_metric,
                 distance_cutoff=active_distance_cutoff,
                 minimum_distance_cutoff=shadow_state.minimum_distance_cutoff,
@@ -160,6 +227,12 @@ def apply_bank_update_batch(
                 random_state=random_state,
                 distance_workspace=distance_workspace,
             )
+        shadow_bank = admission_result.bank
+        shadow_score_model_state = admission_result.score_model_state
+        shadow_growth_state = admission_result.growth_state
+        shadow_clustering_state = admission_result.clustering_state
+        distance_workspace = admission_result.distance_workspace
+        transitions.append(admission_result.transition)
         shadow_state = initialize_cutoff_if_needed(
             bank=shadow_bank,
             state=shadow_state,
@@ -221,6 +294,15 @@ def apply_bank_update_batch(
             entries=shadow_bank.entries,
             diversity_metric=diversity_metric,
         )
+    surviving_proposal_ids = frozenset(
+        entry.proposal_id
+        for entry in shadow_bank.entries
+        if entry.proposal_id is not None
+    )
+    finalized_transitions = tuple(
+        transition.reconcile_final_survival(surviving_proposal_ids)
+        for transition in transitions
+    )
     return BankUpdateResult(
         bank=shadow_bank,
         state=shadow_state,
@@ -228,6 +310,7 @@ def apply_bank_update_batch(
         growth_state=shadow_growth_state,
         clustering_state=shadow_clustering_state,
         trace_state=trace_state,
+        transitions=finalized_transitions,
         changed_indices=final_changed_indices,
         significant_update_indices=final_significant_update_indices,
         removed_indices=removed_indices,
@@ -238,6 +321,7 @@ def admit_full_bank_observation(
     *,
     bank: Bank[CandidateT],
     observation: Observation[CandidateT],
+    proposal_id: str,
     diversity_metric: DiversityMetric[CandidateT],
     distance_cutoff: float,
     minimum_distance_cutoff: float | None,
@@ -250,13 +334,7 @@ def admit_full_bank_observation(
     masked_seed_indices: frozenset[int],
     random_state: np.random.RandomState | None,
     distance_workspace: BankDistanceWorkspace[CandidateT] | None,
-) -> tuple[
-    Bank[CandidateT],
-    CSAScoreModelState[CandidateT],
-    CSABankGrowthState[CandidateT],
-    CSAClusteringState[CandidateT],
-    BankDistanceWorkspace[CandidateT] | None,
-]:
+) -> BankAdmissionResult[CandidateT]:
     """Admit or reject one observation when the bank is already full.
 
     Parameters
@@ -265,6 +343,8 @@ def admit_full_bank_observation(
         Full bank snapshot to update.
     observation : Observation[CandidateT]
         Observation being considered for admission.
+    proposal_id : str
+        Validated proposal identifier carried by ``observation``.
     diversity_metric : DiversityMetric[CandidateT]
         Diversity metric used for distances and crowding.
     distance_cutoff : float
@@ -293,14 +373,24 @@ def admit_full_bank_observation(
 
     Returns
     -------
-    tuple[Bank[CandidateT], CSAScoreModelState[CandidateT], CSABankGrowthState[CandidateT], CSAClusteringState[CandidateT], BankDistanceWorkspace[CandidateT] | None]
-        Updated bank, associated CSA runtime states, and the next batch-local
-        distance workspace.
+    BankAdmissionResult[CandidateT]
+        Updated bank and runtime states plus the immediate observation-aligned
+        transition.
+
+    Raises
+    ------
+    ValueError
+        If ``proposal_id`` does not match the identifier carried by
+        ``observation``.
     """
+    if observation.proposal.proposal_id != proposal_id:
+        msg = "proposal_id must match the observation proposal"
+        raise ValueError(msg)
+
     new_entry = BankEntry(
         candidate=observation.candidate,
         value=observation.score,
-        proposal_id=observation.proposal.proposal_id,
+        proposal_id=proposal_id,
     )
 
     def get_distance_workspace() -> BankDistanceWorkspace[CandidateT]:
@@ -375,12 +465,14 @@ def admit_full_bank_observation(
 
     nearest_index = min(range(len(entry_distances)), key=entry_distances.__getitem__)
     nearest_distance = entry_distances[nearest_index]
+    rejection_route: CSABankTransitionRoute = "far"
     adaptive_potential_active = score_model_state.adaptive_potential_state is not None
     local_update_allowed = (
         max(scored_bank.real_scores) >= trial.real_score or adaptive_potential_active
     )
 
     if nearest_distance < distance_cutoff:
+        rejection_route = "local"
         if update_policy.local_update_mode != "disabled" and local_update_allowed:
             comparison_score = score_model_state.comparison_score_for_entry(
                 base_score=scored_bank.shaped_scores[nearest_index],
@@ -399,20 +491,27 @@ def admit_full_bank_observation(
                     index=nearest_index,
                     new_entry=new_entry,
                 )
-                return (
-                    next_bank,
-                    score_model_state.bump_trial(trial),
-                    growth_state,
-                    clustering_state.register_admission(
+                return BankAdmissionResult(
+                    bank=next_bank,
+                    score_model_state=score_model_state.bump_trial(trial),
+                    growth_state=growth_state,
+                    clustering_state=clustering_state.register_admission(
                         admitted_index=nearest_index,
                         nearest_index=nearest_index,
                         nearest_distance=nearest_distance,
                         appended=False,
                     ),
-                    rebase_distance_workspace(
+                    distance_workspace=rebase_distance_workspace(
                         next_bank=next_bank,
                         invalidated_indices=frozenset({nearest_index}),
                         admitted_index=nearest_index,
+                    ),
+                    transition=CSABankTransition(
+                        proposal_id=proposal_id,
+                        route="local",
+                        disposition="replaced",
+                        target_index=nearest_index,
+                        survived_batch=False,
                     ),
                 )
 
@@ -435,20 +534,27 @@ def admit_full_bank_observation(
     )
     if did_grow:
         appended_index = len(bank.entries) - 1
-        return (
-            bank,
-            score_model_state,
-            growth_state,
-            clustering_state.register_admission(
+        return BankAdmissionResult(
+            bank=bank,
+            score_model_state=score_model_state,
+            growth_state=growth_state,
+            clustering_state=clustering_state.register_admission(
                 admitted_index=appended_index,
                 nearest_index=nearest_index,
                 nearest_distance=nearest_distance,
                 appended=True,
             ),
-            rebase_distance_workspace(
+            distance_workspace=rebase_distance_workspace(
                 next_bank=bank,
                 invalidated_indices=frozenset(),
                 admitted_index=appended_index,
+            ),
+            transition=CSABankTransition(
+                proposal_id=proposal_id,
+                route="growth",
+                disposition="appended",
+                target_index=appended_index,
+                survived_batch=False,
             ),
         )
 
@@ -469,6 +575,7 @@ def admit_full_bank_observation(
             nearest_index=nearest_index,
         )
         if cluster_update is not None:
+            rejection_route = "cluster"
             if acceptance_state.should_accept(
                 trial_score=trial.shaped_score,
                 reference_score=cluster_update.comparison_score,
@@ -479,20 +586,27 @@ def admit_full_bank_observation(
                     index=cluster_update.remove_index,
                     new_entry=new_entry,
                 )
-                return (
-                    next_bank,
-                    score_model_state.bump_trial(trial),
-                    growth_state,
-                    clustering_state.register_admission(
+                return BankAdmissionResult(
+                    bank=next_bank,
+                    score_model_state=score_model_state.bump_trial(trial),
+                    growth_state=growth_state,
+                    clustering_state=clustering_state.register_admission(
                         admitted_index=cluster_update.remove_index,
                         nearest_index=nearest_index,
                         nearest_distance=nearest_distance,
                         appended=False,
                     ),
-                    rebase_distance_workspace(
+                    distance_workspace=rebase_distance_workspace(
                         next_bank=next_bank,
                         invalidated_indices=frozenset({cluster_update.remove_index}),
                         admitted_index=cluster_update.remove_index,
+                    ),
+                    transition=CSABankTransition(
+                        proposal_id=proposal_id,
+                        route="cluster",
+                        disposition="replaced",
+                        target_index=cluster_update.remove_index,
+                        survived_batch=False,
                     ),
                 )
 
@@ -515,12 +629,19 @@ def admit_full_bank_observation(
         minimum_capacity=base_bank_capacity,
         adaptive_potential_active=adaptive_potential_active,
     ):
-        return (
-            bank,
-            score_model_state,
-            growth_state,
-            clustering_state,
-            distance_workspace,
+        return BankAdmissionResult(
+            bank=bank,
+            score_model_state=score_model_state,
+            growth_state=growth_state,
+            clustering_state=clustering_state,
+            distance_workspace=distance_workspace,
+            transition=CSABankTransition(
+                proposal_id=proposal_id,
+                route=rejection_route,
+                disposition="rejected",
+                target_index=None,
+                survived_batch=False,
+            ),
         )
 
     adjusted_bank_scores = score_model_state.trial_adjusted_bank_scores(
@@ -571,20 +692,27 @@ def admit_full_bank_observation(
             index=worst_index,
             new_entry=new_entry,
         )
-        return (
-            next_bank,
-            score_model_state.bump_trial(trial),
-            growth_state,
-            clustering_state.register_admission(
+        return BankAdmissionResult(
+            bank=next_bank,
+            score_model_state=score_model_state.bump_trial(trial),
+            growth_state=growth_state,
+            clustering_state=clustering_state.register_admission(
                 admitted_index=worst_index,
                 nearest_index=nearest_index,
                 nearest_distance=nearest_distance,
                 appended=False,
             ),
-            rebase_distance_workspace(
+            distance_workspace=rebase_distance_workspace(
                 next_bank=next_bank,
                 invalidated_indices=frozenset({worst_index}),
                 admitted_index=worst_index,
+            ),
+            transition=CSABankTransition(
+                proposal_id=proposal_id,
+                route="far",
+                disposition="replaced",
+                target_index=worst_index,
+                survived_batch=False,
             ),
         )
 
@@ -593,12 +721,19 @@ def admit_full_bank_observation(
             candidate=bank.entries[worst_index].candidate,
             diversity_metric=diversity_metric,
         )
-    return (
-        bank,
-        score_model_state,
-        growth_state,
-        clustering_state,
-        distance_workspace,
+    return BankAdmissionResult(
+        bank=bank,
+        score_model_state=score_model_state,
+        growth_state=growth_state,
+        clustering_state=clustering_state,
+        distance_workspace=distance_workspace,
+        transition=CSABankTransition(
+            proposal_id=proposal_id,
+            route="far",
+            disposition="rejected",
+            target_index=None,
+            survived_batch=False,
+        ),
     )
 
 
