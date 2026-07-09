@@ -1,6 +1,7 @@
 """Private seed and partner selection policies for CSA."""
 
 from collections.abc import Callable
+from math import isfinite
 
 import numpy as np
 
@@ -474,6 +475,9 @@ def pick_diverse_low_value_seed(
 ) -> int:
     """Pick a low-value seed among candidates that are sufficiently diverse.
 
+    A remaining candidate is eligible when its summed distance to the selected
+    seeds is at least the mean summed distance across all remaining candidates.
+
     Parameters
     ----------
     entries : tuple[BankEntry[CandidateT], ...]
@@ -501,20 +505,43 @@ def pick_diverse_low_value_seed(
         scored_indices.append((index, distance_sum))
         total_distance_sum += distance_sum
 
-    average_distance_sum = total_distance_sum / float(len(scored_indices))
-    min_score_index = 0
-    min_score = entries[remaining_indices[0]].value
+    average_distance_score = total_distance_sum / float(len(scored_indices))
+    if not isfinite(total_distance_sum):
+        # Candidate means preserve summed-distance ordering because every
+        # candidate is compared against the same selected seed count.
+        mean_scored_indices: list[tuple[int, float]] = []
+        average_distance_score = 0.0
+        selected_count = len(selected_indices)
+        for candidate_offset, (index, distance_sum) in enumerate(
+            scored_indices,
+            start=1,
+        ):
+            if isfinite(distance_sum):
+                distance_mean = distance_sum / float(selected_count)
+            else:
+                distance_mean = 0.0
+                for selected_offset, selected_index in enumerate(
+                    selected_indices,
+                    start=1,
+                ):
+                    distance = distance_between_indices(selected_index, index)
+                    distance_mean += (distance - distance_mean) / float(selected_offset)
 
-    for offset, (index, distance_sum) in enumerate(scored_indices[1:], start=1):
-        if distance_sum < average_distance_sum:
-            continue
+            mean_scored_indices.append((index, distance_mean))
+            average_distance_score += (distance_mean - average_distance_score) / float(
+                candidate_offset
+            )
 
-        score = entries[index].value
-        if score < min_score:
-            min_score_index = offset
-            min_score = score
+        scored_indices = mean_scored_indices
 
-    return scored_indices[min_score_index][0]
+    return min(
+        (
+            index
+            for index, distance_score in scored_indices
+            if distance_score >= average_distance_score
+        ),
+        key=lambda index: entries[index].value,
+    )
 
 
 def select_weighted_partner_index(
@@ -524,7 +551,10 @@ def select_weighted_partner_index(
     distance_between_indices: IndexDistance,
     random_state: np.random.RandomState,
 ) -> int:
-    """Pick one partner index using distance-derived weights.
+    """Pick one partner index using inverse-distance weights.
+
+    Zero-distance candidates take precedence and are sampled uniformly before
+    any positive-distance candidate is considered.
 
     Parameters
     ----------

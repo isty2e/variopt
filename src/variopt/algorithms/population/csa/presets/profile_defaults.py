@@ -24,7 +24,8 @@ class CSAProfileDefaults:
     random_seed_mode : int
         Legacy-compatible random-seed mode selector.
     weighted_partner_selection : bool
-        Whether parent selection is weighted by score.
+        Whether partner selection uses inverse geometric distance, with
+        zero-distance candidates taking precedence.
     max_bank_capacity : int | None
         Optional maximum bank capacity for adaptive bank growth.
     cutoff_schedule : CSACutoffSchedule

@@ -31,6 +31,9 @@ from tests.csa_support import (
     select_partner_indices,
     should_use_reference_primary,
 )
+from variopt.algorithms.population.csa.selection.policy import (
+    pick_diverse_low_value_seed,
+)
 from variopt.randomness import (
     random_state_choice_indices_without_replacement,
     random_state_randints,
@@ -170,6 +173,69 @@ class CSASelectionTests(CSAOptimizerTestCase):
         assert len(proposals) == 1
         assert distance.call_count <= 5
 
+    def test_diverse_seed_selection_excludes_ineligible_first_candidate(
+        self,
+    ) -> None:
+        selected_index = pick_diverse_low_value_seed(
+            entries=(
+                BankEntry(candidate=0, value=100.0),
+                BankEntry(candidate=1, value=0.0),
+                BankEntry(candidate=2, value=1.0),
+            ),
+            selected_indices=(0,),
+            remaining_indices=(1, 2),
+            distance_between_indices=lambda _left, right: (0.0, 0.0, 10.0)[right],
+        )
+
+        assert selected_index == 2
+
+    def test_diverse_seed_selection_breaks_eligible_score_ties_by_order(
+        self,
+    ) -> None:
+        selected_index = pick_diverse_low_value_seed(
+            entries=(
+                BankEntry(candidate=0, value=100.0),
+                BankEntry(candidate=1, value=1.0),
+                BankEntry(candidate=2, value=1.0),
+            ),
+            selected_indices=(0,),
+            remaining_indices=(1, 2),
+            distance_between_indices=lambda _left, _right: 10.0,
+        )
+
+        assert selected_index == 1
+
+    def test_diverse_seed_selection_handles_large_finite_total(self) -> None:
+        selected_index = pick_diverse_low_value_seed(
+            entries=(
+                BankEntry(candidate=0, value=100.0),
+                BankEntry(candidate=1, value=0.0),
+                BankEntry(candidate=2, value=1.0),
+            ),
+            selected_indices=(0,),
+            remaining_indices=(1, 2),
+            distance_between_indices=lambda _left, _right: 1e308,
+        )
+
+        assert selected_index == 1
+
+    def test_diverse_seed_selection_handles_large_finite_candidate_sums(
+        self,
+    ) -> None:
+        selected_index = pick_diverse_low_value_seed(
+            entries=(
+                BankEntry(candidate=0, value=100.0),
+                BankEntry(candidate=1, value=100.0),
+                BankEntry(candidate=2, value=1.0),
+                BankEntry(candidate=3, value=0.0),
+            ),
+            selected_indices=(0, 1),
+            remaining_indices=(2, 3),
+            distance_between_indices=lambda _left, _right: 1e308,
+        )
+
+        assert selected_index == 3
+
     def test_random_seed_mode_one_is_reproducible_and_prefers_unused_seed_first(
         self,
     ) -> None:
@@ -264,6 +330,26 @@ class CSASelectionTests(CSAOptimizerTestCase):
         )
 
         assert partner_indices == (1,)
+
+    def test_weighted_partner_selection_prioritizes_zero_distance_candidates(
+        self,
+    ) -> None:
+        candidates = (10, 10, 10, 110)
+        partner_indices = select_partner_indices(
+            entries=tuple(
+                BankEntry(candidate=candidate, value=float(index))
+                for index, candidate in enumerate(candidates)
+            ),
+            seed_index=0,
+            partner_count=2,
+            distance_between_indices=lambda left, right: float(
+                abs(candidates[left] - candidates[right])
+            ),
+            weighted_partner_selection=True,
+            random_state=np.random.RandomState(0),
+        )
+
+        assert set(partner_indices) == {1, 2}
 
     def test_unmasked_partner_selection_preserves_rng_trajectory(self) -> None:
         entries = tuple(

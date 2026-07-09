@@ -150,6 +150,10 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- CSA diversity-aware seed selection now applies its average-distance
+  eligibility threshold to every remaining candidate and remains defined for
+  large finite distances. Weighted partner-selection documentation now
+  accurately describes its inverse-distance and zero-distance behavior.
 - Bounded the docs extra to MkDocs 1.x so dependency canaries do not pick the
   future MkDocs 2.x line without an explicit documentation-stack migration.
 - `TupleSpace` and `RecordSpace` now compare by their declared child spaces
