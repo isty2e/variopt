@@ -10,10 +10,10 @@ from typing_extensions import Self
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-from .....artifacts import Observation
 from .....randomness import random_state_permutation_indices
 from .....typevars import CandidateT
-from .proposal.state.attribution import PlannedProposalAttribution
+from .proposal.evidence import CSAProposalEvaluation
+from .proposal.state.attribution import PlannedProposalProvenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,12 +24,13 @@ class GeneratedCandidate(FrozenGenericSlotsCompat, Generic[CandidateT]):
     ----------
     candidate : CandidateT
         Generated child candidate.
-    planned_attribution : PlannedProposalAttribution | None, default=None
-        Optional proposal-attribution payload carried into the evaluation step.
+    planned_attribution : PlannedProposalProvenance | None
+        Explicit adaptive or non-adaptive provenance when adaptation is enabled.
+        ``None`` has the single meaning that adaptation is disabled.
     """
 
     candidate: CandidateT
-    planned_attribution: PlannedProposalAttribution | None = None
+    planned_attribution: PlannedProposalProvenance | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,15 +137,15 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         Remaining generated candidates waiting to become proposals.
     pending_proposal_ids : frozenset[str], default=frozenset()
         Proposal identifiers issued from the current pool but not yet observed.
-    buffered_observations : tuple[Observation[CandidateT], ...], default=()
-        Observations buffered until the entire child pool is complete.
+    buffered_evaluations : tuple[CSAProposalEvaluation[CandidateT], ...], default=()
+        Successful feedback buffered until the entire child pool is complete.
     """
 
     queue: GenerationQueue[CandidateT] = field(
         default_factory=lambda: GenerationQueue(),
     )
     pending_proposal_ids: frozenset[str] = frozenset()
-    buffered_observations: tuple[Observation[CandidateT], ...] = ()
+    buffered_evaluations: tuple[CSAProposalEvaluation[CandidateT], ...] = ()
 
     @property
     def is_active(self) -> bool:
@@ -152,7 +153,7 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return (
             not self.queue.is_empty
             or len(self.pending_proposal_ids) > 0
-            or len(self.buffered_observations) > 0
+            or len(self.buffered_evaluations) > 0
         )
 
     @property
@@ -161,7 +162,7 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return (
             self.queue.is_empty
             and len(self.pending_proposal_ids) == 0
-            and len(self.buffered_observations) > 0
+            and len(self.buffered_evaluations) > 0
         )
 
     def begin(self, queue: GenerationQueue[CandidateT]) -> Self:
@@ -206,7 +207,7 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return candidate, type(self)(
             queue=next_queue,
             pending_proposal_ids=self.pending_proposal_ids,
-            buffered_observations=self.buffered_observations,
+            buffered_evaluations=self.buffered_evaluations,
         )
 
     def register_proposal(self, proposal_id: str) -> Self:
@@ -225,35 +226,35 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return type(self)(
             queue=self.queue,
             pending_proposal_ids=self.pending_proposal_ids | {proposal_id},
-            buffered_observations=self.buffered_observations,
+            buffered_evaluations=self.buffered_evaluations,
         )
 
-    def buffer_observations(
+    def buffer_evaluations(
         self,
-        observations: Sequence[Observation[CandidateT]],
+        evaluations: Sequence[CSAProposalEvaluation[CandidateT]],
     ) -> Self:
-        """Return a runtime that records observed children from the active pool.
+        """Return a runtime that records successful child feedback.
 
         Parameters
         ----------
-        observations : Sequence[Observation[CandidateT]]
-            Observations returned for proposals issued from the active pool.
+        evaluations : Sequence[CSAProposalEvaluation[CandidateT]]
+            Successful feedback for proposals issued from the active pool.
 
         Returns
         -------
         Self
             Runtime state with completed proposal identifiers removed and
-            observations appended to the buffer.
+            evaluations appended to the buffer.
         """
         consumed_ids = {
-            observation.proposal.proposal_id
-            for observation in observations
-            if observation.proposal.proposal_id is not None
+            evaluation.observation.proposal.proposal_id
+            for evaluation in evaluations
+            if evaluation.observation.proposal.proposal_id is not None
         }
         return type(self)(
             queue=self.queue,
             pending_proposal_ids=self.pending_proposal_ids - consumed_ids,
-            buffered_observations=self.buffered_observations + tuple(observations),
+            buffered_evaluations=self.buffered_evaluations + tuple(evaluations),
         )
 
     def consume_failed_proposals(self, proposal_ids: AbstractSet[str]) -> Self:
@@ -268,7 +269,7 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         -------
         Self
             Runtime state with the failed proposal identifiers removed while
-            preserving queued children and successful buffered observations.
+            preserving queued children and successful buffered evaluations.
         """
         if not proposal_ids:
             return self
@@ -276,16 +277,18 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return type(self)(
             queue=self.queue,
             pending_proposal_ids=self.pending_proposal_ids - proposal_ids,
-            buffered_observations=self.buffered_observations,
+            buffered_evaluations=self.buffered_evaluations,
         )
 
-    def release_buffer(self) -> tuple[tuple[Observation[CandidateT], ...], Self]:
-        """Return buffered observations and reset the runtime to idle.
+    def release_buffer(
+        self,
+    ) -> tuple[tuple[CSAProposalEvaluation[CandidateT], ...], Self]:
+        """Return buffered evaluations and reset the runtime to idle.
 
         Returns
         -------
-        tuple[tuple[Observation[CandidateT], ...], Self]
-            Buffered observations together with a reset idle runtime.
+        tuple[tuple[CSAProposalEvaluation[CandidateT], ...], Self]
+            Buffered evaluations together with a reset idle runtime.
 
         Raises
         ------
@@ -296,4 +299,4 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "cannot release a generation buffer before the pool is complete"
             raise RuntimeError(msg)
 
-        return self.buffered_observations, type(self)()
+        return self.buffered_evaluations, type(self)()

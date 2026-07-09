@@ -6,7 +6,6 @@ from typing import TypeVar
 
 import numpy as np
 
-from ......artifacts import Observation
 from ......kernel import ProposalLocalSearchContext
 from ......randomness import (
     random_state_choice_index,
@@ -15,9 +14,16 @@ from ......randomness import (
 from ......spaces import LeafPath, StructuredSearchSpace
 from ......spaces.types import SpaceCandidateValue
 from ......typevars import CandidateT
+from ...banking.update.transition import CSABankTransition
 from ..perturbation import CSAPerturbationSpec
+from .evidence import (
+    CSAProposalEvaluation,
+    CSAProposalOutcomeEvidence,
+)
 from .state.aggregate import CSAProposalState
 from .state.attribution import (
+    AdaptiveProposalGeneratorKind,
+    NonAdaptiveProposalAttribution,
     NumericSubspaceAttribution,
     NumericSubspaceDisplacement,
     PlannedProposalAttribution,
@@ -360,6 +366,7 @@ def planned_mutation_attribution(
     proposal_family_key: str | None = None,
     mutated_leaf_paths: Sequence[LeafPath],
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None,
+    generator_kind: AdaptiveProposalGeneratorKind = "mutation",
 ) -> PlannedProposalAttribution:
     """Return one pre-id attribution record for a generated mutation child.
 
@@ -373,6 +380,9 @@ def planned_mutation_attribution(
         Structured leaf paths mutated to produce the child.
     numeric_subspace_attribution : NumericSubspaceAttribution | None, default=None
         Numeric subspace metadata attached to the proposal, if any.
+    generator_kind : AdaptiveProposalGeneratorKind, default="mutation"
+        Whether the mutation operator changed the source candidate or passed
+        it through unchanged.
 
     Returns
     -------
@@ -384,6 +394,7 @@ def planned_mutation_attribution(
         proposal_family_key=proposal_family_key,
         mutated_leaf_paths=tuple(mutated_leaf_paths),
         numeric_subspace_attribution=numeric_subspace_attribution,
+        generator_kind=generator_kind,
     )
 
 
@@ -516,7 +527,7 @@ def sample_mutation_family_indices(
 
 def record_proposal_attribution(
     state: CSAProposalState,
-    attribution: ProposalAttribution,
+    attribution: ProposalAttribution | NonAdaptiveProposalAttribution,
 ) -> CSAProposalState:
     """Return a state with one additional pending proposal attribution.
 
@@ -527,8 +538,9 @@ def record_proposal_attribution(
     ----------
     state : CSAProposalState
         Proposal adaptation state to update.
-    attribution : ProposalAttribution
-        Attribution to append to the pending queue.
+    attribution : ProposalAttribution | NonAdaptiveProposalAttribution
+        Explicit adaptive or non-adaptive provenance to append to the pending
+        queue.
 
     Returns
     -------
@@ -542,13 +554,123 @@ def record_proposal_attribution(
     return state.register_pending_attribution(attribution)
 
 
+def collect_proposal_outcome_evidence(
+    state: CSAProposalState,
+    evaluations: Sequence[CSAProposalEvaluation[CandidateT]],
+    bank_transitions: Sequence[CSABankTransition],
+) -> tuple[tuple[CSAProposalOutcomeEvidence[CandidateT], ...], CSAProposalState]:
+    """Join successful evaluations to bank transitions and pending provenance.
+
+    Parameters
+    ----------
+    state : CSAProposalState
+        Proposal state owning pending provenance.
+    evaluations : Sequence[CSAProposalEvaluation[CandidateT]]
+        Successful feedback records in bank-reduction order.
+    bank_transitions : Sequence[CSABankTransition]
+        Bank transitions aligned one-to-one with ``evaluations``.
+
+    Returns
+    -------
+    tuple[tuple[CSAProposalOutcomeEvidence[CandidateT], ...], CSAProposalState]
+        Adaptive evidence records and the state after every aligned provenance
+        entry has been consumed exactly once.
+
+    Raises
+    ------
+    ValueError
+        If evaluation and transition counts differ or a proposal has no pending
+        provenance while adaptation is enabled.
+    TypeError
+        If pending provenance has an unsupported runtime variant.
+    """
+    if not state.policy.enabled:
+        return (), state
+
+    evaluation_tuple = tuple(evaluations)
+    transition_tuple = tuple(bank_transitions)
+    if len(evaluation_tuple) != len(transition_tuple):
+        msg = "bank transitions must align one-to-one with proposal evaluations"
+        raise ValueError(msg)
+
+    proposal_ids: list[str] = []
+    for evaluation, bank_transition in zip(
+        evaluation_tuple,
+        transition_tuple,
+        strict=True,
+    ):
+        proposal_id = evaluation.observation.proposal.proposal_id
+        if proposal_id is None:
+            msg = "proposal evaluations must reference proposal ids"
+            raise ValueError(msg)
+        if bank_transition.proposal_id != proposal_id:
+            msg = "bank transition must align with evaluation proposal id"
+            raise ValueError(msg)
+        proposal_ids.append(proposal_id)
+
+    provenances, next_state = state.consume_pending_attributions(proposal_ids)
+    outcome_evidence: list[CSAProposalOutcomeEvidence[CandidateT]] = []
+    for evaluation, bank_transition, provenance in zip(
+        evaluation_tuple,
+        transition_tuple,
+        provenances,
+        strict=True,
+    ):
+        if type(provenance) is NonAdaptiveProposalAttribution:
+            continue
+        if type(provenance) is not ProposalAttribution:
+            msg = "pending provenance must be a canonical proposal variant"
+            raise TypeError(msg)
+
+        outcome_evidence.append(
+            CSAProposalOutcomeEvidence(
+                attribution=provenance,
+                evaluation=evaluation,
+                bank_transition=bank_transition,
+            ),
+        )
+
+    return tuple(outcome_evidence), next_state
+
+
+def consume_refresh_proposal_provenance(
+    state: CSAProposalState,
+    evaluations: Sequence[CSAProposalEvaluation[CandidateT]],
+) -> CSAProposalState:
+    """Consume explicit non-adaptive provenance for accepted refresh feedback.
+
+    Refresh samples do not pass through ordinary bank admission and therefore do
+    not produce adaptive outcome evidence. When adaptation is enabled, each one
+    must still carry the explicit ``refresh_sample`` classification established
+    at ask time.
+    """
+    if not state.policy.enabled:
+        return state
+
+    proposal_ids: list[str] = []
+    for evaluation in evaluations:
+        proposal_id = evaluation.observation.proposal.proposal_id
+        if proposal_id is None:
+            msg = "refresh evaluations must reference proposal ids"
+            raise ValueError(msg)
+        proposal_ids.append(proposal_id)
+
+    provenances, next_state = state.consume_pending_attributions(proposal_ids)
+    for provenance in provenances:
+        if (
+            type(provenance) is not NonAdaptiveProposalAttribution
+            or provenance.reason != "refresh_sample"
+        ):
+            msg = "refresh evaluations require refresh_sample provenance"
+            raise ValueError(msg)
+
+    return next_state
+
+
 def update_proposal_state(
     state: CSAProposalState,
-    observations: Sequence[Observation[CandidateT]],
+    outcome_evidence: Sequence[CSAProposalOutcomeEvidence[CandidateT]],
     *,
-    explicit_local_displacement_leaf_paths: (
-        Sequence[tuple[LeafPath, ...] | None] | None
-    ) = None,
     infer_local_displacement_leaf_paths: (
         Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
     ) = None,
@@ -557,21 +679,19 @@ def update_proposal_state(
         | None
     ) = None,
 ) -> CSAProposalState:
-    """Return the next proposal-adaptation state for one observation batch.
+    """Reduce completed proposal outcome evidence into adaptive statistics.
 
-    This reducer consumes only proposal-side attribution and observed scores.
-    It intentionally does not inspect banking, cutoff, or selection state.
+    The evidence has already joined proposal provenance, successful evaluation
+    metadata, and the conclusive bank transition. This reducer intentionally
+    leaves the reward formula unchanged; comparison- and cost-aware policy is a
+    separate concern.
 
     Parameters
     ----------
     state : CSAProposalState
         Current proposal adaptation state.
-    observations : Sequence[Observation[CandidateT]]
-        Observation batch to reduce into proposal statistics.
-    explicit_local_displacement_leaf_paths : Sequence[tuple[LeafPath, ...] | None] | None, default=None
-        Optional observation-aligned leaf paths supplied by execution
-        refinement metadata. ``None`` entries fall back to inference when an
-        inference callback is available; tuple entries are used directly.
+    outcome_evidence : Sequence[CSAProposalOutcomeEvidence[CandidateT]]
+        Completed adaptive evidence records to reduce.
     infer_local_displacement_leaf_paths : Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None, default=None
         Optional callback that infers structured leaf paths changed by local
         post-processing.
@@ -583,34 +703,18 @@ def update_proposal_state(
     CSAProposalState
         Reduced proposal adaptation state after consuming the observation batch.
     """
-    if not state.policy.enabled or len(observations) == 0:
+    if not state.policy.enabled or len(outcome_evidence) == 0:
         return state
 
-    explicit_path_tuple: tuple[tuple[LeafPath, ...] | None, ...] | None = None
-    if explicit_local_displacement_leaf_paths is not None:
-        explicit_path_tuple = tuple(explicit_local_displacement_leaf_paths)
-        if len(explicit_path_tuple) != len(observations):
-            msg = "explicit_local_displacement_leaf_paths must align with observations"
-            raise ValueError(msg)
-
     next_state = state
-    for observation_index, observation in enumerate(observations):
-        proposal_id = observation.proposal.proposal_id
-        if proposal_id is None:
-            continue
-
-        attribution, next_state = next_state.consume_pending_attribution(proposal_id)
-        if attribution is None:
-            continue
-
+    for evidence in outcome_evidence:
+        attribution = evidence.attribution
+        evaluation = evidence.evaluation
+        observation = evaluation.observation
         score_improvement = attribution.source_score - observation.score
         local_displacement_leaf_paths: tuple[LeafPath, ...] = ()
         numeric_displacement: NumericSubspaceDisplacement | None = None
-        explicit_leaf_paths = (
-            None
-            if explicit_path_tuple is None
-            else explicit_path_tuple[observation_index]
-        )
+        explicit_leaf_paths = evaluation.refinement_changed_leaf_paths
         if explicit_leaf_paths is not None:
             local_displacement_leaf_paths = explicit_leaf_paths
         elif infer_local_displacement_leaf_paths is not None:

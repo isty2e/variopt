@@ -16,7 +16,7 @@ from .......json_types import (
 )
 from .......spaces import LeafPath
 from ..policy import CSAProposalPolicy
-from .attribution import NumericSubspaceDisplacement, ProposalAttribution
+from .attribution import NumericSubspaceDisplacement, ProposalProvenance
 from .stats import (
     ProposalFamilyStat,
     ProposalLeafStat,
@@ -33,9 +33,9 @@ class CSAProposalState:
     policy : CSAProposalPolicy
         Proposal adaptation policy that controls whether and how statistics are
         updated.
-    pending_attributions : tuple[ProposalAttribution, ...], default=()
-        Attributions recorded at proposal time and waiting to be matched to
-        observations.
+    pending_attributions : tuple[ProposalProvenance, ...], default=()
+        Explicit adaptive or non-adaptive provenance recorded at proposal time
+        and waiting to be matched to terminal proposal feedback.
     family_stats : tuple[ProposalFamilyStat, ...], default=()
         Accumulated family-level reward statistics.
     leaf_stats : tuple[ProposalLeafStat, ...], default=()
@@ -51,7 +51,7 @@ class CSAProposalState:
     """
 
     policy: CSAProposalPolicy
-    pending_attributions: tuple[ProposalAttribution, ...] = ()
+    pending_attributions: tuple[ProposalProvenance, ...] = ()
     family_stats: tuple[ProposalFamilyStat, ...] = ()
     leaf_stats: tuple[ProposalLeafStat, ...] = ()
     local_displacement_leaf_stats: tuple[ProposalLeafStat, ...] = ()
@@ -222,8 +222,8 @@ class CSAProposalState:
             update_index=update_index,
         )
 
-    def get_pending_attribution(self, proposal_id: str) -> ProposalAttribution | None:
-        """Return the pending attribution matching one proposal id, if present.
+    def get_pending_attribution(self, proposal_id: str) -> ProposalProvenance | None:
+        """Return the pending provenance matching one proposal id, if present.
 
         Parameters
         ----------
@@ -232,9 +232,9 @@ class CSAProposalState:
 
         Returns
         -------
-        ProposalAttribution | None
-            Matching pending attribution, or ``None`` when the proposal has no
-            recorded pending attribution.
+        ProposalProvenance | None
+            Matching pending provenance, or ``None`` when the proposal has no
+            recorded pending provenance.
         """
         for attribution in self.pending_attributions:
             if attribution.proposal_id == proposal_id:
@@ -242,13 +242,13 @@ class CSAProposalState:
 
         return None
 
-    def register_pending_attribution(self, attribution: ProposalAttribution) -> Self:
-        """Return a state with one additional pending proposal attribution.
+    def register_pending_attribution(self, attribution: ProposalProvenance) -> Self:
+        """Return a state with one additional pending proposal provenance.
 
         Parameters
         ----------
-        attribution : ProposalAttribution
-            Proposal-side attribution to register.
+        attribution : ProposalProvenance
+            Proposal-side provenance to register.
 
         Returns
         -------
@@ -260,20 +260,54 @@ class CSAProposalState:
         ValueError
             If another pending attribution already uses the same proposal id.
         """
-        if self.get_pending_attribution(attribution.proposal_id) is not None:
-            msg = "pending proposal attributions must have distinct proposal ids"
-            raise ValueError(msg)
+        return self.register_pending_attributions((attribution,))
+
+    def register_pending_attributions(
+        self,
+        attributions: Sequence[ProposalProvenance],
+    ) -> Self:
+        """Return a state with one batch of distinct pending provenance.
+
+        Parameters
+        ----------
+        attributions : Sequence[ProposalProvenance]
+            Provenance records to append in issue order.
+
+        Returns
+        -------
+        Self
+            State with all supplied provenance appended once.
+
+        Raises
+        ------
+        ValueError
+            If a proposal id repeats in existing or supplied provenance.
+        """
+        attribution_tuple = tuple(attributions)
+        if len(attribution_tuple) == 0:
+            return self
+
+        existing_proposal_ids = {
+            attribution.proposal_id for attribution in self.pending_attributions
+        }
+        new_proposal_ids: set[str] = set()
+        for attribution in attribution_tuple:
+            proposal_id = attribution.proposal_id
+            if proposal_id in existing_proposal_ids or proposal_id in new_proposal_ids:
+                msg = "pending proposal attributions must have distinct proposal ids"
+                raise ValueError(msg)
+            new_proposal_ids.add(proposal_id)
 
         return replace(
             self,
-            pending_attributions=self.pending_attributions + (attribution,),
+            pending_attributions=self.pending_attributions + attribution_tuple,
         )
 
     def consume_pending_attribution(
         self,
         proposal_id: str,
-    ) -> tuple[ProposalAttribution | None, Self]:
-        """Return one pending attribution together with the reduced state.
+    ) -> tuple[ProposalProvenance | None, Self]:
+        """Return one pending provenance together with the reduced state.
 
         Parameters
         ----------
@@ -282,22 +316,69 @@ class CSAProposalState:
 
         Returns
         -------
-        tuple[ProposalAttribution | None, Self]
-            Matched attribution, if present, together with the state after that
-            attribution has been removed from the pending queue.
+        tuple[ProposalProvenance | None, Self]
+            Matched provenance, if present, together with the state after that
+            provenance has been removed from the pending queue.
         """
-        matched_attribution: ProposalAttribution | None = None
-        remaining_attributions: list[ProposalAttribution] = []
-        for attribution in self.pending_attributions:
-            if attribution.proposal_id == proposal_id and matched_attribution is None:
-                matched_attribution = attribution
-                continue
+        matched_attributions, next_state = self.consume_pending_attributions(
+            (proposal_id,),
+            require_all=False,
+        )
+        return matched_attributions[0], next_state
 
-            remaining_attributions.append(attribution)
+    def consume_pending_attributions(
+        self,
+        proposal_ids: Sequence[str],
+        *,
+        require_all: bool = True,
+    ) -> tuple[tuple[ProposalProvenance | None, ...], Self]:
+        """Consume a proposal-id batch in one provenance scan.
 
-        return matched_attribution, replace(
+        Parameters
+        ----------
+        proposal_ids : Sequence[str]
+            Proposal identifiers to consume in result order.
+        require_all : bool, default=True
+            Whether every identifier must have pending provenance.
+
+        Returns
+        -------
+        tuple[tuple[ProposalProvenance | None, ...], Self]
+            Provenance aligned with ``proposal_ids`` and the reduced state.
+
+        Raises
+        ------
+        ValueError
+            If identifiers repeat or required provenance is missing.
+        """
+        proposal_id_tuple = tuple(proposal_ids)
+        proposal_id_set = set(proposal_id_tuple)
+        if len(proposal_id_set) != len(proposal_id_tuple):
+            msg = "consumed proposal ids must be distinct"
+            raise ValueError(msg)
+        if len(proposal_id_tuple) == 0:
+            return (), self
+
+        attribution_by_id = {
+            attribution.proposal_id: attribution
+            for attribution in self.pending_attributions
+        }
+        matched_attributions = tuple(
+            attribution_by_id.get(proposal_id) for proposal_id in proposal_id_tuple
+        )
+        if require_all and any(
+            attribution is None for attribution in matched_attributions
+        ):
+            msg = "proposal evaluation has no pending adaptation provenance"
+            raise ValueError(msg)
+
+        return matched_attributions, replace(
             self,
-            pending_attributions=tuple(remaining_attributions),
+            pending_attributions=tuple(
+                attribution
+                for attribution in self.pending_attributions
+                if attribution.proposal_id not in proposal_id_set
+            ),
         )
 
     def remove_pending_attributions(self, proposal_ids: AbstractSet[str]) -> Self:

@@ -25,6 +25,7 @@ from tests.csa_support import (
     schedule,
 )
 from variopt import (
+    CandidateRefinement,
     EvaluationAttemptBatch,
     EvaluationFailure,
     EvaluationRequest,
@@ -32,6 +33,7 @@ from variopt import (
     OptimizationDirection,
     Proposal,
 )
+from variopt.algorithms.population.csa.generation.proposal import CSAProposalPolicy
 from variopt.artifacts import EvaluationSuccess
 
 
@@ -177,7 +179,7 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             optimizer.engine_state,
             success_attempt,
         )
-        assert optimizer.engine_state.generation_state.buffered_observations != ()
+        assert optimizer.engine_state.generation_state.buffered_evaluations != ()
         assert (
             optimizer.engine_state.generation_state.pending_proposal_ids
             == frozenset(
@@ -202,6 +204,78 @@ class CSALifecycleTests(CSAOptimizerTestCase):
             for entry in optimizer.bank.entries
         )
         assert optimizer.optimizer.is_checkpoint_safe_state(optimizer.engine_state)
+
+    def test_generated_success_preserves_attempt_metadata_until_bank_commit(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=ScriptedIntegerSpace((1, 2, 3, 4)),
+            objective=SquareObjective(),
+        )
+        optimizer = make_optimizer(
+            space=problem.space,
+            diversity_metric=AbsoluteDistance(),
+            mutation_operators=(RepeatParent(),),
+            bank_capacity=2,
+            perturbation_schedule=perturbation_schedule(
+                regular_children_per_seed=0,
+                initial_children_per_seed=0,
+                mutation_children_per_operator=2,
+                shuffle_children=False,
+            ),
+            proposal_policy=CSAProposalPolicy(enabled=True),
+            cutoff_schedule=schedule(
+                initial_distance_cutoff=100.0,
+                minimum_distance_cutoff=100.0,
+                reduction_factor=1.0,
+            ),
+            random_state=0,
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        self.fill_bank(optimizer=optimizer, problem=problem, evaluator=evaluator)
+        proposals = optimizer.ask(batch_size=2)
+        requests = tuple(_request(proposal) for proposal in proposals)
+        first_success = _success(requests[0])
+        first_success = EvaluationSuccess(
+            request=first_success.request,
+            payload=first_success.payload,
+            evaluation_count=7,
+            refinement=CandidateRefinement(
+                source_candidate=requests[0].candidate,
+                refined_candidate=requests[0].candidate,
+                changed_leaf_paths=(),
+            ),
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            EvaluationAttemptBatch(attempts=(first_success,)),
+        )
+
+        buffered_evaluations = (
+            optimizer.engine_state.generation_state.buffered_evaluations
+        )
+        assert len(buffered_evaluations) == 1
+        assert buffered_evaluations[0].evaluation_count == 7
+        assert buffered_evaluations[0].refinement_changed_leaf_paths == ()
+        first_proposal_id = proposals[0].proposal_id
+        assert first_proposal_id is not None
+        assert (
+            optimizer.engine_state.proposal_state.get_pending_attribution(
+                first_proposal_id,
+            )
+            is not None
+        )
+
+        optimizer.engine_state = optimizer.optimizer.tell_attempts(
+            optimizer.engine_state,
+            EvaluationAttemptBatch(attempts=(_success(requests[1]),)),
+        )
+
+        assert optimizer.engine_state.proposal_state.pending_attributions == ()
+        assert (
+            optimizer.engine_state.proposal_state.family_stats[0].observation_count == 2
+        )
 
     def test_generated_mixed_failure_drains_generation_pending_ids(self) -> None:
         problem = Problem(

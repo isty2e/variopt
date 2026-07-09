@@ -34,10 +34,10 @@ from .result import (
     BankAdmissionResult,
     BankUpdateResult,
     CSABankTransition,
-    CSABankTransitionRoute,
     changed_indices,
     significant_update_indices,
 )
+from .transition import CSABankTransitionRoute
 
 
 def _require_transition_observations(

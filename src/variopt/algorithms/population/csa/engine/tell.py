@@ -5,7 +5,6 @@ from dataclasses import replace
 
 import numpy as np
 
-from .....artifacts import Observation
 from .....diversity import DiversityMetric
 from .....spaces import LeafPath
 from .....typevars import CandidateT
@@ -13,7 +12,12 @@ from ..banking.bank import BankEntry
 from ..banking.growth.logic import advance_growth_state
 from ..banking.update import CSABankUpdatePolicy
 from ..banking.update.logic import apply_bank_update_batch
-from ..generation.proposal.logic import update_proposal_state
+from ..generation.proposal.evidence import CSAProposalEvaluation
+from ..generation.proposal.logic import (
+    collect_proposal_outcome_evidence,
+    consume_refresh_proposal_provenance,
+    update_proposal_state,
+)
 from ..generation.proposal.state.attribution import (
     NumericSubspaceDisplacement,
     ProposalAttribution,
@@ -42,7 +46,7 @@ InferNumericSubspaceDisplacement = Callable[
 
 def apply_tell(
     engine_state: CSAEngineState[CandidateT],
-    observations: Sequence[Observation[CandidateT]],
+    evaluations: Sequence[CSAProposalEvaluation[CandidateT]],
     *,
     bank_capacity: int,
     diversity_metric: DiversityMetric[CandidateT],
@@ -54,8 +58,6 @@ def apply_tell(
     infer_score_gap: InferScoreGap[CandidateT],
     infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT]
     | None = None,
-    explicit_local_displacement_leaf_paths: Sequence[tuple[LeafPath, ...] | None]
-    | None = None,
     infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT]
     | None = None,
 ) -> CSAEngineState[CandidateT]:
@@ -65,8 +67,9 @@ def apply_tell(
     ----------
     engine_state : CSAEngineState[CandidateT]
         Current CSA engine state.
-    observations : Sequence[Observation[CandidateT]]
-        Evaluator observations to assimilate.
+    evaluations : Sequence[CSAProposalEvaluation[CandidateT]]
+        Successful feedback to assimilate without discarding logical evaluation
+        cost or explicit refinement metadata.
     bank_capacity : int
         Base bank capacity used by growth logic.
     diversity_metric : DiversityMetric[CandidateT]
@@ -86,10 +89,6 @@ def apply_tell(
     infer_local_displacement_leaf_paths : InferLocalDisplacementLeafPaths[CandidateT] | None, default=None
         Optional callback that infers leaf-path displacement for proposal
         attribution.
-    explicit_local_displacement_leaf_paths : Sequence[tuple[LeafPath, ...] | None] | None, default=None
-        Optional observation-aligned local-displacement paths supplied by
-        candidate-refinement metadata. Entries set to ``None`` use fallback
-        inference when available.
     infer_numeric_subspace_displacement : InferNumericSubspaceDisplacement[CandidateT] | None, default=None
         Optional callback that infers numeric-subspace displacement for
         covariance attribution.
@@ -97,7 +96,7 @@ def apply_tell(
     Returns
     -------
     CSAEngineState[CandidateT]
-        Engine state after assimilating ``observations``.
+        Engine state after assimilating ``evaluations``.
 
     Raises
     ------
@@ -107,13 +106,12 @@ def apply_tell(
     if engine_state.banking_state.refresh_state is not None:
         return apply_refresh_tell(
             engine_state,
-            observations,
+            evaluations,
             diversity_metric=diversity_metric,
             cutoff_schedule=cutoff_schedule,
             refresh_policy=refresh_policy,
             infer_average_distance=infer_average_distance,
             infer_score_gap=infer_score_gap,
-            infer_numeric_subspace_displacement=infer_numeric_subspace_displacement,
         )
 
     bank_was_full = (
@@ -122,9 +120,10 @@ def apply_tell(
     )
     committed_generation = False
     consumed_ids: set[str] = set()
-    validated_observations: list[Observation[CandidateT]] = []
+    validated_evaluations: list[CSAProposalEvaluation[CandidateT]] = []
 
-    for observation in observations:
+    for evaluation in evaluations:
+        observation = evaluation.observation
         proposal_id = observation.proposal.proposal_id
         if proposal_id is None:
             msg = (
@@ -146,34 +145,28 @@ def apply_tell(
             raise ValueError(msg)
 
         consumed_ids.add(proposal_id)
-        validated_observations.append(observation)
+        validated_evaluations.append(evaluation)
 
     engine_state = engine_state.consume_pending_proposals(consumed_ids)
-    engine_state = replace(
-        engine_state,
-        proposal_state=update_proposal_state(
-            engine_state.proposal_state,
-            validated_observations,
-            explicit_local_displacement_leaf_paths=explicit_local_displacement_leaf_paths,
-            infer_local_displacement_leaf_paths=infer_local_displacement_leaf_paths,
-            infer_numeric_subspace_displacement=infer_numeric_subspace_displacement,
-        ),
-    )
 
     if engine_state.generation_state.is_active:
-        next_generation_state = engine_state.generation_state.buffer_observations(
-            validated_observations,
+        next_generation_state = engine_state.generation_state.buffer_evaluations(
+            validated_evaluations,
         )
         engine_state = replace(engine_state, generation_state=next_generation_state)
         if not engine_state.generation_state.ready_to_commit:
             return engine_state
 
-        generation_observations, next_generation_state = (
+        generation_evaluations, next_generation_state = (
             engine_state.generation_state.release_buffer()
         )
-        validated_observations = list(generation_observations)
+        validated_evaluations = list(generation_evaluations)
         engine_state = replace(engine_state, generation_state=next_generation_state)
         committed_generation = True
+
+    validated_observations = tuple(
+        evaluation.observation for evaluation in validated_evaluations
+    )
 
     batch_result = apply_bank_update_batch(
         bank=engine_state.banking_state.bank,
@@ -192,6 +185,17 @@ def apply_tell(
         masked_seed_indices=engine_state.progression_state.seed_mask,
         random_state=random_state,
         trace_state=engine_state.trace_state if committed_generation else None,
+    )
+    outcome_evidence, proposal_state = collect_proposal_outcome_evidence(
+        engine_state.proposal_state,
+        validated_evaluations,
+        batch_result.transitions,
+    )
+    proposal_state = update_proposal_state(
+        proposal_state,
+        outcome_evidence,
+        infer_local_displacement_leaf_paths=infer_local_displacement_leaf_paths,
+        infer_numeric_subspace_displacement=infer_numeric_subspace_displacement,
     )
     updated_indices = batch_result.changed_indices
     significant_update_indices = batch_result.significant_update_indices
@@ -231,6 +235,7 @@ def apply_tell(
         ),
         progression_state=progression_state,
         selection_state=selection_state,
+        proposal_state=proposal_state,
         scoring_state=replace(
             engine_state.scoring_state,
             model_state=batch_result.score_model_state,
@@ -248,7 +253,7 @@ def apply_tell(
         infer_average_distance=infer_average_distance,
     )
 
-    if validated_observations:
+    if validated_evaluations:
         engine_state = replace(
             engine_state,
             banking_state=replace(
@@ -330,17 +335,13 @@ def apply_tell(
 
 def apply_refresh_tell(
     engine_state: CSAEngineState[CandidateT],
-    observations: Sequence[Observation[CandidateT]],
+    evaluations: Sequence[CSAProposalEvaluation[CandidateT]],
     *,
     diversity_metric: DiversityMetric[CandidateT],
     cutoff_schedule: CSACutoffSchedule,
     refresh_policy: CSARefreshPolicy,
     infer_average_distance: InferAverageDistance[CandidateT],
     infer_score_gap: InferScoreGap[CandidateT],
-    infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT]
-    | None = None,
-    infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT]
-    | None = None,
 ) -> CSAEngineState[CandidateT]:
     """Apply one tell batch while refresh collection is active.
 
@@ -348,8 +349,8 @@ def apply_refresh_tell(
     ----------
     engine_state : CSAEngineState[CandidateT]
         Current CSA engine state with refresh collection active.
-    observations : Sequence[Observation[CandidateT]]
-        Evaluator observations to assimilate into the refresh payload.
+    evaluations : Sequence[CSAProposalEvaluation[CandidateT]]
+        Successful feedback to assimilate into the refresh payload.
     diversity_metric : DiversityMetric[CandidateT]
         Diversity metric used if refresh completes immediately.
     cutoff_schedule : CSACutoffSchedule
@@ -360,12 +361,6 @@ def apply_refresh_tell(
         Callback that computes refreshed average distance.
     infer_score_gap : InferScoreGap[CandidateT]
         Callback that computes refreshed score gap.
-    infer_local_displacement_leaf_paths : InferLocalDisplacementLeafPaths[CandidateT] | None, default=None
-        Optional callback that infers leaf-path displacement for proposal
-        attribution.
-    infer_numeric_subspace_displacement : InferNumericSubspaceDisplacement[CandidateT] | None, default=None
-        Optional callback that infers numeric-subspace displacement for
-        covariance attribution.
 
     Returns
     -------
@@ -380,7 +375,8 @@ def apply_refresh_tell(
     assert engine_state.banking_state.refresh_state is not None
     consumed_ids: set[str] = set()
 
-    for observation in observations:
+    for evaluation in evaluations:
+        observation = evaluation.observation
         proposal_id = observation.proposal.proposal_id
         if proposal_id is None:
             msg = (
@@ -415,11 +411,9 @@ def apply_refresh_tell(
     engine_state = engine_state.consume_pending_proposals(consumed_ids)
     engine_state = replace(
         engine_state,
-        proposal_state=update_proposal_state(
+        proposal_state=consume_refresh_proposal_provenance(
             engine_state.proposal_state,
-            observations,
-            infer_local_displacement_leaf_paths=infer_local_displacement_leaf_paths,
-            infer_numeric_subspace_displacement=infer_numeric_subspace_displacement,
+            evaluations,
         ),
     )
     final_refresh_state = engine_state.banking_state.refresh_state

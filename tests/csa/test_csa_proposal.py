@@ -1,7 +1,7 @@
 """Tests for CSA proposal-adaptation ontology and reducer state."""
 
 from collections.abc import Sequence
-from typing import overload
+from typing import TypeVar, overload
 
 import numpy as np
 import pytest
@@ -17,10 +17,21 @@ from variopt import (
     TupleSpace,
 )
 from variopt.algorithms.population.csa import CSAProposalPolicy
+from variopt.algorithms.population.csa.banking.update.transition import (
+    CSABankTransition,
+    CSABankTransitionDisposition,
+    CSABankTransitionRoute,
+)
 from variopt.algorithms.population.csa.generation.perturbation import (
     CSAPerturbationSpec,
 )
+from variopt.algorithms.population.csa.generation.proposal.evidence import (
+    CSAProposalEvaluation,
+    CSAProposalOutcomeEvidence,
+)
 from variopt.algorithms.population.csa.generation.proposal.logic import (
+    collect_proposal_outcome_evidence,
+    consume_refresh_proposal_provenance,
     infer_structured_local_displacement_leaf_paths,
     mutation_family_key,
     mutation_family_weights,
@@ -34,6 +45,7 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
 )
 from variopt.algorithms.population.csa.generation.proposal.state import (
     CSAProposalState,
+    NonAdaptiveProposalAttribution,
     PlannedProposalAttribution,
     ProposalAttribution,
     ProposalFamilyStat,
@@ -43,30 +55,88 @@ from variopt.kernel import ProposalLocalSearchContext
 from variopt.operators import VariationOperator
 from variopt.spaces import LeafPath
 
+CandidateT = TypeVar("CandidateT")
 
-class ExplodingExplicitPathSequence(Sequence[tuple[LeafPath, ...] | None]):
-    """Sequence that fails if proposal update code tries to materialize it."""
+
+def proposal_outcome_evidence(
+    state: CSAProposalState,
+    observation: Observation[CandidateT],
+    *,
+    refinement_changed_leaf_paths: tuple[LeafPath, ...] | None = None,
+    evaluation_count: int = 1,
+) -> tuple[tuple[CSAProposalOutcomeEvidence[CandidateT], ...], CSAProposalState]:
+    """Join one test evaluation to a conclusive local bank replacement."""
+    return collect_proposal_outcome_evidence(
+        state,
+        (
+            CSAProposalEvaluation(
+                observation=observation,
+                evaluation_count=evaluation_count,
+                refinement_changed_leaf_paths=refinement_changed_leaf_paths,
+            ),
+        ),
+        (
+            CSABankTransition(
+                proposal_id=observation.proposal.proposal_id or "",
+                route="local",
+                disposition="replaced",
+                target_index=0,
+                survived_batch=True,
+            ),
+        ),
+    )
+
+
+class ExplodingOutcomeEvidenceSequence(
+    Sequence[CSAProposalOutcomeEvidence[int]],
+):
+    """Sequence that fails if disabled proposal code inspects evidence."""
 
     @overload
-    def __getitem__(self, index: int) -> tuple[LeafPath, ...] | None: ...
+    def __getitem__(self, index: int) -> CSAProposalOutcomeEvidence[int]: ...
 
     @overload
     def __getitem__(
         self,
         index: slice,
-    ) -> Sequence[tuple[LeafPath, ...] | None]: ...
+    ) -> Sequence[CSAProposalOutcomeEvidence[int]]: ...
 
     @override
     def __getitem__(
         self,
         index: int | slice,
-    ) -> tuple[LeafPath, ...] | None | Sequence[tuple[LeafPath, ...] | None]:
+    ) -> CSAProposalOutcomeEvidence[int] | Sequence[CSAProposalOutcomeEvidence[int]]:
         _ = index
-        raise AssertionError("explicit paths should not be materialized")
+        raise AssertionError("outcome evidence should not be materialized")
 
     @override
     def __len__(self) -> int:
-        raise AssertionError("explicit paths should not be measured")
+        raise AssertionError("outcome evidence should not be measured")
+
+
+class ExplodingProposalEvaluationSequence(Sequence[CSAProposalEvaluation[int]]):
+    """Sequence that fails if disabled collection inspects evaluations."""
+
+    @overload
+    def __getitem__(self, index: int) -> CSAProposalEvaluation[int]: ...
+
+    @overload
+    def __getitem__(
+        self,
+        index: slice,
+    ) -> Sequence[CSAProposalEvaluation[int]]: ...
+
+    @override
+    def __getitem__(
+        self,
+        index: int | slice,
+    ) -> CSAProposalEvaluation[int] | Sequence[CSAProposalEvaluation[int]]:
+        _ = index
+        raise AssertionError("proposal evaluations should not be materialized")
+
+    @override
+    def __len__(self) -> int:
+        raise AssertionError("proposal evaluations should not be measured")
 
 
 class CSAProposalStateTests:
@@ -86,6 +156,62 @@ class CSAProposalStateTests:
 
         assert next_state.pending_attributions == ()
 
+    @pytest.mark.parametrize(
+        ("evaluation_count", "expected_error"),
+        [(True, TypeError), (-1, ValueError)],
+    )
+    def test_proposal_evaluation_rejects_invalid_logical_cost(
+        self,
+        evaluation_count: int,
+        expected_error: type[Exception],
+    ) -> None:
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        with pytest.raises(expected_error, match="evaluation_count"):
+            _ = CSAProposalEvaluation(
+                observation=observation,
+                evaluation_count=evaluation_count,
+            )
+
+    @pytest.mark.parametrize(
+        (
+            "route",
+            "disposition",
+            "target_index",
+            "survived_batch",
+            "expected_error",
+        ),
+        [
+            ("local", "rejected", 0, False, ValueError),
+            ("local", "rejected", None, True, ValueError),
+            ("local", "replaced", None, True, TypeError),
+            ("local", "replaced", -1, True, ValueError),
+            ("initial", "replaced", 0, True, ValueError),
+            ("local", "appended", 0, True, ValueError),
+        ],
+    )
+    def test_transition_evidence_rejects_invalid_structural_combinations(
+        self,
+        route: CSABankTransitionRoute,
+        disposition: CSABankTransitionDisposition,
+        target_index: int | None,
+        survived_batch: bool,
+        expected_error: type[Exception],
+    ) -> None:
+        with pytest.raises(expected_error):
+            _ = CSABankTransition(
+                proposal_id="p-1",
+                route=route,
+                disposition=disposition,
+                target_index=target_index,
+                survived_batch=survived_batch,
+            )
+
     def test_update_proposal_state_consumes_matching_attribution(self) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
@@ -104,7 +230,15 @@ class CSAProposalStateTests:
             score=3.0,
         )
 
-        next_state = update_proposal_state(state, (observation,))
+        evidence, state = proposal_outcome_evidence(
+            state,
+            observation,
+            evaluation_count=7,
+        )
+        assert evidence[0].evaluation.evaluation_count == 7
+        assert evidence[0].bank_transition.disposition == "replaced"
+        assert evidence[0].bank_transition.survived_batch
+        next_state = update_proposal_state(state, evidence)
 
         assert next_state.pending_attributions == ()
         assert len(next_state.family_stats) == 1
@@ -120,7 +254,224 @@ class CSAProposalStateTests:
         assert next_state.leaf_stats[1].discounted_score_credit == 7.0
         assert next_state.local_displacement_leaf_stats == ()
 
-    def test_update_proposal_state_ignores_observations_without_registered_attribution(
+    def test_outcome_join_consumes_explicit_non_adaptive_provenance(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            NonAdaptiveProposalAttribution(
+                proposal_id="p-1",
+                reason="regular",
+            ),
+        )
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        evidence, next_state = proposal_outcome_evidence(state, observation)
+
+        assert evidence == ()
+        assert next_state.pending_attributions == ()
+
+    def test_outcome_join_rejects_duplicate_provenance_consumption(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(proposal_id="p-1", source_score=10.0),
+        )
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+        _, consumed_state = proposal_outcome_evidence(state, observation)
+
+        with pytest.raises(ValueError, match="no pending adaptation provenance"):
+            _ = proposal_outcome_evidence(consumed_state, observation)
+
+    def test_outcome_evidence_rejects_transition_proposal_mismatch(self) -> None:
+        attribution = ProposalAttribution(proposal_id="p-1", source_score=10.0)
+        observation = Observation(
+            proposal=Proposal(candidate=3, proposal_id="p-1"),
+            candidate=3,
+            value=3.0,
+            score=3.0,
+        )
+
+        with pytest.raises(ValueError, match="bank transition must align"):
+            _ = CSAProposalOutcomeEvidence(
+                attribution=attribution,
+                evaluation=CSAProposalEvaluation.from_observation(observation),
+                bank_transition=CSABankTransition(
+                    proposal_id="p-2",
+                    route="local",
+                    disposition="replaced",
+                    target_index=0,
+                    survived_batch=True,
+                ),
+            )
+
+    def test_outcome_join_rejects_reordered_batch_transitions_atomically(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        for proposal_id in ("p-1", "p-2"):
+            state = record_proposal_attribution(
+                state,
+                ProposalAttribution(proposal_id=proposal_id, source_score=10.0),
+            )
+        evaluations = tuple(
+            CSAProposalEvaluation.from_observation(
+                Observation(
+                    proposal=Proposal(candidate=index, proposal_id=proposal_id),
+                    candidate=index,
+                    value=float(index),
+                    score=float(index),
+                ),
+            )
+            for index, proposal_id in enumerate(("p-1", "p-2"), start=1)
+        )
+        transitions = tuple(
+            CSABankTransition(
+                proposal_id=proposal_id,
+                route="local",
+                disposition="replaced",
+                target_index=index,
+                survived_batch=True,
+            )
+            for index, proposal_id in enumerate(("p-2", "p-1"))
+        )
+
+        with pytest.raises(ValueError, match="bank transition must align"):
+            _ = collect_proposal_outcome_evidence(state, evaluations, transitions)
+
+        assert tuple(
+            provenance.proposal_id for provenance in state.pending_attributions
+        ) == ("p-1", "p-2")
+
+    def test_outcome_join_rejects_duplicate_success_in_one_batch(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(proposal_id="p-1", source_score=10.0),
+        )
+        evaluation = CSAProposalEvaluation.from_observation(
+            Observation(
+                proposal=Proposal(candidate=1, proposal_id="p-1"),
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+        transition = CSABankTransition(
+            proposal_id="p-1",
+            route="local",
+            disposition="replaced",
+            target_index=0,
+            survived_batch=True,
+        )
+
+        with pytest.raises(ValueError, match="proposal ids must be distinct"):
+            _ = collect_proposal_outcome_evidence(
+                state,
+                (evaluation, evaluation),
+                (transition, transition),
+            )
+
+    def test_outcome_join_handles_mixed_provenance_without_false_credit(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            NonAdaptiveProposalAttribution(proposal_id="p-1", reason="regular"),
+        )
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(proposal_id="p-2", source_score=10.0),
+        )
+        evaluations = tuple(
+            CSAProposalEvaluation.from_observation(
+                Observation(
+                    proposal=Proposal(candidate=index, proposal_id=proposal_id),
+                    candidate=index,
+                    value=float(index),
+                    score=float(index),
+                ),
+            )
+            for index, proposal_id in enumerate(("p-1", "p-2"), start=1)
+        )
+        transitions = tuple(
+            CSABankTransition(
+                proposal_id=proposal_id,
+                route="local",
+                disposition="replaced",
+                target_index=index,
+                survived_batch=True,
+            )
+            for index, proposal_id in enumerate(("p-1", "p-2"))
+        )
+
+        evidence, next_state = collect_proposal_outcome_evidence(
+            state,
+            evaluations,
+            transitions,
+        )
+
+        assert tuple(item.attribution.proposal_id for item in evidence) == ("p-2",)
+        assert next_state.pending_attributions == ()
+
+    def test_outcome_join_preserves_zero_logical_evaluation_cost(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(proposal_id="p-1", source_score=10.0),
+        )
+        observation = Observation(
+            proposal=Proposal(candidate=1, proposal_id="p-1"),
+            candidate=1,
+            value=1.0,
+            score=1.0,
+        )
+
+        evidence, _ = proposal_outcome_evidence(
+            state,
+            observation,
+            evaluation_count=0,
+        )
+
+        assert evidence[0].evaluation.evaluation_count == 0
+
+    def test_disabled_outcome_join_does_not_materialize_evaluations(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
+
+        evidence, next_state = collect_proposal_outcome_evidence(
+            state,
+            ExplodingProposalEvaluationSequence(),
+            (),
+        )
+
+        assert evidence == ()
+        assert next_state is state
+
+    def test_refresh_rejects_non_refresh_provenance(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        state = record_proposal_attribution(
+            state,
+            NonAdaptiveProposalAttribution(proposal_id="p-1", reason="regular"),
+        )
+        evaluation = CSAProposalEvaluation.from_observation(
+            Observation(
+                proposal=Proposal(candidate=1, proposal_id="p-1"),
+                candidate=1,
+                value=1.0,
+                score=1.0,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="refresh_sample provenance"):
+            _ = consume_refresh_proposal_provenance(state, (evaluation,))
+
+    def test_outcome_join_rejects_observation_without_registered_provenance(
         self,
     ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
@@ -131,9 +482,8 @@ class CSAProposalStateTests:
             score=4.0,
         )
 
-        next_state = update_proposal_state(state, (observation,))
-
-        assert next_state == state
+        with pytest.raises(ValueError, match="no pending adaptation provenance"):
+            _ = proposal_outcome_evidence(state, observation)
 
     def test_update_proposal_state_records_local_displacement_stats_separately(
         self,
@@ -161,9 +511,10 @@ class CSAProposalStateTests:
             score=3.0,
         )
 
+        evidence, state = proposal_outcome_evidence(state, observation)
         next_state = update_proposal_state(
             state,
-            (observation,),
+            evidence,
             infer_local_displacement_leaf_paths=lambda _before, _after: (("y",),),
         )
 
@@ -197,10 +548,14 @@ class CSAProposalStateTests:
             score=3.0,
         )
 
+        evidence, state = proposal_outcome_evidence(
+            state,
+            observation,
+            refinement_changed_leaf_paths=(("x",),),
+        )
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=((("x",),),),
+            evidence,
             infer_local_displacement_leaf_paths=lambda _before, _after: (("y",),),
         )
 
@@ -235,10 +590,14 @@ class CSAProposalStateTests:
         ) -> tuple[LeafPath, ...]:
             raise AssertionError("inference should not run")
 
+        evidence, state = proposal_outcome_evidence(
+            state,
+            observation,
+            refinement_changed_leaf_paths=((0,),),
+        )
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=(((0,),),),
+            evidence,
             infer_local_displacement_leaf_paths=raise_if_called,
         )
 
@@ -273,10 +632,14 @@ class CSAProposalStateTests:
         ) -> tuple[LeafPath, ...]:
             raise AssertionError("inference should not run")
 
+        evidence, state = proposal_outcome_evidence(
+            state,
+            observation,
+            refinement_changed_leaf_paths=((0,), ("color",)),
+        )
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=(((0,), ("color",)),),
+            evidence,
             infer_local_displacement_leaf_paths=raise_if_called,
         )
 
@@ -306,10 +669,10 @@ class CSAProposalStateTests:
             score=3.0,
         )
 
+        evidence, state = proposal_outcome_evidence(state, observation)
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=(None,),
+            evidence,
             infer_local_displacement_leaf_paths=lambda _before, _after: (("y",),),
         )
 
@@ -336,10 +699,14 @@ class CSAProposalStateTests:
             score=3.0,
         )
 
+        evidence, state = proposal_outcome_evidence(
+            state,
+            observation,
+            refinement_changed_leaf_paths=(),
+        )
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=((),),
+            evidence,
             infer_local_displacement_leaf_paths=self._raise_if_called,
         )
 
@@ -377,17 +744,21 @@ class CSAProposalStateTests:
         ) -> tuple[LeafPath, ...]:
             raise AssertionError("inference should not run")
 
+        evidence, state = proposal_outcome_evidence(
+            state,
+            observation,
+            refinement_changed_leaf_paths=(),
+        )
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=((),),
+            evidence,
             infer_local_displacement_leaf_paths=raise_if_called,
         )
 
         assert next_state.local_displacement_leaf_stats == ()
         assert next_state.pending_attributions == ()
 
-    def test_update_proposal_state_rejects_misaligned_explicit_refinement_paths(
+    def test_outcome_join_rejects_misaligned_bank_transitions(
         self,
     ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
@@ -398,54 +769,27 @@ class CSAProposalStateTests:
             score=3.0,
         )
 
-        with pytest.raises(ValueError, match="align"):
-            _ = update_proposal_state(
+        with pytest.raises(ValueError, match="align one-to-one"):
+            _ = collect_proposal_outcome_evidence(
                 state,
-                (observation,),
-                explicit_local_displacement_leaf_paths=(None, None),
+                (CSAProposalEvaluation.from_observation(observation),),
+                (),
             )
 
-    def test_update_proposal_state_ignores_explicit_paths_when_policy_disabled(
+    def test_update_proposal_state_does_not_materialize_disabled_evidence(
         self,
     ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
-        observation = Observation(
-            proposal=Proposal(candidate=3, proposal_id="p-1"),
-            candidate=3,
-            value=3.0,
-            score=3.0,
-        )
 
         next_state = update_proposal_state(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=(None, None),
+            ExplodingOutcomeEvidenceSequence(),
             infer_local_displacement_leaf_paths=self._raise_if_called,
         )
 
         assert next_state == state
 
-    def test_update_proposal_state_does_not_materialize_disabled_explicit_paths(
-        self,
-    ) -> None:
-        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
-        observation = Observation(
-            proposal=Proposal(candidate=3, proposal_id="p-1"),
-            candidate=3,
-            value=3.0,
-            score=3.0,
-        )
-
-        next_state = update_proposal_state(
-            state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=ExplodingExplicitPathSequence(),
-            infer_local_displacement_leaf_paths=self._raise_if_called,
-        )
-
-        assert next_state == state
-
-    def test_update_proposal_state_does_not_materialize_empty_batch_explicit_paths(
+    def test_update_proposal_state_accepts_empty_evidence_batch(
         self,
     ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
@@ -453,7 +797,6 @@ class CSAProposalStateTests:
         next_state = update_proposal_state(
             state,
             (),
-            explicit_local_displacement_leaf_paths=ExplodingExplicitPathSequence(),
             infer_local_displacement_leaf_paths=self._raise_if_called,
         )
 
@@ -493,13 +836,12 @@ class CSAProposalStateTests:
         outcome_refinement = outcome.refinement
         assert outcome_refinement is not None
 
-        next_state = update_proposal_state(
+        evidence, state = proposal_outcome_evidence(
             state,
-            (observation,),
-            explicit_local_displacement_leaf_paths=(
-                outcome_refinement.changed_leaf_paths,
-            ),
+            observation,
+            refinement_changed_leaf_paths=outcome_refinement.changed_leaf_paths,
         )
+        next_state = update_proposal_state(state, evidence)
 
         assert len(next_state.local_displacement_leaf_stats) == 1
         assert next_state.local_displacement_leaf_stats[0].path == ("y",)
@@ -870,6 +1212,18 @@ class CSAProposalStateTests:
         assert attribution.source_score == 12.0
         assert attribution.proposal_family_key == "mutation:0"
         assert attribution.mutated_leaf_paths == (("x",),)
+        assert attribution.generator_kind == "mutation"
+
+    def test_proposal_attribution_preserves_passthrough_generator_kind(self) -> None:
+        attribution = ProposalAttribution.from_planned(
+            proposal_id="p-1",
+            attribution=PlannedProposalAttribution(
+                source_score=12.0,
+                generator_kind="passthrough",
+            ),
+        )
+
+        assert attribution.generator_kind == "passthrough"
 
     def test_planned_mutation_attribution_normalizes_paths(self) -> None:
         attribution = planned_mutation_attribution(

@@ -39,6 +39,8 @@ from variopt import (
     Proposal,
     Study,
 )
+from variopt.algorithms.population.csa import CSAOptimizer, CSAProfile
+from variopt.algorithms.population.csa.generation.proposal import CSAProposalPolicy
 from variopt.artifacts import (
     EvaluationAttemptBatch,
     EvaluationSuccess,
@@ -198,6 +200,65 @@ class StudyExactAsyncTests:
                 state,
                 execution_model=EXACT_ASYNC_EXECUTION_MODEL,
             )
+
+    def test_csa_exact_async_matches_sync_at_checkpoint_boundary(self) -> None:
+        space = IntegerSpace(low=-10, high=10)
+        problem = Problem(
+            space=space,
+            objective=SquareObjective(),
+        )
+        profile = CSAProfile(
+            seed_count=1,
+            proposal_policy=CSAProposalPolicy(enabled=True),
+        )
+        sync_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=2,
+            profile=profile,
+            random_state=7,
+        )
+        async_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=2,
+            profile=profile,
+            random_state=7,
+        )
+        sync_study = Study(
+            problem=problem,
+            run_method=sync_optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+        async_study = Study(
+            problem=problem,
+            run_method=async_optimizer,
+            evaluator=OutOfOrderAsyncEvaluator(),
+        )
+
+        sync_result, sync_state = sync_study.optimize(
+            max_evaluations=12,
+            batch_size=2,
+            execution_model=SYNC_BATCH_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+        async_result, async_state = async_study.optimize(
+            max_evaluations=12,
+            batch_size=2,
+            execution_model=EXACT_ASYNC_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(
+            (observation.candidate, observation.score)
+            for observation in async_result.observations
+        ) == tuple(
+            (observation.candidate, observation.score)
+            for observation in sync_result.observations
+        )
+        assert async_optimizer.state_to_dict(
+            async_state
+        ) == sync_optimizer.state_to_dict(
+            sync_state,
+        )
 
     def test_step_exact_async_reorders_out_of_order_completions(self) -> None:
         problem = Problem(
