@@ -44,7 +44,8 @@ class CSAResolvedProfile(FrozenGenericSlotsCompat, Generic[CandidateT]):
     random_seed_mode : int
         Legacy-compatible seed-selection mode identifier.
     weighted_partner_selection : bool
-        Whether partner sampling is weighted by CSA scores.
+        Whether partner sampling is biased toward nearer candidates by inverse
+        geometric distance, with zero-distance candidates taking precedence.
     max_bank_capacity : int | None
         Optional staged bank ceiling. ``None`` keeps the bank fixed.
     cutoff_schedule : CSACutoffSchedule
@@ -109,7 +110,7 @@ class CSAProfile(
     random_seed_mode : int | None, default=None
         Optional override for legacy-compatible seed-selection mode.
     weighted_partner_selection : bool | None, default=None
-        Optional override for weighted partner selection.
+        Optional override for inverse-distance partner weighting.
     max_bank_capacity : int | None, default=None
         Optional staged bank-capacity ceiling.
     cutoff_schedule : CSACutoffSchedule | None, default=None
@@ -215,7 +216,7 @@ class CSAProfile(
         random_seed_mode : int | None, default=None
             Optional override for legacy-compatible seed-selection mode.
         weighted_partner_selection : bool | None, default=None
-            Optional override for weighted partner selection.
+            Optional override for inverse-distance partner weighting.
         max_bank_capacity : int | None, default=None
             Optional staged bank-capacity ceiling.
         cutoff_schedule : CSACutoffSchedule | None, default=None
@@ -298,7 +299,7 @@ class CSAProfile(
         random_seed_mode : int | None, default=None
             Optional override for legacy-compatible seed-selection mode.
         weighted_partner_selection : bool | None, default=None
-            Optional override for weighted partner selection.
+            Optional override for inverse-distance partner weighting.
         max_bank_capacity : int | None, default=None
             Optional staged bank-capacity ceiling.
         cutoff_schedule : CSACutoffSchedule | None, default=None

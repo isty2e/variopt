@@ -116,7 +116,7 @@ caller, from `derive_csa_defaults(...)`, or from
 | --- | --- | --- |
 | `seed_count` | `int \| None` | Number of seeds tracked in each CSA generation. |
 | `random_seed_mode` | `int \| None` | Legacy-compatible seed-selection mode identifier. |
-| `weighted_partner_selection` | `bool \| None` | Whether partner sampling is weighted by CSA scores. |
+| `weighted_partner_selection` | `bool \| None` | Whether partner sampling uses inverse geometric distance, with zero-distance candidates taking precedence. |
 
 ## `DEProfile` And `GAProfile`
 
