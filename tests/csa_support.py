@@ -50,6 +50,7 @@ from variopt.algorithms.population.csa.engine import (
     CSAEngineState,
     begin_stage_transition,
 )
+from variopt.algorithms.population.csa.generation.proposal import CSAProposalPolicy
 from variopt.algorithms.population.csa.progression.cutoff.logic import (
     advance_cutoff_state,
 )
@@ -319,6 +320,7 @@ class CSAOptimizerKwargs(TypedDict, total=False):
     cycle_limit: int
     update_policy: CSABankUpdatePolicy
     score_model: CSAScoreModel[int]
+    proposal_policy: CSAProposalPolicy
     random_state: int | None
 
 
@@ -462,6 +464,11 @@ def make_optimizer(
     score_model: CSAScoreModel[int] = (
         kwargs["score_model"] if "score_model" in kwargs else CSAScoreModel()
     )
+    proposal_policy = (
+        kwargs["proposal_policy"]
+        if "proposal_policy" in kwargs
+        else CSAProposalPolicy()
+    )
     random_state = kwargs["random_state"] if "random_state" in kwargs else None
     preset = kwargs["preset"] if "preset" in kwargs else "joung_2018"
 
@@ -480,6 +487,7 @@ def make_optimizer(
         cycle_limit=cycle_limit,
         update_policy=update_policy,
         score_model=score_model,
+        proposal_policy=proposal_policy,
     )
 
     return CSAOptimizerDriver.create(

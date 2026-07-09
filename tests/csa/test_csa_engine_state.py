@@ -33,7 +33,11 @@ from variopt.algorithms.population.csa.generation.proposal import (
     CSAProposalPolicy,
     CSAProposalState,
 )
+from variopt.algorithms.population.csa.generation.proposal.evidence import (
+    CSAProposalEvaluation,
+)
 from variopt.algorithms.population.csa.generation.proposal.state import (
+    PlannedNonAdaptiveProposalAttribution,
     ProposalAttribution,
 )
 from variopt.algorithms.population.csa.generation.state import (
@@ -64,6 +68,14 @@ from variopt.algorithms.population.csa.selection.state import (
     SeedSelectionState,
 )
 from variopt.randomness import RandomStateSnapshot
+
+
+def generated_candidate(candidate: int) -> GeneratedCandidate[int]:
+    """Return a synthetic regular child with explicit non-adaptive provenance."""
+    return GeneratedCandidate(
+        candidate=candidate,
+        planned_attribution=PlannedNonAdaptiveProposalAttribution(reason="regular"),
+    )
 
 
 class EqualityHostileCandidate:
@@ -147,8 +159,8 @@ class GenerationQueueTests:
     def test_dequeue_advances_head_without_copying_candidates(self) -> None:
         queue = GenerationQueue(
             candidates=(
-                GeneratedCandidate(candidate=11),
-                GeneratedCandidate(candidate=12),
+                generated_candidate(11),
+                generated_candidate(12),
             ),
         )
 
@@ -166,20 +178,20 @@ class GenerationQueueTests:
     def test_rejects_invalid_head_index(self) -> None:
         with pytest.raises(ValueError, match="head_index"):
             _ = GenerationQueue[int](
-                candidates=(GeneratedCandidate(candidate=11),),
+                candidates=(generated_candidate(11),),
                 head_index=2,
             )
 
     def test_rejects_negative_head_index(self) -> None:
         with pytest.raises(ValueError, match="head_index"):
             _ = GenerationQueue[int](
-                candidates=(GeneratedCandidate(candidate=11),),
+                candidates=(generated_candidate(11),),
                 head_index=-1,
             )
 
     def test_exhausted_nonempty_queue_behaves_as_empty(self) -> None:
         queue = GenerationQueue(
-            candidates=(GeneratedCandidate(candidate=11),),
+            candidates=(generated_candidate(11),),
             head_index=1,
         )
 
@@ -192,7 +204,7 @@ class GenerationQueueTests:
     def test_runtime_with_exhausted_queue_and_no_buffers_is_inactive(self) -> None:
         runtime: GenerationRuntimeState[int] = GenerationRuntimeState(
             queue=GenerationQueue(
-                candidates=(GeneratedCandidate(candidate=11),),
+                candidates=(generated_candidate(11),),
                 head_index=1,
             ),
         )
@@ -209,23 +221,25 @@ class GenerationQueueTests:
         )
         runtime: GenerationRuntimeState[int] = GenerationRuntimeState(
             queue=GenerationQueue(
-                candidates=(GeneratedCandidate(candidate=11),),
+                candidates=(generated_candidate(11),),
                 head_index=1,
             ),
-            buffered_observations=(observation,),
+            buffered_evaluations=(CSAProposalEvaluation.from_observation(observation),),
         )
 
-        buffered_observations, idle_runtime = runtime.release_buffer()
+        buffered_evaluations, idle_runtime = runtime.release_buffer()
 
         assert runtime.ready_to_commit
-        assert buffered_observations == (observation,)
+        assert buffered_evaluations == (
+            CSAProposalEvaluation.from_observation(observation),
+        )
         assert not idle_runtime.is_active
 
     def test_shuffled_queue_preserves_all_candidates_with_zero_head_index(self) -> None:
         candidates: tuple[GeneratedCandidate[int], ...] = (
-            GeneratedCandidate(candidate=1),
-            GeneratedCandidate(candidate=2),
-            GeneratedCandidate(candidate=3),
+            generated_candidate(1),
+            generated_candidate(2),
+            generated_candidate(3),
         )
 
         queue: GenerationQueue[int] = GenerationQueue[int].from_candidates(
@@ -381,8 +395,8 @@ class CSAAskEngineTests:
             generation_state=GenerationRuntimeState(
                 queue=GenerationQueue(
                     candidates=(
-                        GeneratedCandidate(candidate=11),
-                        GeneratedCandidate(candidate=12),
+                        generated_candidate(11),
+                        generated_candidate(12),
                     ),
                 ),
             ),
@@ -400,8 +414,8 @@ class CSAAskEngineTests:
             selection_state=SeedSelectionState(),
             generation_queue=GenerationQueue(
                 candidates=(
-                    GeneratedCandidate(candidate=11),
-                    GeneratedCandidate(candidate=12),
+                    generated_candidate(11),
+                    generated_candidate(12),
                 ),
             ),
             trace_state=None,
@@ -414,8 +428,8 @@ class CSAAskEngineTests:
 
         assert candidate.candidate == 11
         assert next_state.generation_state.queue.candidates == (
-            GeneratedCandidate(candidate=11),
-            GeneratedCandidate(candidate=12),
+            generated_candidate(11),
+            generated_candidate(12),
         )
         assert next_state.generation_state.queue.head_index == 1
 

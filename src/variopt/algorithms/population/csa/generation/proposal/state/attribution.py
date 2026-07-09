@@ -1,10 +1,29 @@
 """Immutable attribution nouns for CSA proposal adaptation."""
 
 from dataclasses import dataclass
+from typing import Literal, TypeAlias
 
 from typing_extensions import Self
 
 from .......spaces import LeafPath
+
+NonAdaptiveProposalReason = Literal[
+    "space_sample",
+    "refresh_sample",
+    "regular",
+    "initial",
+]
+AdaptiveProposalGeneratorKind = Literal["mutation", "passthrough"]
+ADAPTIVE_PROPOSAL_GENERATOR_KINDS: tuple[str, ...] = (
+    "mutation",
+    "passthrough",
+)
+NON_ADAPTIVE_PROPOSAL_REASONS: tuple[str, ...] = (
+    "space_sample",
+    "refresh_sample",
+    "regular",
+    "initial",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,16 +106,41 @@ class PlannedProposalAttribution:
         Leaf paths explicitly mutated by the operator.
     numeric_subspace_attribution : NumericSubspaceAttribution | None, default=None
         Optional numeric-subspace attribution payload.
+    generator_kind : AdaptiveProposalGeneratorKind, default="mutation"
+        Whether generation changed the source candidate or passed it through.
     """
 
     source_score: float
     proposal_family_key: str | None = None
     mutated_leaf_paths: tuple[LeafPath, ...] = ()
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None
+    generator_kind: AdaptiveProposalGeneratorKind = "mutation"
 
     def __post_init__(self) -> None:
-        """Normalize immutable planned-attribution fields."""
+        """Normalize and validate immutable planned-attribution fields."""
         object.__setattr__(self, "mutated_leaf_paths", tuple(self.mutated_leaf_paths))
+        if self.generator_kind not in ADAPTIVE_PROPOSAL_GENERATOR_KINDS:
+            msg = "generator_kind must identify a canonical adaptive generator path"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedNonAdaptiveProposalAttribution:
+    """Explicit pre-id classification for a non-adaptive proposal.
+
+    Parameters
+    ----------
+    reason : NonAdaptiveProposalReason
+        Canonical reason the proposal does not participate in adaptation.
+    """
+
+    reason: NonAdaptiveProposalReason
+
+    def __post_init__(self) -> None:
+        """Reject non-canonical non-adaptive classifications."""
+        if self.reason not in NON_ADAPTIVE_PROPOSAL_REASONS:
+            msg = "reason must identify a canonical non-adaptive proposal path"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +159,8 @@ class ProposalAttribution:
         Leaf paths explicitly mutated by the operator.
     numeric_subspace_attribution : NumericSubspaceAttribution | None, default=None
         Optional numeric-subspace attribution payload.
+    generator_kind : AdaptiveProposalGeneratorKind, default="mutation"
+        Whether generation changed the source candidate or passed it through.
     """
 
     proposal_id: str
@@ -122,11 +168,15 @@ class ProposalAttribution:
     proposal_family_key: str | None = None
     mutated_leaf_paths: tuple[LeafPath, ...] = ()
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None
+    generator_kind: AdaptiveProposalGeneratorKind = "mutation"
 
     def __post_init__(self) -> None:
         """Normalize immutable attribution fields and reject invalid ids."""
         if self.proposal_id == "":
             msg = "proposal_id must not be empty"
+            raise ValueError(msg)
+        if self.generator_kind not in ADAPTIVE_PROPOSAL_GENERATOR_KINDS:
+            msg = "generator_kind must identify a canonical adaptive generator path"
             raise ValueError(msg)
 
         object.__setattr__(self, "mutated_leaf_paths", tuple(self.mutated_leaf_paths))
@@ -158,4 +208,67 @@ class ProposalAttribution:
             proposal_family_key=attribution.proposal_family_key,
             mutated_leaf_paths=attribution.mutated_leaf_paths,
             numeric_subspace_attribution=attribution.numeric_subspace_attribution,
+            generator_kind=attribution.generator_kind,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class NonAdaptiveProposalAttribution:
+    """In-flight classification for one intentionally non-adaptive proposal.
+
+    Parameters
+    ----------
+    proposal_id : str
+        Issued proposal identifier.
+    reason : NonAdaptiveProposalReason
+        Canonical reason the proposal does not participate in adaptation.
+    """
+
+    proposal_id: str
+    reason: NonAdaptiveProposalReason
+
+    def __post_init__(self) -> None:
+        """Reject empty identifiers and non-canonical reasons."""
+        if self.proposal_id == "":
+            msg = "proposal_id must not be empty"
+            raise ValueError(msg)
+        if self.reason not in NON_ADAPTIVE_PROPOSAL_REASONS:
+            msg = "reason must identify a canonical non-adaptive proposal path"
+            raise ValueError(msg)
+
+    @classmethod
+    def from_planned(
+        cls,
+        *,
+        proposal_id: str,
+        attribution: PlannedNonAdaptiveProposalAttribution,
+    ) -> Self:
+        """Return a pending classification bound to one issued proposal id."""
+        return cls(proposal_id=proposal_id, reason=attribution.reason)
+
+
+PlannedProposalProvenance: TypeAlias = (
+    PlannedProposalAttribution | PlannedNonAdaptiveProposalAttribution
+)
+ProposalProvenance: TypeAlias = ProposalAttribution | NonAdaptiveProposalAttribution
+
+
+def bind_proposal_provenance(
+    *,
+    proposal_id: str,
+    provenance: PlannedProposalProvenance,
+) -> ProposalProvenance:
+    """Bind one explicit planned provenance variant to an issued proposal id."""
+    if type(provenance) is PlannedProposalAttribution:
+        return ProposalAttribution.from_planned(
+            proposal_id=proposal_id,
+            attribution=provenance,
+        )
+    if type(provenance) is PlannedNonAdaptiveProposalAttribution:
+        return NonAdaptiveProposalAttribution.from_planned(
+            proposal_id=proposal_id,
+            attribution=provenance,
+        )
+
+    msg = "provenance must be a planned proposal provenance variant"
+    raise TypeError(msg)

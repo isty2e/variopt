@@ -35,6 +35,9 @@ from variopt.algorithms.population.csa import (
 from variopt.algorithms.population.csa.engine.ask import (
     apply_variation_operator_from_validated_parents,
 )
+from variopt.algorithms.population.csa.generation.proposal.state import (
+    ProposalAttribution,
+)
 from variopt.algorithms.population.csa.operators.editing import (
     sample_exchange_count,
 )
@@ -668,8 +671,9 @@ class OperatorTests:
 
         assert tuple(proposal.candidate for proposal in proposals) == ((0, 0),)
         if proposal_policy_enabled:
-            assert attribution is not None
+            assert type(attribution) is ProposalAttribution
             assert attribution.mutated_leaf_paths == ()
+            assert attribution.generator_kind == "passthrough"
         else:
             assert attribution is None
 

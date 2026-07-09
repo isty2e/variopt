@@ -2,10 +2,16 @@
 
 from .aggregate import CSAProposalState
 from .attribution import (
+    AdaptiveProposalGeneratorKind,
+    NonAdaptiveProposalAttribution,
+    NonAdaptiveProposalReason,
     NumericSubspaceAttribution,
     NumericSubspaceDisplacement,
+    PlannedNonAdaptiveProposalAttribution,
     PlannedProposalAttribution,
+    PlannedProposalProvenance,
     ProposalAttribution,
+    ProposalProvenance,
 )
 from .stats import (
     ProposalFamilyStat,
@@ -14,11 +20,17 @@ from .stats import (
 )
 
 __all__ = [
+    "AdaptiveProposalGeneratorKind",
     "CSAProposalState",
+    "NonAdaptiveProposalAttribution",
+    "NonAdaptiveProposalReason",
     "NumericSubspaceAttribution",
     "NumericSubspaceDisplacement",
+    "PlannedNonAdaptiveProposalAttribution",
     "PlannedProposalAttribution",
+    "PlannedProposalProvenance",
     "ProposalAttribution",
+    "ProposalProvenance",
     "ProposalFamilyStat",
     "ProposalLeafStat",
     "ProposalNumericSubspaceCovarianceStat",

@@ -1,5 +1,8 @@
 """Regression tests for CSA proposal-state export boundaries."""
 
+from variopt.algorithms.population.csa.generation.proposal import (
+    state as proposal_state_facade,
+)
 from variopt.algorithms.population.csa.generation.proposal.policy import (
     CSAProposalPolicy,
 )
@@ -26,6 +29,24 @@ class CSAProposalStateExportTests:
         assert CSAProposalState is CSAProposalStateDirect
         assert PlannedProposalAttribution is PlannedProposalAttributionDirect
         assert ProposalFamilyStat is ProposalFamilyStatDirect
+
+    def test_facade_export_set_is_exact(self) -> None:
+        assert proposal_state_facade.__all__ == [
+            "AdaptiveProposalGeneratorKind",
+            "CSAProposalState",
+            "NonAdaptiveProposalAttribution",
+            "NonAdaptiveProposalReason",
+            "NumericSubspaceAttribution",
+            "NumericSubspaceDisplacement",
+            "PlannedNonAdaptiveProposalAttribution",
+            "PlannedProposalAttribution",
+            "PlannedProposalProvenance",
+            "ProposalAttribution",
+            "ProposalProvenance",
+            "ProposalFamilyStat",
+            "ProposalLeafStat",
+            "ProposalNumericSubspaceCovarianceStat",
+        ]
 
     def test_semantic_submodules_are_importable(self) -> None:
         state = CSAProposalStateDirect.from_policy(CSAProposalPolicy())

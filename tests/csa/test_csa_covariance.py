@@ -6,10 +6,17 @@ import numpy as np
 
 from variopt import IntegerSpace, Observation, Proposal, RealSpace, TupleSpace
 from variopt.algorithms.population.csa import CSAProposalPolicy
+from variopt.algorithms.population.csa.banking.update.transition import (
+    CSABankTransition,
+)
 from variopt.algorithms.population.csa.generation.proposal.covariance import (
     sample_covariance_guided_candidate,
 )
+from variopt.algorithms.population.csa.generation.proposal.evidence import (
+    CSAProposalEvaluation,
+)
 from variopt.algorithms.population.csa.generation.proposal.logic import (
+    collect_proposal_outcome_evidence,
     record_proposal_attribution,
     update_proposal_state,
 )
@@ -86,9 +93,22 @@ class CSAProposalCovarianceTests:
             score=3.0,
         )
 
+        evidence, state = collect_proposal_outcome_evidence(
+            state,
+            (CSAProposalEvaluation.from_observation(observation),),
+            (
+                CSABankTransition(
+                    proposal_id="p-1",
+                    route="local",
+                    disposition="replaced",
+                    target_index=0,
+                    survived_batch=True,
+                ),
+            ),
+        )
         next_state = update_proposal_state(
             state,
-            (observation,),
+            evidence,
             infer_numeric_subspace_displacement=lambda attribution, observed_candidate: (
                 NumericSubspaceDisplacement(
                     leaf_paths=attribution.numeric_subspace_attribution.leaf_paths,

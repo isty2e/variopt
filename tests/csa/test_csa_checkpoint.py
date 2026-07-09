@@ -44,6 +44,7 @@ from variopt.algorithms.population.csa.generation.proposal import (
     CSAProposalState,
 )
 from variopt.algorithms.population.csa.generation.proposal.state import (
+    PlannedNonAdaptiveProposalAttribution,
     ProposalAttribution,
     ProposalFamilyStat,
     ProposalLeafStat,
@@ -983,7 +984,14 @@ class CSAEngineCheckpointTests:
             build_populated_engine_state(),
             generation_state=GenerationRuntimeState[int]().begin(
                 GenerationQueue(
-                    candidates=(GeneratedCandidate(candidate=9),),
+                    candidates=(
+                        GeneratedCandidate(
+                            candidate=9,
+                            planned_attribution=PlannedNonAdaptiveProposalAttribution(
+                                reason="regular",
+                            ),
+                        ),
+                    ),
                 ),
             ),
         )

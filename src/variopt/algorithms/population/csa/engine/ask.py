@@ -29,6 +29,10 @@ from ..generation.proposal.logic import (
     planned_mutation_attribution,
     sample_mutation_family_indices,
 )
+from ..generation.proposal.state.attribution import (
+    AdaptiveProposalGeneratorKind,
+    PlannedNonAdaptiveProposalAttribution,
+)
 from ..generation.state import GeneratedCandidate, GenerationQueue
 from ..operators.editing import sample_exchange_count
 from ..operators.structured import (
@@ -130,6 +134,7 @@ def emit_structured_mutation_candidate(
                 source_score=seed_score,
                 proposal_family_key=mutation_family_key(mutation_family_index),
                 mutated_leaf_paths=(),
+                generator_kind="passthrough",
             ),
         )
 
@@ -178,6 +183,12 @@ def emit_structured_mutation_candidate(
     else:
         candidate, selected_paths = covariance_candidate
 
+    generator_kind: AdaptiveProposalGeneratorKind = (
+        "passthrough"
+        if structured_space.candidates_equal(seed_candidate, candidate)
+        else "mutation"
+    )
+
     return GeneratedCandidate(
         candidate=candidate,
         planned_attribution=planned_mutation_attribution(
@@ -185,6 +196,7 @@ def emit_structured_mutation_candidate(
             proposal_family_key=mutation_family_key(mutation_family_index),
             mutated_leaf_paths=selected_paths,
             numeric_subspace_attribution=numeric_subspace_attribution,
+            generator_kind=generator_kind,
         ),
     )
 
@@ -361,6 +373,16 @@ def materialize_generation(
         nonlocal trace_state
         candidates: list[GeneratedCandidate[CandidateT]] = []
         empty_partner_indices: tuple[int, ...] = ()
+        regular_provenance = (
+            PlannedNonAdaptiveProposalAttribution(reason="regular")
+            if engine_state.proposal_state.policy.enabled
+            else None
+        )
+        initial_provenance = (
+            PlannedNonAdaptiveProposalAttribution(reason="initial")
+            if engine_state.proposal_state.policy.enabled
+            else None
+        )
 
         for spec in resolved_profile.perturbation_schedule.regular_family:
             for _ in range(spec.count):
@@ -389,7 +411,12 @@ def materialize_generation(
                         partner_indices=partner_indices,
                         candidate=candidate,
                     )
-                candidates.append(GeneratedCandidate(candidate=candidate))
+                candidates.append(
+                    GeneratedCandidate(
+                        candidate=candidate,
+                        planned_attribution=regular_provenance,
+                    ),
+                )
 
         should_emit_initial_family = (
             len(resolved_profile.perturbation_schedule.initial_family) > 0
@@ -445,7 +472,12 @@ def materialize_generation(
                             partner_indices=partner_indices,
                             candidate=candidate,
                         )
-                    candidates.append(GeneratedCandidate(candidate=candidate))
+                    candidates.append(
+                        GeneratedCandidate(
+                            candidate=candidate,
+                            planned_attribution=initial_provenance,
+                        ),
+                    )
 
         seed_candidate = bank.entries[seed_index].candidate
         seed_score = bank.entries[seed_index].value
@@ -457,7 +489,6 @@ def materialize_generation(
         )
         for mutation_family_index in mutation_family_indices:
             spec = mutation_family[mutation_family_index]
-            generated_candidate = GeneratedCandidate(candidate=seed_candidate)
             mutation_operator = spec.operator
             if (
                 engine_state.proposal_state.policy.enabled
@@ -486,16 +517,28 @@ def materialize_generation(
                     parents=(seed_candidate,),
                     random_state=random_state,
                 )
+                if engine_state.proposal_state.policy.enabled:
+                    generator_kind: AdaptiveProposalGeneratorKind = (
+                        "passthrough"
+                        if space.candidates_equal(seed_candidate, candidate)
+                        else "mutation"
+                    )
+                    planned_attribution = planned_mutation_attribution(
+                        source_score=seed_score,
+                        proposal_family_key=mutation_family_key(
+                            mutation_family_index,
+                        ),
+                        mutated_leaf_paths=(),
+                        generator_kind=generator_kind,
+                    )
+                else:
+                    space.validate(candidate)
+                    planned_attribution = None
                 generated_candidate = GeneratedCandidate(
                     candidate=candidate,
-                    planned_attribution=planned_mutation_attribution(
-                        source_score=seed_score,
-                        proposal_family_key=mutation_family_key(mutation_family_index),
-                        mutated_leaf_paths=(),
-                    ),
+                    planned_attribution=planned_attribution,
                 )
 
-            space.validate(candidate)
             if trace_state is not None:
                 trace_state = trace_state.record_emitted_child(
                     family="mutation",

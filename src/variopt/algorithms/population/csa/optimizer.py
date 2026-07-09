@@ -67,15 +67,18 @@ from .engine import (
 from .generation.perturbation import CSAPerturbationSchedule, CSAPerturbationSpec
 from .generation.proposal import CSAProposalState
 from .generation.proposal.covariance import infer_numeric_subspace_displacement
+from .generation.proposal.evidence import CSAProposalEvaluation
 from .generation.proposal.logic import (
     infer_structured_local_displacement_leaf_paths,
     proposal_local_search_context,
-    record_proposal_attribution,
 )
 from .generation.proposal.state.attribution import (
     NumericSubspaceDisplacement,
-    PlannedProposalAttribution,
+    PlannedNonAdaptiveProposalAttribution,
+    PlannedProposalProvenance,
     ProposalAttribution,
+    ProposalProvenance,
+    bind_proposal_provenance,
 )
 from .generation.state import GenerationRuntimeState
 from .profile import CSAProfile, CSAResolvedProfile
@@ -582,6 +585,7 @@ class CSAOptimizer(
 
         engine_state = state
         proposals: list[Proposal[CandidateT]] = []
+        issued_provenance: list[ProposalProvenance] = []
         for _ in range(batch_size):
             (
                 candidate,
@@ -595,15 +599,14 @@ class CSAOptimizer(
                 proposal,
                 tracks_generation=tracks_generation,
             )
-            if planned_attribution is not None:
-                engine_state = replace(
-                    engine_state,
-                    proposal_state=record_proposal_attribution(
-                        engine_state.proposal_state,
-                        ProposalAttribution.from_planned(
-                            proposal_id=proposal_id,
-                            attribution=planned_attribution,
-                        ),
+            if engine_state.proposal_state.policy.enabled:
+                if planned_attribution is None:
+                    msg = "enabled proposal adaptation requires explicit provenance"
+                    raise RuntimeError(msg)
+                issued_provenance.append(
+                    bind_proposal_provenance(
+                        proposal_id=proposal_id,
+                        provenance=planned_attribution,
                     ),
                 )
             proposals.append(proposal)
@@ -614,6 +617,14 @@ class CSAOptimizer(
                 and len(proposals) < batch_size
             ):
                 break
+
+        if issued_provenance:
+            engine_state = replace(
+                engine_state,
+                proposal_state=engine_state.proposal_state.register_pending_attributions(
+                    issued_provenance,
+                ),
+            )
 
         return tuple(proposals), engine_state
 
@@ -638,9 +649,12 @@ class CSAOptimizer(
             Updated immutable engine state after score, bank, and lifecycle
             updates.
         """
-        return self._tell_with_explicit_local_displacements(
+        return self._tell_evaluations(
             state,
-            observations,
+            tuple(
+                CSAProposalEvaluation.from_observation(observation)
+                for observation in observations
+            ),
         )
 
     def _tell_successes(
@@ -650,26 +664,22 @@ class CSAOptimizer(
             EvaluationSuccess[OutcomeCandidateT, Observation[CandidateT]]
         ],
     ) -> CSAEngineState[CandidateT]:
-        observations: list[Observation[CandidateT]] = []
-        explicit_paths: list[tuple[LeafPath, ...] | None] | None = None
-        for success_index, success in enumerate(successes):
-            observations.append(success.payload)
+        evaluations: list[CSAProposalEvaluation[CandidateT]] = []
+        for success in successes:
             refinement = success.refinement
-            if explicit_paths is not None:
-                explicit_paths.append(
-                    None if refinement is None else refinement.changed_leaf_paths
-                )
-            elif refinement is not None:
-                explicit_paths = [None for _index in range(success_index)]
-                explicit_paths.append(refinement.changed_leaf_paths)
+            evaluations.append(
+                CSAProposalEvaluation(
+                    observation=success.payload,
+                    evaluation_count=success.evaluation_count,
+                    refinement_changed_leaf_paths=(
+                        None if refinement is None else refinement.changed_leaf_paths
+                    ),
+                ),
+            )
 
-        if explicit_paths is None:
-            return self.tell(state, tuple(observations))
-
-        return self._tell_with_explicit_local_displacements(
+        return self._tell_evaluations(
             state,
-            tuple(observations),
-            explicit_local_displacement_leaf_paths=tuple(explicit_paths),
+            tuple(evaluations),
         )
 
     @override
@@ -717,7 +727,7 @@ class CSAOptimizer(
                 or next_state.banking_state.refresh_state is not None
             )
         ):
-            return self._tell_with_explicit_local_displacements(next_state, ())
+            return self._tell_evaluations(next_state, ())
 
         # A fully issued generation can fail without producing buffered
         # observations. Failed proposal consumption already resets that runtime
@@ -764,18 +774,14 @@ class CSAOptimizer(
 
         return frozenset(failed_proposal_ids)
 
-    def _tell_with_explicit_local_displacements(
+    def _tell_evaluations(
         self,
         state: CSAEngineState[CandidateT],
-        observations: Sequence[Observation[CandidateT]],
-        *,
-        explicit_local_displacement_leaf_paths: (
-            Sequence[tuple[LeafPath, ...] | None] | None
-        ) = None,
+        evaluations: Sequence[CSAProposalEvaluation[CandidateT]],
     ) -> CSAEngineState[CandidateT]:
-        """Advance CSA state with optional explicit local-displacement paths."""
-        for observation in observations:
-            self.space.validate(observation.candidate)
+        """Advance CSA state while preserving successful-attempt metadata."""
+        for evaluation in evaluations:
+            self.space.validate(evaluation.observation.candidate)
 
         local_displacement_leaf_path_inference: (
             Callable[[CandidateT, CandidateT], tuple[LeafPath, ...]] | None
@@ -841,7 +847,7 @@ class CSAOptimizer(
         if not state.scoring_state.acceptance_state.requires_random_state:
             return apply_tell(
                 state,
-                observations,
+                evaluations,
                 bank_capacity=self.bank_capacity,
                 diversity_metric=self.diversity_metric,
                 cutoff_schedule=self.resolved_profile.cutoff_schedule,
@@ -850,14 +856,13 @@ class CSAOptimizer(
                 infer_average_distance=self.infer_average_distance_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
-                explicit_local_displacement_leaf_paths=explicit_local_displacement_leaf_paths,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
             )
 
         next_engine_state, next_random_state = state.random_state.advance(
             lambda random_state: apply_tell(
                 state,
-                observations,
+                evaluations,
                 bank_capacity=self.bank_capacity,
                 diversity_metric=self.diversity_metric,
                 cutoff_schedule=self.resolved_profile.cutoff_schedule,
@@ -867,7 +872,6 @@ class CSAOptimizer(
                 infer_average_distance=self.infer_average_distance_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
-                explicit_local_displacement_leaf_paths=explicit_local_displacement_leaf_paths,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
             ),
         )
@@ -899,9 +903,23 @@ class CSAOptimizer(
 
         proposal_state = state.proposal_state
         leaf_paths = self.space.leaf_paths()
+        pending_provenance_by_id = {
+            provenance.proposal_id: provenance
+            for provenance in proposal_state.pending_attributions
+        }
         contexts: list[ProposalLocalSearchContext | None] = []
         for proposal in proposals:
             proposal_id = proposal.proposal_id
+            pending_provenance = (
+                None
+                if proposal_id is None
+                else pending_provenance_by_id.get(proposal_id)
+            )
+            pending_attribution = (
+                pending_provenance
+                if type(pending_provenance) is ProposalAttribution
+                else None
+            )
             # Proposal adaptation may be disabled while the caller still uses a
             # stochastic local-search kernel. Keep the context snapshot-only in
             # that case so checkpoint resume does not fall back to kernel-local
@@ -918,11 +936,7 @@ class CSAOptimizer(
             context = proposal_local_search_context(
                 state=proposal_state,
                 leaf_paths=leaf_paths,
-                attribution=(
-                    proposal_state.get_pending_attribution(proposal.proposal_id)
-                    if proposal.proposal_id is not None
-                    else None
-                ),
+                attribution=pending_attribution,
             )
             if context is None and random_state_snapshot is not None:
                 context = ProposalLocalSearchContext(
@@ -945,7 +959,7 @@ class CSAOptimizer(
     ) -> tuple[
         CandidateT,
         bool,
-        PlannedProposalAttribution | None,
+        PlannedProposalProvenance | None,
         CSAEngineState[CandidateT],
     ]:
         """Produce one CSA candidate and the advanced engine state.
@@ -957,9 +971,9 @@ class CSAOptimizer(
 
         Returns
         -------
-        tuple[CandidateT, bool, PlannedProposalAttribution | None, CSAEngineState[CandidateT]]
-            Candidate, generation-tracking flag, optional planned attribution,
-            and the advanced immutable engine state.
+        tuple[CandidateT, bool, PlannedProposalProvenance | None, CSAEngineState[CandidateT]]
+            Candidate, generation-tracking flag, planned provenance when
+            adaptation is enabled, and the advanced immutable engine state.
 
         Raises
         ------
@@ -991,6 +1005,9 @@ class CSAOptimizer(
 
         ask_plan = plan_next_ask(engine_state)
         if ask_plan.kind in {"space_sample", "refresh_sample"}:
+            non_adaptive_reason: Literal["space_sample", "refresh_sample"] = (
+                "space_sample" if ask_plan.kind == "space_sample" else "refresh_sample"
+            )
             if (
                 ask_plan.kind == "refresh_sample"
                 and engine_state.banking_state.refresh_state is not None
@@ -1010,7 +1027,13 @@ class CSAOptimizer(
             return (
                 candidate,
                 False,
-                None,
+                (
+                    PlannedNonAdaptiveProposalAttribution(
+                        reason=non_adaptive_reason,
+                    )
+                    if engine_state.proposal_state.policy.enabled
+                    else None
+                ),
                 engine_state.replace_random_state(next_random_state),
             )
 
