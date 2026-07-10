@@ -10,6 +10,16 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- `CSABankUpdatePolicy.minimum_significant_score_gap` has been replaced by the
+  dimensionless `minimum_significant_score_gap_ratio`. Significant bank updates
+  are now measured relative to the larger previous/next bank score span, so
+  positive affine objective transforms no longer change progression through
+  this significance gate. No deprecation shim is provided because converting an
+  absolute gap requires a representative bank score span that is unavailable at
+  policy construction time, while retaining the old path would preserve the
+  scale-dependent trajectory bug. As a migration starting point, use
+  `ratio = old_gap / representative_score_span` from the target problem; there
+  is no universal exact conversion across objective scales.
 - Removed the obsolete generic request-aligned record API from the root and
   artifact facades. `EvaluationRecord`, `InteractionEvaluationRecord`, and
   `RequestAlignedEvaluationRecord` are no longer public entry points; use

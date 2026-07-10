@@ -90,7 +90,7 @@ caller, from `derive_csa_defaults(...)`, or from
 | --- | --- | --- |
 | `clustering_policy` | [`CSAClusteringPolicy`][variopt.algorithms.population.csa.CSAClusteringPolicy] | Cluster-aware bank admission (disabled by default). |
 | `growth_policy` | [`CSABankGrowthPolicy`][variopt.algorithms.population.csa.CSABankGrowthPolicy] | Adaptive bank growth based on energy gap. |
-| `update_policy` | [`CSABankUpdatePolicy`][variopt.algorithms.population.csa.CSABankUpdatePolicy] | Near/far admission logic and the significant-score-gap threshold. |
+| `update_policy` | [`CSABankUpdatePolicy`][variopt.algorithms.population.csa.CSABankUpdatePolicy] | Near/far admission logic and the relative significant-score-gap threshold. |
 | `max_bank_capacity` | `int \| None` | Staged bank ceiling used for step-wise growth. `None` keeps the bank fixed. |
 
 ### Progression slots

@@ -39,7 +39,7 @@ class CSAProfileTests:
         assert not (resolved.restart_lite)
         assert resolved.cutoff_schedule.stagnation_update_limit == 10
         assert approx_equal(resolved.cutoff_schedule.reduction_factor, 0.983912)
-        assert resolved.update_policy.minimum_significant_score_gap == 0.001
+        assert resolved.update_policy.minimum_significant_score_gap_ratio == 0.001
         assert resolved.update_policy.local_update_mode == "normal"
         assert resolved.update_policy.far_update_mode == "crowding_aware"
         assert resolved.max_bank_capacity == 24
@@ -60,7 +60,7 @@ class CSAProfileTests:
         assert resolved.initial_new_bank_cut == 1
         assert resolved.cutoff_schedule.stagnation_update_limit == 10
         assert approx_equal(resolved.cutoff_schedule.reduction_factor, 0.983912)
-        assert resolved.update_policy.minimum_significant_score_gap == 0.001
+        assert resolved.update_policy.minimum_significant_score_gap_ratio == 0.001
         assert resolved.update_policy.local_update_mode == "normal"
         assert resolved.update_policy.far_update_mode == "worst"
         assert resolved.proposal_policy == CSAProposalPolicy()
@@ -101,7 +101,7 @@ class CSAProfileTests:
                 newcomer_first_round=False,
             ),
             update_policy=CSABankUpdatePolicy(
-                minimum_significant_score_gap=5.0,
+                minimum_significant_score_gap_ratio=0.5,
                 local_update_mode="disabled",
             ),
             score_model=CSAScoreModel(
@@ -125,7 +125,7 @@ class CSAProfileTests:
             preserve_fraction=0.5,
             newcomer_first_round=False,
         )
-        assert resolved.update_policy.minimum_significant_score_gap == 5.0
+        assert resolved.update_policy.minimum_significant_score_gap_ratio == 0.5
         assert resolved.update_policy.local_update_mode == "disabled"
         assert resolved.proposal_policy.enabled
         assert resolved.score_model.biased_potential is not None

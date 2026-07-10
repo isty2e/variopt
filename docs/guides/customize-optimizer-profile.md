@@ -195,7 +195,7 @@ profile: CSAProfile[int] = CSAProfile(
     ),
     acceptance_policy=CSAAcceptancePolicy(initial_temperature=1.0),
     update_policy=CSABankUpdatePolicy(
-        minimum_significant_score_gap=0.01,
+        minimum_significant_score_gap_ratio=0.01,
         local_update_mode="normal",
         far_update_mode="crowding_aware",
     ),

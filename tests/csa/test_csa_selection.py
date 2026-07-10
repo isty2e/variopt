@@ -804,7 +804,7 @@ class CSASelectionTests(CSAOptimizerTestCase):
                 minimum_distance_cutoff=5.0,
             ),
             update_policy=CSABankUpdatePolicy(
-                minimum_significant_score_gap=5.0,
+                minimum_significant_score_gap_ratio=0.02,
             ),
             random_state=0,
         )
@@ -845,6 +845,100 @@ class CSASelectionTests(CSAOptimizerTestCase):
 
         assert tuple(entry.candidate for entry in optimizer.bank.entries) == (12, 20)
         assert optimizer.selection_state.used_entry_indices == frozenset({1})
+
+    def test_batch_tell_seed_invalidation_is_positive_affine_invariant(self) -> None:
+        def run_transformed_batch(
+            *,
+            scale: float,
+            offset: float,
+        ) -> tuple[
+            tuple[int, ...],
+            SeedSelectionState,
+            tuple[int, int, int, int],
+            tuple[int, ...],
+        ]:
+            def transform(score: float) -> float:
+                return scale * score + offset
+
+            optimizer = make_optimizer(
+                space=IntegerSpace(low=0, high=2000),
+                diversity_metric=AbsoluteDistance(),
+                variation_operator=RepeatParent(),
+                bank_capacity=2,
+                cutoff_schedule=schedule(
+                    initial_distance_cutoff=5.0,
+                    minimum_distance_cutoff=5.0,
+                ),
+                update_policy=CSABankUpdatePolicy(
+                    minimum_significant_score_gap_ratio=0.01,
+                ),
+                random_state=0,
+            )
+            optimizer.bank = Bank(
+                capacity=2,
+                entries=(
+                    BankEntry(
+                        candidate=10,
+                        value=transform(100.0),
+                        proposal_id="b0",
+                    ),
+                    BankEntry(
+                        candidate=20,
+                        value=transform(400.0),
+                        proposal_id="b1",
+                    ),
+                ),
+            )
+            optimizer.cutoff_state = CSACutoffState(
+                iteration_count=1,
+                cycle_count=0,
+                distance_cutoff=5.0,
+                minimum_distance_cutoff=5.0,
+            )
+            optimizer.selection_state = SeedSelectionState(
+                used_entry_indices=frozenset({0, 1}),
+                bank_status=(True, True),
+            )
+            proposals = (
+                Proposal(candidate=11, proposal_id="p0"),
+                Proposal(candidate=12, proposal_id="p1"),
+            )
+            optimizer.set_pending_proposals(proposals)
+            optimizer.tell(
+                (
+                    Observation(
+                        proposal=proposals[0],
+                        candidate=11,
+                        value=transform(97.0),
+                        score=transform(97.0),
+                    ),
+                    Observation(
+                        proposal=proposals[1],
+                        candidate=12,
+                        value=transform(93.0),
+                        score=transform(93.0),
+                    ),
+                ),
+            )
+            next_proposals = optimizer.ask(batch_size=1)
+            cutoff_state = optimizer.progression_state.cutoff_state
+            stage_state = optimizer.progression_state.stage_state
+            return (
+                tuple(entry.candidate for entry in optimizer.bank.entries),
+                optimizer.selection_state,
+                (
+                    cutoff_state.iteration_count,
+                    cutoff_state.cycle_count,
+                    stage_state.stage_index,
+                    stage_state.stage_round,
+                ),
+                tuple(proposal.candidate for proposal in next_proposals),
+            )
+
+        assert run_transformed_batch(scale=1.0, offset=0.0) == run_transformed_batch(
+            scale=100.0,
+            offset=7.0,
+        )
 
     def test_seed_count_larger_than_bank_capacity_still_uses_distinct_seeds(
         self,
