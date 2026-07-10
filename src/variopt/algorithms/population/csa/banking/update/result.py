@@ -138,9 +138,9 @@ def significant_update_indices(
     *,
     previous_bank: Bank[CandidateT],
     next_bank: Bank[CandidateT],
-    minimum_significant_score_gap: float,
+    minimum_significant_score_gap_ratio: float,
 ) -> frozenset[int]:
-    """Return changed indices whose score gap exceeds the significance floor.
+    """Return changed indices whose relative score change is significant.
 
     Parameters
     ----------
@@ -148,14 +148,55 @@ def significant_update_indices(
         Bank snapshot before reduction.
     next_bank : Bank[CandidateT]
         Bank snapshot after reduction.
-    minimum_significant_score_gap : float
-        Minimum absolute score delta required to mark a change as significant.
+    minimum_significant_score_gap_ratio : float
+        Minimum score delta divided by the larger previous/next bank score
+        span required to mark a change as significant. The ratio must be
+        exceeded strictly. Appended entries are always significant, while a
+        removed entry has no index in the returned next-bank coordinate system.
 
     Returns
     -------
     frozenset[int]
         Significant updated indices.
     """
+    # Normalize extrema before subtraction so finite extreme scores cannot
+    # overflow or underflow the dimensionless ratio calculation.
+    previous_minimum_score = min(
+        (entry.value for entry in previous_bank.entries),
+        default=0.0,
+    )
+    previous_maximum_score = max(
+        (entry.value for entry in previous_bank.entries),
+        default=0.0,
+    )
+    next_minimum_score = min(
+        (entry.value for entry in next_bank.entries),
+        default=0.0,
+    )
+    next_maximum_score = max(
+        (entry.value for entry in next_bank.entries),
+        default=0.0,
+    )
+    normalization_scale = max(
+        abs(previous_minimum_score),
+        abs(previous_maximum_score),
+        abs(next_minimum_score),
+        abs(next_maximum_score),
+    )
+    if normalization_scale == 0.0:
+        previous_score_span = 0.0
+        next_score_span = 0.0
+    else:
+        previous_score_span = (
+            previous_maximum_score / normalization_scale
+            - previous_minimum_score / normalization_scale
+        )
+        next_score_span = (
+            next_maximum_score / normalization_scale
+            - next_minimum_score / normalization_scale
+        )
+    score_span = max(previous_score_span, next_score_span)
+
     updated_indices: set[int] = set()
     common_entry_count = min(
         len(previous_bank.entries),
@@ -163,10 +204,18 @@ def significant_update_indices(
     )
     for index in range(common_entry_count):
         if previous_bank.entries[index] != next_bank.entries[index]:
-            score_delta = abs(
-                previous_bank.entries[index].value - next_bank.entries[index].value
+            if score_span == 0.0:
+                if previous_bank.entries[index].value != next_bank.entries[index].value:
+                    updated_indices.add(index)
+                continue
+            normalized_score_delta = abs(
+                previous_bank.entries[index].value / normalization_scale
+                - next_bank.entries[index].value / normalization_scale
             )
-            if score_delta > minimum_significant_score_gap:
+            if (
+                normalized_score_delta / score_span
+                > minimum_significant_score_gap_ratio
+            ):
                 updated_indices.add(index)
 
     for index in range(common_entry_count, len(next_bank.entries)):

@@ -10,6 +10,11 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- `CSABankUpdatePolicy.minimum_significant_score_gap` has been replaced by the
+  dimensionless `minimum_significant_score_gap_ratio`. Significant bank updates
+  are now measured relative to the larger previous/next bank score span, so
+  positive affine objective transforms no longer change progression through
+  this significance gate.
 - Removed the obsolete generic request-aligned record API from the root and
   artifact facades. `EvaluationRecord`, `InteractionEvaluationRecord`, and
   `RequestAlignedEvaluationRecord` are no longer public entry points; use

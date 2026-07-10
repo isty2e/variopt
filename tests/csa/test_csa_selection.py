@@ -804,7 +804,7 @@ class CSASelectionTests(CSAOptimizerTestCase):
                 minimum_distance_cutoff=5.0,
             ),
             update_policy=CSABankUpdatePolicy(
-                minimum_significant_score_gap=5.0,
+                minimum_significant_score_gap_ratio=0.02,
             ),
             random_state=0,
         )

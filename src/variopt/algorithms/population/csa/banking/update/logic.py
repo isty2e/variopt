@@ -240,16 +240,18 @@ def apply_bank_update_batch(
             infer_score_gap=infer_score_gap,
             cutoff_schedule=cutoff_schedule,
         )
-        batch_changed_indices = changed_indices(
-            previous_bank=bank_before_step,
-            next_bank=shadow_bank,
-        )
-        batch_significant_update_indices = significant_update_indices(
-            previous_bank=bank_before_step,
-            next_bank=shadow_bank,
-            minimum_significant_score_gap=update_policy.minimum_significant_score_gap,
-        )
         if trace_state is not None:
+            batch_changed_indices = changed_indices(
+                previous_bank=bank_before_step,
+                next_bank=shadow_bank,
+            )
+            batch_significant_update_indices = significant_update_indices(
+                previous_bank=bank_before_step,
+                next_bank=shadow_bank,
+                minimum_significant_score_gap_ratio=(
+                    update_policy.minimum_significant_score_gap_ratio
+                ),
+            )
             trace_state = trace_state.record_bank_update_step(
                 candidate=observation.candidate,
                 value=observation.score,
@@ -268,7 +270,9 @@ def apply_bank_update_batch(
     final_significant_update_indices = significant_update_indices(
         previous_bank=previous_bank,
         next_bank=shadow_bank,
-        minimum_significant_score_gap=update_policy.minimum_significant_score_gap,
+        minimum_significant_score_gap_ratio=(
+            update_policy.minimum_significant_score_gap_ratio
+        ),
     )
     removed_indices: frozenset[int] = frozenset()
     (

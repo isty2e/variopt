@@ -1226,7 +1226,9 @@ class CSABankingTests(CSAOptimizerTestCase):
             diversity_metric=AbsoluteDistance(),
             variation_operator=RepeatParent(),
             bank_capacity=2,
-            update_policy=CSABankUpdatePolicy(minimum_significant_score_gap=2.0),
+            update_policy=CSABankUpdatePolicy(
+                minimum_significant_score_gap_ratio=0.1,
+            ),
             random_state=0,
         )
         previous_bank = Bank(
@@ -1247,8 +1249,8 @@ class CSABankingTests(CSAOptimizerTestCase):
         updated_indices = significant_update_indices(
             previous_bank=previous_bank,
             next_bank=next_bank,
-            minimum_significant_score_gap=(
-                optimizer.bank_update_policy.minimum_significant_score_gap
+            minimum_significant_score_gap_ratio=(
+                optimizer.bank_update_policy.minimum_significant_score_gap_ratio
             ),
         )
 
@@ -1262,7 +1264,9 @@ class CSABankingTests(CSAOptimizerTestCase):
             diversity_metric=AbsoluteDistance(),
             variation_operator=RepeatParent(),
             bank_capacity=3,
-            update_policy=CSABankUpdatePolicy(minimum_significant_score_gap=2.0),
+            update_policy=CSABankUpdatePolicy(
+                minimum_significant_score_gap_ratio=0.1,
+            ),
             random_state=0,
         )
         previous_bank = Bank(
@@ -1284,8 +1288,8 @@ class CSABankingTests(CSAOptimizerTestCase):
         updated_indices = significant_update_indices(
             previous_bank=previous_bank,
             next_bank=next_bank,
-            minimum_significant_score_gap=(
-                optimizer.bank_update_policy.minimum_significant_score_gap
+            minimum_significant_score_gap_ratio=(
+                optimizer.bank_update_policy.minimum_significant_score_gap_ratio
             ),
         )
 

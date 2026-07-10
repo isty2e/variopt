@@ -1,6 +1,7 @@
 """Public CSA bank-update policy objects."""
 
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Literal
 
 CSALocalUpdateMode = Literal["disabled", "normal"]
@@ -40,8 +41,11 @@ class CSABankUpdatePolicy:
 
     Parameters
     ----------
-    minimum_significant_score_gap : float, default=0.0
-        Minimum score gap for an update to count as significant.
+    minimum_significant_score_gap_ratio : float, default=0.0
+        Minimum score change relative to the bank score span for an update to
+        count as significant. Appended entries are always significant; when
+        both bank snapshots have zero score span, any nonzero score change is
+        significant.
     local_update_mode : CSALocalUpdateMode, default="normal"
         Policy used for near-bank local updates.
     far_update_mode : CSAFarUpdateMode, default="worst"
@@ -52,7 +56,7 @@ class CSABankUpdatePolicy:
         Optional niche-quality policy used by crowding-aware far updates.
     """
 
-    minimum_significant_score_gap: float = 0.0
+    minimum_significant_score_gap_ratio: float = 0.0
     local_update_mode: CSALocalUpdateMode = "normal"
     far_update_mode: CSAFarUpdateMode = "worst"
     crowding_penalty_ratio: float = 0.75
@@ -62,8 +66,14 @@ class CSABankUpdatePolicy:
 
     def __post_init__(self) -> None:
         """Reject invalid update-policy configuration."""
-        if self.minimum_significant_score_gap < 0.0:
-            msg = "minimum_significant_score_gap must be non-negative"
+        if isinstance(self.minimum_significant_score_gap_ratio, bool):
+            msg = "minimum_significant_score_gap_ratio must be numeric"
+            raise TypeError(msg)
+        if not isfinite(self.minimum_significant_score_gap_ratio):
+            msg = "minimum_significant_score_gap_ratio must be finite"
+            raise ValueError(msg)
+        if self.minimum_significant_score_gap_ratio < 0.0:
+            msg = "minimum_significant_score_gap_ratio must be non-negative"
             raise ValueError(msg)
 
         if self.local_update_mode not in ("disabled", "normal"):
