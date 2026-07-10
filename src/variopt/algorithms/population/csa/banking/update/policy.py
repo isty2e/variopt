@@ -69,7 +69,14 @@ class CSABankUpdatePolicy:
         if isinstance(self.minimum_significant_score_gap_ratio, bool):
             msg = "minimum_significant_score_gap_ratio must be numeric"
             raise TypeError(msg)
-        if not isfinite(self.minimum_significant_score_gap_ratio):
+        try:
+            significance_ratio_is_finite = isfinite(
+                self.minimum_significant_score_gap_ratio,
+            )
+        except TypeError as error:
+            msg = "minimum_significant_score_gap_ratio must be numeric"
+            raise TypeError(msg) from error
+        if not significance_ratio_is_finite:
             msg = "minimum_significant_score_gap_ratio must be finite"
             raise ValueError(msg)
         if self.minimum_significant_score_gap_ratio < 0.0:

@@ -83,6 +83,16 @@ def test_threshold_equality_is_not_significant() -> None:
     assert updated_indices == frozenset()
 
 
+def test_zero_ratio_marks_every_nonzero_score_change_as_significant() -> None:
+    updated_indices = significant_update_indices(
+        previous_bank=bank((0.0, 10.0)),
+        next_bank=bank((1.0, 10.0), candidates=(2, 1)),
+        minimum_significant_score_gap_ratio=0.0,
+    )
+
+    assert updated_indices == frozenset({0})
+
+
 @pytest.mark.parametrize(
     ("previous_scores", "next_scores"),
     [
@@ -119,7 +129,7 @@ def test_zero_spread_identity_only_change_is_not_significant() -> None:
 @pytest.mark.parametrize(
     ("previous_scores", "next_scores"),
     [
-        ((0.0, 1e-300), (5e-301, 1e-300)),
+        ((0.0, 1e-323), (5e-324, 1e-323)),
         ((-1e308, 1e308), (0.0, 1e308)),
     ],
 )

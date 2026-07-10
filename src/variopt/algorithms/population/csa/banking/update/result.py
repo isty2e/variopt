@@ -153,6 +153,8 @@ def significant_update_indices(
         span required to mark a change as significant. The ratio must be
         exceeded strictly. Appended entries are always significant, while a
         removed entry has no index in the returned next-bank coordinate system.
+        Using the larger span keeps the criterion symmetric between snapshots
+        and prevents a narrowing next bank alone from increasing sensitivity.
 
     Returns
     -------
