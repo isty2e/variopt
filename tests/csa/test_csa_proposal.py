@@ -26,8 +26,11 @@ from variopt.algorithms.population.csa.generation.perturbation import (
     CSAPerturbationSpec,
 )
 from variopt.algorithms.population.csa.generation.proposal.evidence import (
+    CSAProposalCredit,
     CSAProposalEvaluation,
+    CSAProposalLeafCredit,
     CSAProposalOutcomeEvidence,
+    derive_proposal_credits,
 )
 from variopt.algorithms.population.csa.generation.proposal.logic import (
     collect_proposal_outcome_evidence,
@@ -179,6 +182,191 @@ class CSAProposalStateTests:
             )
 
     @pytest.mark.parametrize(
+        ("survived_batch", "evaluation_count", "expected_credit"),
+        [
+            (False, 1, 0.0),
+            (True, 0, 1.0),
+            (True, 1, 1.0),
+            (True, 4, 0.25),
+        ],
+    )
+    def test_proposal_credit_uses_final_survival_and_logical_cost(
+        self,
+        survived_batch: bool,
+        evaluation_count: int,
+        expected_credit: float,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            evaluation_count=evaluation_count,
+            survived_batch=survived_batch,
+        )
+
+        credit = CSAProposalCredit(outcome_evidence=evidence)
+
+        assert approx_equal(credit.pipeline_credit, expected_credit)
+
+    def test_proposal_credit_rejects_admission_without_final_survival(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            survived_batch=False,
+            disposition="replaced",
+        )
+
+        assert CSAProposalCredit(outcome_evidence=evidence).pipeline_credit == 0.0
+
+    def test_proposal_credit_accepts_surviving_growth_append(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            route="growth",
+            disposition="appended",
+        )
+
+        assert CSAProposalCredit(outcome_evidence=evidence).pipeline_credit == 1.0
+
+    def test_proposal_credit_remains_bounded_for_large_logical_cost(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            evaluation_count=10**12,
+        )
+
+        credit = CSAProposalCredit(outcome_evidence=evidence).pipeline_credit
+
+        assert 0.0 < credit <= 1.0
+        assert approx_equal(credit, 1e-12)
+
+    def test_proposal_credit_does_not_overflow_for_arbitrary_size_cost(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            evaluation_count=10**400,
+        )
+
+        credit = CSAProposalCredit(outcome_evidence=evidence).pipeline_credit
+
+        assert credit == 0.0
+
+    def test_proposal_credit_is_positive_affine_invariant(self) -> None:
+        original = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            evaluation_count=2,
+        )
+        transformed = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=1007.0,
+            observed_score=307.0,
+            evaluation_count=2,
+        )
+
+        assert (
+            CSAProposalCredit(outcome_evidence=original).pipeline_credit
+            == CSAProposalCredit(outcome_evidence=transformed).pipeline_credit
+        )
+
+    def test_proposal_credit_conserves_multi_stage_leaf_credit(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            mutated_leaf_paths=(("x",), ("x",), ("y",)),
+        )
+        credit = CSAProposalCredit(outcome_evidence=evidence)
+
+        leaf_credits = credit.leaf_association_credits(
+            local_displacement_leaf_paths=(("y",), ("z",), ("z",)),
+        )
+
+        assert tuple((item.source, item.path) for item in leaf_credits) == (
+            ("mutation", ("x",)),
+            ("mutation", ("y",)),
+            ("local_displacement", ("y",)),
+            ("local_displacement", ("z",)),
+        )
+        assert all(approx_equal(item.credit, 0.25) for item in leaf_credits)
+        assert approx_equal(
+            sum(item.credit for item in leaf_credits),
+            credit.pipeline_credit,
+        )
+
+    def test_proposal_credit_without_leaf_associations_emits_none(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+        )
+
+        leaf_credits = CSAProposalCredit(
+            outcome_evidence=evidence,
+        ).leaf_association_credits()
+
+        assert leaf_credits == ()
+
+    def test_rejected_proposal_emits_zero_leaf_association_credit(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+            survived_batch=False,
+            mutated_leaf_paths=(("x",),),
+        )
+
+        leaf_credits = CSAProposalCredit(
+            outcome_evidence=evidence,
+        ).leaf_association_credits()
+
+        assert len(leaf_credits) == 1
+        assert leaf_credits[0].credit == 0.0
+
+    @pytest.mark.parametrize("invalid_credit", [True, float("nan"), float("inf")])
+    def test_leaf_credit_rejects_noncanonical_values(
+        self,
+        invalid_credit: float,
+    ) -> None:
+        with pytest.raises((TypeError, ValueError), match="credit"):
+            _ = CSAProposalLeafCredit(
+                source="mutation",
+                path=("x",),
+                credit=invalid_credit,
+            )
+
+    def test_derive_proposal_credits_uses_canonical_proposal_order(self) -> None:
+        later = self._outcome_evidence(
+            proposal_id="p-2",
+            source_score=10.0,
+            observed_score=3.0,
+        )
+        earlier = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+        )
+
+        credits = derive_proposal_credits((later, earlier))
+
+        assert tuple(credit.proposal_id for credit in credits) == ("p-1", "p-2")
+
+    def test_derive_proposal_credits_rejects_duplicate_proposal_ids(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            source_score=10.0,
+            observed_score=3.0,
+        )
+
+        with pytest.raises(ValueError, match="distinct proposal ids"):
+            _ = derive_proposal_credits((evidence, evidence))
+
+    @pytest.mark.parametrize(
         (
             "route",
             "disposition",
@@ -211,6 +399,45 @@ class CSAProposalStateTests:
                 target_index=target_index,
                 survived_batch=survived_batch,
             )
+
+    @staticmethod
+    def _outcome_evidence(
+        *,
+        proposal_id: str,
+        source_score: float,
+        observed_score: float,
+        evaluation_count: int = 1,
+        survived_batch: bool = True,
+        mutated_leaf_paths: tuple[LeafPath, ...] = (),
+        route: CSABankTransitionRoute = "local",
+        disposition: CSABankTransitionDisposition | None = None,
+    ) -> CSAProposalOutcomeEvidence[int]:
+        canonical_disposition = disposition
+        if canonical_disposition is None:
+            canonical_disposition = "replaced" if survived_batch else "rejected"
+        return CSAProposalOutcomeEvidence(
+            attribution=ProposalAttribution(
+                proposal_id=proposal_id,
+                source_score=source_score,
+                mutated_leaf_paths=mutated_leaf_paths,
+            ),
+            evaluation=CSAProposalEvaluation(
+                observation=Observation(
+                    proposal=Proposal(candidate=1, proposal_id=proposal_id),
+                    candidate=1,
+                    value=observed_score,
+                    score=observed_score,
+                ),
+                evaluation_count=evaluation_count,
+            ),
+            bank_transition=CSABankTransition(
+                proposal_id=proposal_id,
+                route=route,
+                disposition=canonical_disposition,
+                target_index=(0 if canonical_disposition != "rejected" else None),
+                survived_batch=survived_batch,
+            ),
+        )
 
     def test_update_proposal_state_consumes_matching_attribution(self) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
