@@ -31,9 +31,9 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
 from variopt.algorithms.population.csa.generation.proposal.state import (
     ProposalAttribution,
 )
-from variopt.algorithms.population.csa.generation.proposal.state.credit import (
-    ProposalGenerationCreditBatch,
-    ProposalLeafCreditSummary,
+from variopt.algorithms.population.csa.generation.proposal.state.generation_evidence import (
+    ProposalGenerationAdaptationEvidence,
+    ProposalLeafAdaptationSummary,
 )
 from variopt.algorithms.population.permutation import (
     InversionMutation,
@@ -288,14 +288,14 @@ class CSADefaultComponentTests:
                 proposal_id="p-1",
                 mutated_leaf_paths=((1,),),
             ),
-        ).record_generation_credit(
-            ProposalGenerationCreditBatch(
+        ).record_generation_evidence(
+            ProposalGenerationAdaptationEvidence(
                 evidence_count=1,
                 mutation_leaf_summaries=(
-                    ProposalLeafCreditSummary(
+                    ProposalLeafAdaptationSummary(
                         path=(0,),
                         observation_count=1,
-                        total_credit=1.0,
+                        total_survival_efficiency=1.0,
                     ),
                 ),
             ),

@@ -319,12 +319,12 @@ def materialize_generation(
                     if family_key not in family_stats_by_key
                     else family_stats_by_key[family_key].observation_count
                 ),
-                effective_credit_rate=(
+                effective_survival_efficiency=(
                     0.0
                     if family_key not in family_stats_by_key
-                    else family_stats_by_key[family_key].effective_credit_rate(
+                    else family_stats_by_key[family_key].effective_survival_efficiency(
                         current_update_index=engine_state.proposal_state.update_index,
-                        credit_decay=engine_state.proposal_state.policy.credit_decay,
+                        adaptation_decay=engine_state.proposal_state.policy.adaptation_decay,
                     )
                 ),
                 mutation_weight=mutation_weights_by_key.get(family_key),

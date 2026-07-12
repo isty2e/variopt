@@ -215,14 +215,14 @@ def sample_covariance_delta(
     covariance_mean = np.asarray(
         covariance_stat.effective_mean(
             current_update_index=proposal_state.update_index,
-            credit_decay=proposal_state.policy.credit_decay,
+            adaptation_decay=proposal_state.policy.adaptation_decay,
         ),
         dtype=np.float64,
     )
     covariance_matrix = np.asarray(
         covariance_stat.effective_covariance(
             current_update_index=proposal_state.update_index,
-            credit_decay=proposal_state.policy.credit_decay,
+            adaptation_decay=proposal_state.policy.adaptation_decay,
         ),
         dtype=np.float64,
     )

@@ -10,19 +10,20 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
-- CSA proposal adaptation now records final bank-survival credit per logical
+- CSA proposal adaptation now records final-bank survival efficiency per logical
   evaluation cost instead of raw objective deltas. `CSAProposalPolicy.score_decay`
-  is renamed to `credit_decay`, and proposal-state checkpoint statistics now
-  store `discounted_credit` together with `discounted_observation_weight` so
-  allocation can use a decayed credit rate rather than exposure-dependent credit
+  is renamed to `adaptation_decay`, and proposal-state checkpoint statistics now
+  store `discounted_survival_efficiency` together with `discounted_observation_weight` so
+  allocation can use decayed survival efficiency rather than exposure-dependent
   totals. No old checkpoint migration is provided because retaining the raw-score
   state would preserve scale-dependent policy behavior. The `score_decay` name is
   not retained as an alias because decay now advances over generation-level
-  bounded credit rather than per-outcome score deltas; requiring `credit_decay`
+  bounded adaptation evidence rather than per-outcome score deltas; requiring
+  `adaptation_decay`
   makes that semantic migration explicit. Construct new checkpoints under the
   revised policy and replace custom `score_decay=` arguments with
-  `credit_decay=`. Proposal-family trace artifacts likewise expose
-  `effective_credit_rate` instead of `effective_score_credit`.
+  `adaptation_decay=`. Proposal-family trace artifacts expose
+  `effective_survival_efficiency`.
   Proposal update indices and leaf failure streaks now advance per completed
   generation rather than per outcome, and the CSA engine checkpoint version is
   `2`. An enabled policy now emits the declared mutation-family counts without

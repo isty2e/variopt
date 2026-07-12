@@ -11,10 +11,10 @@ from ......typevars import CandidateT
 from ...banking.update.transition import CSABankTransition
 from .state.attribution import ProposalAttribution
 
-CSAProposalLeafCreditSource = Literal["mutation", "local_displacement"]
+CSAProposalLeafAssociationSource = Literal["mutation", "local_displacement"]
 
 
-def _normalize_leaf_credit_source(value: str) -> CSAProposalLeafCreditSource:
+def _normalize_leaf_association_source(value: str) -> CSAProposalLeafAssociationSource:
     if value == "mutation":
         return "mutation"
     if value == "local_displacement":
@@ -23,20 +23,20 @@ def _normalize_leaf_credit_source(value: str) -> CSAProposalLeafCreditSource:
     raise ValueError(msg)
 
 
-def _normalize_credit(value: int | float) -> float:
+def _normalize_survival_efficiency_share(value: int | float) -> float:
     if isinstance(value, bool):
-        msg = "credit must be numeric"
+        msg = "survival_efficiency_share must be numeric"
         raise TypeError(msg)
     try:
         normalized_value = float(value)
     except (TypeError, ValueError) as error:
-        msg = "credit must be numeric"
+        msg = "survival_efficiency_share must be numeric"
         raise TypeError(msg) from error
     if not isfinite(normalized_value):
-        msg = "credit must be finite"
+        msg = "survival_efficiency_share must be finite"
         raise ValueError(msg)
     if not 0.0 <= normalized_value <= 1.0:
-        msg = "credit must lie within [0, 1]"
+        msg = "survival_efficiency_share must lie within [0, 1]"
         raise ValueError(msg)
     return normalized_value
 
@@ -118,42 +118,46 @@ class CSAProposalOutcomeEvidence(Generic[CandidateT]):
 
 
 @dataclass(frozen=True, slots=True)
-class CSAProposalLeafCredit:
-    """One bounded association between pipeline credit and a structured leaf.
+class CSAProposalLeafSignal:
+    """One bounded association between survival efficiency and a structured leaf.
 
     Parameters
     ----------
-    source : CSAProposalLeafCreditSource
+    source : CSAProposalLeafAssociationSource
         Pipeline stage that associated the outcome with the leaf.
     path : LeafPath
-        Canonical structured leaf path receiving the association credit.
-    credit : float
-        Non-negative share of one outcome's pipeline credit.
+        Canonical structured leaf path receiving the association signal.
+    survival_efficiency_share : float
+        Non-negative share of one outcome's survival efficiency.
     """
 
-    source: CSAProposalLeafCreditSource
+    source: CSAProposalLeafAssociationSource
     path: LeafPath
-    credit: float
+    survival_efficiency_share: float
 
     def __post_init__(self) -> None:
-        """Normalize the path and reject invalid credit records."""
+        """Normalize the path and reject an invalid efficiency share."""
         object.__setattr__(
             self,
             "source",
-            _normalize_leaf_credit_source(self.source),
+            _normalize_leaf_association_source(self.source),
         )
         object.__setattr__(self, "path", tuple(self.path))
-        object.__setattr__(self, "credit", _normalize_credit(self.credit))
+        object.__setattr__(
+            self,
+            "survival_efficiency_share",
+            _normalize_survival_efficiency_share(self.survival_efficiency_share),
+        )
 
 
 @dataclass(frozen=True, slots=True)
-class CSAProposalCredit(Generic[CandidateT]):
-    """Scale-invariant adaptation credit for one completed proposal outcome.
+class CSAProposalAdaptationSignal(Generic[CandidateT]):
+    """Scale-invariant adaptation signal for one completed proposal outcome.
 
-    A proposal earns credit only when it survives the conclusive batch-level
-    bank transition. Logical evaluation cost discounts that binary success.
-    Zero-cost outcomes use a unit denominator so that credit stays finite and
-    bounded.
+    A proposal has positive survival efficiency only when it survives the
+    conclusive batch-level bank transition. Logical evaluation cost discounts
+    that binary success. Zero-cost outcomes use a unit denominator so the signal
+    stays finite and bounded.
 
     Parameters
     ----------
@@ -170,22 +174,22 @@ class CSAProposalCredit(Generic[CandidateT]):
 
     @property
     def logical_cost(self) -> int:
-        """Return the bounded-credit logical cost denominator."""
+        """Return the bounded signal's logical-cost denominator."""
         return max(1, self.outcome_evidence.evaluation.evaluation_count)
 
     @property
-    def pipeline_credit(self) -> float:
-        """Return final bank-survival credit per logical evaluation cost."""
+    def survival_efficiency(self) -> float:
+        """Return final-bank survival per logical evaluation cost."""
         if not self.outcome_evidence.bank_transition.survived_batch:
             return 0.0
         return 1 / self.logical_cost
 
-    def leaf_association_credits(
+    def leaf_association_signals(
         self,
         *,
         local_displacement_leaf_paths: Sequence[LeafPath] = (),
-    ) -> tuple[CSAProposalLeafCredit, ...]:
-        """Distribute pipeline credit across distinct leaf-stage associations.
+    ) -> tuple[CSAProposalLeafSignal, ...]:
+        """Distribute survival efficiency across leaf-stage associations.
 
         Parameters
         ----------
@@ -194,9 +198,9 @@ class CSAProposalCredit(Generic[CandidateT]):
 
         Returns
         -------
-        tuple[CSAProposalLeafCredit, ...]
+        tuple[CSAProposalLeafSignal, ...]
             Mutation associations followed by local-displacement associations.
-            Their total credit never exceeds :attr:`pipeline_credit`.
+            Their total share never exceeds :attr:`survival_efficiency`.
         """
         mutation_paths = tuple(
             dict.fromkeys(
@@ -211,28 +215,28 @@ class CSAProposalCredit(Generic[CandidateT]):
         if association_count == 0:
             return ()
 
-        association_credit = self.pipeline_credit / float(association_count)
+        survival_efficiency_share = self.survival_efficiency / float(association_count)
         return tuple(
-            CSAProposalLeafCredit(
+            CSAProposalLeafSignal(
                 source="mutation",
                 path=path,
-                credit=association_credit,
+                survival_efficiency_share=survival_efficiency_share,
             )
             for path in mutation_paths
         ) + tuple(
-            CSAProposalLeafCredit(
+            CSAProposalLeafSignal(
                 source="local_displacement",
                 path=path,
-                credit=association_credit,
+                survival_efficiency_share=survival_efficiency_share,
             )
             for path in local_displacement_paths
         )
 
 
-def derive_proposal_credits(
+def derive_proposal_adaptation_signals(
     outcome_evidence: Sequence[CSAProposalOutcomeEvidence[CandidateT]],
-) -> tuple[CSAProposalCredit[CandidateT], ...]:
-    """Return proposal credits in canonical proposal-id order.
+) -> tuple[CSAProposalAdaptationSignal[CandidateT], ...]:
+    """Return adaptation signals in canonical proposal-id order.
 
     Parameters
     ----------
@@ -241,8 +245,8 @@ def derive_proposal_credits(
 
     Returns
     -------
-    tuple[CSAProposalCredit[CandidateT], ...]
-        Derived credits ordered independently of async completion order.
+    tuple[CSAProposalAdaptationSignal[CandidateT], ...]
+        Derived signals ordered independently of async completion order.
 
     Raises
     ------
@@ -257,8 +261,9 @@ def derive_proposal_credits(
         evidence.attribution.proposal_id for evidence in ordered_evidence
     )
     if len(set(proposal_ids)) != len(proposal_ids):
-        msg = "proposal credit evidence must contain distinct proposal ids"
+        msg = "proposal adaptation evidence must contain distinct proposal ids"
         raise ValueError(msg)
     return tuple(
-        CSAProposalCredit(outcome_evidence=evidence) for evidence in ordered_evidence
+        CSAProposalAdaptationSignal(outcome_evidence=evidence)
+        for evidence in ordered_evidence
     )

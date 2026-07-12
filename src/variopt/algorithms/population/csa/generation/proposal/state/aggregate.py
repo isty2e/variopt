@@ -17,7 +17,7 @@ from .......json_types import (
 from .......spaces import LeafPath
 from ..policy import CSAProposalPolicy
 from .attribution import ProposalProvenance
-from .credit import ProposalGenerationCreditBatch
+from .generation_evidence import ProposalGenerationAdaptationEvidence
 from .stats import (
     ProposalFamilyStat,
     ProposalLeafStat,
@@ -450,7 +450,7 @@ class CSAProposalState:
         ----------
         proposal_ids : collections.abc.Set[str]
             Proposal identifiers whose in-flight attributions should be
-            removed without recording score credit.
+            removed without recording adaptation evidence.
 
         Returns
         -------
@@ -489,16 +489,16 @@ class CSAProposalState:
 
         return None
 
-    def record_generation_credit(
+    def record_generation_evidence(
         self,
-        batch: ProposalGenerationCreditBatch,
+        batch: ProposalGenerationAdaptationEvidence,
     ) -> "CSAProposalState":
         """Return state updated from one canonical completed-generation batch.
 
         Parameters
         ----------
-        batch : ProposalGenerationCreditBatch
-            Scale-invariant family, leaf, and displacement credit summaries.
+        batch : ProposalGenerationAdaptationEvidence
+            Scale-invariant family, leaf, and displacement evidence.
 
         Returns
         -------
@@ -525,7 +525,7 @@ class CSAProposalState:
                 current_stat.record_generation(
                     summary,
                     current_update_index=next_update_index,
-                    credit_decay=self.policy.credit_decay,
+                    adaptation_decay=self.policy.adaptation_decay,
                 )
             )
 
@@ -544,7 +544,7 @@ class CSAProposalState:
             next_leaf_stats_by_path[summary.path] = current_stat.record_generation(
                 summary,
                 current_update_index=next_update_index,
-                credit_decay=self.policy.credit_decay,
+                adaptation_decay=self.policy.adaptation_decay,
             )
 
         next_local_leaf_stats_by_path = {
@@ -564,7 +564,7 @@ class CSAProposalState:
                 current_stat.record_generation(
                     summary,
                     current_update_index=next_update_index,
-                    credit_decay=self.policy.credit_decay,
+                    adaptation_decay=self.policy.adaptation_decay,
                 )
             )
 
@@ -576,8 +576,8 @@ class CSAProposalState:
             next_covariance_stats_by_paths
         )
         if self.policy.numeric_covariance_strength > 0.0:
-            for displacement_credit in batch.numeric_displacement_credits:
-                displacement = displacement_credit.displacement
+            for numeric_evidence in batch.numeric_displacement_evidence:
+                displacement = numeric_evidence.displacement
                 current_stat = next_covariance_stats_by_paths.get(
                     displacement.leaf_paths
                 )
@@ -597,9 +597,9 @@ class CSAProposalState:
                 next_covariance_stats_by_paths[displacement.leaf_paths] = (
                     current_stat.record_successful_displacement(
                         displacement,
-                        credit=displacement_credit.credit,
+                        survival_efficiency=numeric_evidence.survival_efficiency,
                         current_update_index=next_update_index,
-                        credit_decay=self.policy.credit_decay,
+                        adaptation_decay=self.policy.adaptation_decay,
                     )
                 )
 

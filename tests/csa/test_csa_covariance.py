@@ -171,11 +171,11 @@ class CSAProposalCovarianceTests:
 
         assert covariance_stat.effective_mean(
             current_update_index=3,
-            credit_decay=0.5,
+            adaptation_decay=0.5,
         ) == (0.0, 0.0)
         assert covariance_stat.effective_covariance(
             current_update_index=3,
-            credit_decay=0.5,
+            adaptation_decay=0.5,
         ) == ((0.0, 0.0), (0.0, 0.0))
 
     def test_covariance_lazy_decay_precedes_later_observation(self) -> None:
@@ -188,9 +188,9 @@ class CSAProposalCovarianceTests:
                 leaf_paths=((0,),),
                 displacement_coordinates=(1.0,),
             ),
-            credit=1.0,
+            survival_efficiency=1.0,
             current_update_index=1,
-            credit_decay=0.5,
+            adaptation_decay=0.5,
         )
 
         covariance_stat = covariance_stat.record_successful_displacement(
@@ -198,30 +198,30 @@ class CSAProposalCovarianceTests:
                 leaf_paths=((0,),),
                 displacement_coordinates=(3.0,),
             ),
-            credit=1.0,
+            survival_efficiency=1.0,
             current_update_index=3,
-            credit_decay=0.5,
+            adaptation_decay=0.5,
         )
 
         assert approx_equal(covariance_stat.discounted_weight, 1.25)
         assert approx_equal(
             covariance_stat.effective_mean(
                 current_update_index=3,
-                credit_decay=0.5,
+                adaptation_decay=0.5,
             )[0],
             2.6,
         )
         assert approx_equal(
             covariance_stat.effective_covariance(
                 current_update_index=3,
-                credit_decay=0.5,
+                adaptation_decay=0.5,
             )[0][0],
             0.64,
         )
 
-    def test_covariance_is_invariant_to_uniform_credit_scale(self) -> None:
+    def test_covariance_is_invariant_to_uniform_survival_efficiency_scale(self) -> None:
         covariance_stats: list[ProposalNumericSubspaceCovarianceStat] = []
-        for credit in (1.0, 0.1):
+        for survival_efficiency in (1.0, 0.1):
             covariance_stat = ProposalNumericSubspaceCovarianceStat(
                 leaf_paths=((0,),),
                 discounted_displacement_sum=(0.0,),
@@ -236,16 +236,16 @@ class CSAProposalCovarianceTests:
                         leaf_paths=((0,),),
                         displacement_coordinates=(coordinate,),
                     ),
-                    credit=credit,
+                    survival_efficiency=survival_efficiency,
                     current_update_index=update_index,
-                    credit_decay=1.0,
+                    adaptation_decay=1.0,
                 )
             covariance_stats.append(covariance_stat)
 
         covariances = tuple(
             covariance_stat.effective_covariance(
                 current_update_index=4,
-                credit_decay=1.0,
+                adaptation_decay=1.0,
             )
             for covariance_stat in covariance_stats
         )
@@ -263,17 +263,17 @@ class CSAProposalCovarianceTests:
             discounted_outer_product_sum=((0.0,),),
         ).record_successful_displacement(
             displacement,
-            credit=1.0,
+            survival_efficiency=1.0,
             current_update_index=1,
-            credit_decay=1.0,
+            adaptation_decay=1.0,
         )
 
         with np.testing.assert_raises_regex(ValueError, "moment accumulation"):
             _ = covariance_stat.record_successful_displacement(
                 displacement,
-                credit=1.0,
+                survival_efficiency=1.0,
                 current_update_index=2,
-                credit_decay=1.0,
+                adaptation_decay=1.0,
             )
 
     def test_update_proposal_state_records_numeric_covariance_displacement(
@@ -281,7 +281,7 @@ class CSAProposalCovarianceTests:
     ) -> None:
         policy = CSAProposalPolicy(
             enabled=True,
-            credit_decay=1.0,
+            adaptation_decay=1.0,
             numeric_covariance_strength=1.0,
             numeric_covariance_min_observations=1,
         )
@@ -335,13 +335,13 @@ class CSAProposalCovarianceTests:
         assert covariance_stat.discounted_weight == 0.25
         assert covariance_stat.effective_mean(
             current_update_index=next_state.update_index,
-            credit_decay=1.0,
+            adaptation_decay=1.0,
         ) == (1.0, -1.0)
 
     def test_covariance_moments_weight_displacements_by_logical_cost(self) -> None:
         policy = CSAProposalPolicy(
             enabled=True,
-            credit_decay=1.0,
+            adaptation_decay=1.0,
             numeric_covariance_strength=1.0,
             numeric_covariance_min_observations=1,
         )
@@ -413,14 +413,14 @@ class CSAProposalCovarianceTests:
         assert approx_equal(
             covariance_stat.effective_mean(
                 current_update_index=next_state.update_index,
-                credit_decay=1.0,
+                adaptation_decay=1.0,
             )[0],
             1.5,
         )
         assert approx_equal(
             covariance_stat.effective_covariance(
                 current_update_index=next_state.update_index,
-                credit_decay=1.0,
+                adaptation_decay=1.0,
             )[0][0],
             0.75,
         )
@@ -487,7 +487,7 @@ class CSAProposalCovarianceTests:
         proposal_state = CSAProposalState(
             policy=CSAProposalPolicy(
                 enabled=True,
-                credit_decay=1.0,
+                adaptation_decay=1.0,
                 numeric_covariance_strength=1.0,
                 numeric_covariance_min_observations=1,
             ),

@@ -1,4 +1,4 @@
-"""Canonical generation-level credit summaries for CSA proposal state."""
+"""Canonical generation-level evidence for CSA proposal adaptation."""
 
 from dataclasses import dataclass
 from math import fsum, isfinite
@@ -8,8 +8,8 @@ from .attribution import NumericSubspaceDisplacement
 
 
 @dataclass(frozen=True, slots=True)
-class ProposalFamilyCreditSummary:
-    """Generation-level credit summarized for one proposal family.
+class ProposalFamilyAdaptationSummary:
+    """Generation-level adaptation summary for one proposal family.
 
     Parameters
     ----------
@@ -17,13 +17,13 @@ class ProposalFamilyCreditSummary:
         Canonical proposal-family identifier.
     observation_count : int
         Number of family outcomes represented by the summary.
-    total_credit : float
-        Sum of bounded pipeline credits for those outcomes.
+    total_survival_efficiency : float
+        Sum of bounded pipeline efficiencies for those outcomes.
     """
 
     family_key: str
     observation_count: int
-    total_credit: float
+    total_survival_efficiency: float
 
     def __post_init__(self) -> None:
         """Reject malformed family summaries."""
@@ -36,20 +36,20 @@ class ProposalFamilyCreditSummary:
         if self.observation_count <= 0:
             msg = "observation_count must be positive"
             raise ValueError(msg)
-        if type(self.total_credit) is not float:
-            msg = "total_credit must be a float"
+        if type(self.total_survival_efficiency) is not float:
+            msg = "total_survival_efficiency must be a float"
             raise TypeError(msg)
-        if not isfinite(self.total_credit):
-            msg = "total_credit must be finite"
+        if not isfinite(self.total_survival_efficiency):
+            msg = "total_survival_efficiency must be finite"
             raise ValueError(msg)
-        if not 0.0 <= self.total_credit <= self.observation_count:
-            msg = "total_credit must be bounded by observation_count"
+        if not 0.0 <= self.total_survival_efficiency <= self.observation_count:
+            msg = "total_survival_efficiency must be bounded by observation_count"
             raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
-class ProposalLeafCreditSummary:
-    """Generation-level credit summarized for one leaf-stage association.
+class ProposalLeafAdaptationSummary:
+    """Generation-level adaptation summary for one leaf-stage association.
 
     Parameters
     ----------
@@ -57,13 +57,13 @@ class ProposalLeafCreditSummary:
         Canonical structured leaf path.
     observation_count : int
         Number of associated outcomes represented by the summary.
-    total_credit : float
-        Sum of bounded association credits for those outcomes.
+    total_survival_efficiency : float
+        Sum of bounded association efficiencies for those outcomes.
     """
 
     path: LeafPath
     observation_count: int
-    total_credit: float
+    total_survival_efficiency: float
 
     def __post_init__(self) -> None:
         """Normalize the path and reject malformed leaf summaries."""
@@ -74,65 +74,65 @@ class ProposalLeafCreditSummary:
         if self.observation_count <= 0:
             msg = "observation_count must be positive"
             raise ValueError(msg)
-        if type(self.total_credit) is not float:
-            msg = "total_credit must be a float"
+        if type(self.total_survival_efficiency) is not float:
+            msg = "total_survival_efficiency must be a float"
             raise TypeError(msg)
-        if not isfinite(self.total_credit):
-            msg = "total_credit must be finite"
+        if not isfinite(self.total_survival_efficiency):
+            msg = "total_survival_efficiency must be finite"
             raise ValueError(msg)
-        if not 0.0 <= self.total_credit <= self.observation_count:
-            msg = "total_credit must be bounded by observation_count"
+        if not 0.0 <= self.total_survival_efficiency <= self.observation_count:
+            msg = "total_survival_efficiency must be bounded by observation_count"
             raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
-class ProposalNumericDisplacementCredit:
-    """One numeric displacement weighted by canonical pipeline credit.
+class ProposalNumericDisplacementEvidence:
+    """One numeric displacement weighted by survival efficiency.
 
     Parameters
     ----------
     displacement : NumericSubspaceDisplacement
         Numeric displacement vector inferred from one completed proposal.
-    credit : float
-        Bounded pipeline credit used as the covariance sample weight.
+    survival_efficiency : float
+        Bounded proposal survival efficiency used as the covariance sample weight.
     """
 
     displacement: NumericSubspaceDisplacement
-    credit: float
+    survival_efficiency: float
 
     def __post_init__(self) -> None:
-        """Reject malformed displacement credit."""
-        if type(self.credit) is not float:
-            msg = "credit must be a float"
+        """Reject malformed displacement evidence."""
+        if type(self.survival_efficiency) is not float:
+            msg = "survival_efficiency must be a float"
             raise TypeError(msg)
-        if not 0.0 < self.credit <= 1.0:
-            msg = "credit must lie within (0, 1]"
+        if not 0.0 < self.survival_efficiency <= 1.0:
+            msg = "survival_efficiency must lie within (0, 1]"
             raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
-class ProposalGenerationCreditBatch:
+class ProposalGenerationAdaptationEvidence:
     """Canonical adaptation input for one completed proposal generation.
 
     Parameters
     ----------
     evidence_count : int
         Number of adaptive outcomes represented by the generation.
-    family_summaries : tuple[ProposalFamilyCreditSummary, ...], default=()
-        Family-level credit summaries in canonical key order.
-    mutation_leaf_summaries : tuple[ProposalLeafCreditSummary, ...], default=()
+    family_summaries : tuple[ProposalFamilyAdaptationSummary, ...], default=()
+        Family-level adaptation summaries in canonical key order.
+    mutation_leaf_summaries : tuple[ProposalLeafAdaptationSummary, ...], default=()
         Mutation-stage leaf summaries in canonical path order.
-    local_displacement_leaf_summaries : tuple[ProposalLeafCreditSummary, ...], default=()
+    local_displacement_leaf_summaries : tuple[ProposalLeafAdaptationSummary, ...], default=()
         Local-displacement leaf summaries in canonical path order.
-    numeric_displacement_credits : tuple[ProposalNumericDisplacementCredit, ...], default=()
+    numeric_displacement_evidence : tuple[ProposalNumericDisplacementEvidence, ...], default=()
         Successful displacement samples in canonical proposal order.
     """
 
     evidence_count: int
-    family_summaries: tuple[ProposalFamilyCreditSummary, ...] = ()
-    mutation_leaf_summaries: tuple[ProposalLeafCreditSummary, ...] = ()
-    local_displacement_leaf_summaries: tuple[ProposalLeafCreditSummary, ...] = ()
-    numeric_displacement_credits: tuple[ProposalNumericDisplacementCredit, ...] = ()
+    family_summaries: tuple[ProposalFamilyAdaptationSummary, ...] = ()
+    mutation_leaf_summaries: tuple[ProposalLeafAdaptationSummary, ...] = ()
+    local_displacement_leaf_summaries: tuple[ProposalLeafAdaptationSummary, ...] = ()
+    numeric_displacement_evidence: tuple[ProposalNumericDisplacementEvidence, ...] = ()
 
     def __post_init__(self) -> None:
         """Normalize tuple fields and reject inconsistent generation batches."""
@@ -149,8 +149,8 @@ class ProposalGenerationCreditBatch:
         )
         object.__setattr__(
             self,
-            "numeric_displacement_credits",
-            tuple(self.numeric_displacement_credits),
+            "numeric_displacement_evidence",
+            tuple(self.numeric_displacement_evidence),
         )
         if type(self.evidence_count) is not int:
             msg = "evidence_count must be an int"
@@ -182,7 +182,7 @@ class ProposalGenerationCreditBatch:
         if any(
             summary.observation_count > self.evidence_count for summary in all_summaries
         ):
-            msg = "credit summary observations must not exceed evidence_count"
+            msg = "adaptation summary observations must not exceed evidence_count"
             raise ValueError(msg)
         if (
             sum(summary.observation_count for summary in self.family_summaries)
@@ -192,7 +192,7 @@ class ProposalGenerationCreditBatch:
             raise ValueError(msg)
         if (
             fsum(
-                summary.total_credit
+                summary.total_survival_efficiency
                 for summary in (
                     *self.mutation_leaf_summaries,
                     *self.local_displacement_leaf_summaries,
@@ -200,8 +200,8 @@ class ProposalGenerationCreditBatch:
             )
             > self.evidence_count
         ):
-            msg = "leaf association credit must be bounded by evidence_count"
+            msg = "leaf survival-efficiency shares must be bounded by evidence_count"
             raise ValueError(msg)
-        if len(self.numeric_displacement_credits) > self.evidence_count:
+        if len(self.numeric_displacement_evidence) > self.evidence_count:
             msg = "numeric displacement count must not exceed evidence_count"
             raise ValueError(msg)

@@ -240,7 +240,7 @@ def build_populated_engine_state() -> CSAEngineState[int]:
                 ProposalFamilyStat(
                     family_key="mutation",
                     observation_count=4,
-                    discounted_credit=2.5,
+                    discounted_survival_efficiency=2.5,
                     discounted_observation_weight=4.0,
                     last_update_index=7,
                 ),
@@ -249,7 +249,7 @@ def build_populated_engine_state() -> CSAEngineState[int]:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=3,
-                    discounted_credit=1.25,
+                    discounted_survival_efficiency=1.25,
                     discounted_observation_weight=3.0,
                     last_update_index=7,
                     recent_failure_streak=1,
@@ -259,7 +259,7 @@ def build_populated_engine_state() -> CSAEngineState[int]:
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=2,
-                    discounted_credit=0.5,
+                    discounted_survival_efficiency=0.5,
                     discounted_observation_weight=2.0,
                     last_update_index=7,
                 ),
@@ -499,18 +499,20 @@ class CSAEngineCheckpointTests:
                 {
                     "family_key": "mutation",
                     "observation_count": True,
-                    "discounted_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
                     "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                 },
             )
 
-        with pytest.raises(ValueError, match="discounted_credit must be finite"):
+        with pytest.raises(
+            ValueError, match="discounted_survival_efficiency must be finite"
+        ):
             _ = ProposalFamilyStat.from_dict(
                 {
                     "family_key": "mutation",
                     "observation_count": 0,
-                    "discounted_credit": float("inf"),
+                    "discounted_survival_efficiency": float("inf"),
                     "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                 },
@@ -524,7 +526,7 @@ class CSAEngineCheckpointTests:
                 {
                     "family_key": "mutation",
                     "observation_count": 1,
-                    "discounted_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
                     "discounted_observation_weight": float("nan"),
                     "last_update_index": 0,
                 },
@@ -534,7 +536,7 @@ class CSAEngineCheckpointTests:
             _ = ProposalFamilyStat(
                 family_key="mutation",
                 observation_count=1,
-                discounted_credit=1.0,
+                discounted_survival_efficiency=1.0,
                 discounted_observation_weight=0.5,
             )
 
@@ -545,17 +547,19 @@ class CSAEngineCheckpointTests:
                 {
                     "path": ["x"],
                     "observation_count": 0,
-                    "discounted_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
                     "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                     "recent_failure_streak": True,
                 },
             )
 
-        with pytest.raises(ValueError, match="discounted_credit must be finite"):
+        with pytest.raises(
+            ValueError, match="discounted_survival_efficiency must be finite"
+        ):
             _ = ProposalLeafStat(
                 path=("x",),
-                discounted_credit=float("nan"),
+                discounted_survival_efficiency=float("nan"),
             )
 
         with pytest.raises(
@@ -565,7 +569,7 @@ class CSAEngineCheckpointTests:
                 {
                     "path": [True],
                     "observation_count": 0,
-                    "discounted_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
                     "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                     "recent_failure_streak": 0,
@@ -1004,7 +1008,7 @@ class CSAEngineCheckpointTests:
             {
                 "path": ["y"],
                 "observation_count": 2,
-                "discounted_credit": 0.5,
+                "discounted_survival_efficiency": 0.5,
                 "discounted_observation_weight": 2.0,
                 "last_update_index": 7,
                 "recent_failure_streak": 0,

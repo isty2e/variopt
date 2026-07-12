@@ -92,15 +92,15 @@ class CSAProposalFamilyTrace:
         Stable proposal-family identifier.
     observation_count : int
         Number of observations attributed to the family.
-    effective_credit_rate : float
-        Decayed outcome credit per attributed family observation.
+    effective_survival_efficiency : float
+        Decayed survival efficiency per attributed family observation.
     mutation_weight : float | None
         Current mutation weight for the family, when applicable.
     """
 
     family_key: str
     observation_count: int
-    effective_credit_rate: float
+    effective_survival_efficiency: float
     mutation_weight: float | None
 
 
