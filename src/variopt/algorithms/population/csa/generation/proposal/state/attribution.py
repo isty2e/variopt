@@ -1,6 +1,8 @@
 """Immutable attribution nouns for CSA proposal adaptation."""
 
 from dataclasses import dataclass
+from math import isfinite, sqrt
+from sys import float_info
 from typing import Literal, TypeAlias
 
 from typing_extensions import Self
@@ -25,6 +27,8 @@ NON_ADAPTIVE_PROPOSAL_REASONS: tuple[str, ...] = (
     "initial",
 )
 
+MAX_SAFE_OUTER_PRODUCT_COORDINATE = sqrt(float_info.max)
+
 
 @dataclass(frozen=True, slots=True)
 class NumericSubspaceAttribution:
@@ -44,16 +48,29 @@ class NumericSubspaceAttribution:
     def __post_init__(self) -> None:
         """Normalize and validate numeric-subspace attribution."""
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
-        normalized_source_coordinates = tuple(
-            float(coordinate) for coordinate in self.source_coordinates
-        )
+        if any(isinstance(coordinate, bool) for coordinate in self.source_coordinates):
+            msg = "numeric subspace source coordinates must be numeric"
+            raise TypeError(msg)
+        try:
+            normalized_source_coordinates = tuple(
+                float(coordinate) for coordinate in self.source_coordinates
+            )
+        except (TypeError, ValueError) as error:
+            msg = "numeric subspace source coordinates must be numeric"
+            raise TypeError(msg) from error
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(self, "source_coordinates", normalized_source_coordinates)
         if len(normalized_leaf_paths) == 0:
             msg = "numeric subspace attribution requires at least one leaf path"
             raise ValueError(msg)
+        if len(set(normalized_leaf_paths)) != len(normalized_leaf_paths):
+            msg = "numeric subspace attribution requires distinct leaf paths"
+            raise ValueError(msg)
         if len(normalized_leaf_paths) != len(normalized_source_coordinates):
             msg = "numeric subspace attribution dimensions must match"
+            raise ValueError(msg)
+        if any(not isfinite(value) for value in normalized_source_coordinates):
+            msg = "numeric subspace source coordinates must be finite"
             raise ValueError(msg)
 
 
@@ -75,9 +92,18 @@ class NumericSubspaceDisplacement:
     def __post_init__(self) -> None:
         """Normalize and validate numeric-subspace displacement."""
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
-        normalized_displacement_coordinates = tuple(
-            float(coordinate) for coordinate in self.displacement_coordinates
-        )
+        if any(
+            isinstance(coordinate, bool) for coordinate in self.displacement_coordinates
+        ):
+            msg = "numeric subspace displacement coordinates must be numeric"
+            raise TypeError(msg)
+        try:
+            normalized_displacement_coordinates = tuple(
+                float(coordinate) for coordinate in self.displacement_coordinates
+            )
+        except (TypeError, ValueError) as error:
+            msg = "numeric subspace displacement coordinates must be numeric"
+            raise TypeError(msg) from error
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(
             self,
@@ -87,8 +113,23 @@ class NumericSubspaceDisplacement:
         if len(normalized_leaf_paths) == 0:
             msg = "numeric subspace displacement requires at least one leaf path"
             raise ValueError(msg)
+        if len(set(normalized_leaf_paths)) != len(normalized_leaf_paths):
+            msg = "numeric subspace displacement requires distinct leaf paths"
+            raise ValueError(msg)
         if len(normalized_leaf_paths) != len(normalized_displacement_coordinates):
             msg = "numeric subspace displacement dimensions must match"
+            raise ValueError(msg)
+        if any(not isfinite(value) for value in normalized_displacement_coordinates):
+            msg = "numeric subspace displacement coordinates must be finite"
+            raise ValueError(msg)
+        if any(
+            abs(value) > MAX_SAFE_OUTER_PRODUCT_COORDINATE
+            for value in normalized_displacement_coordinates
+        ):
+            msg = (
+                "numeric subspace displacement coordinates must support "
+                "finite outer products"
+            )
             raise ValueError(msg)
 
 
@@ -98,8 +139,6 @@ class PlannedProposalAttribution:
 
     Parameters
     ----------
-    source_score : float
-        Score of the source candidate used for proposal generation.
     proposal_family_key : str | None, default=None
         Optional proposal-family identifier.
     mutated_leaf_paths : tuple[LeafPath, ...], default=()
@@ -110,7 +149,6 @@ class PlannedProposalAttribution:
         Whether generation changed the source candidate or passed it through.
     """
 
-    source_score: float
     proposal_family_key: str | None = None
     mutated_leaf_paths: tuple[LeafPath, ...] = ()
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None
@@ -151,8 +189,6 @@ class ProposalAttribution:
     ----------
     proposal_id : str
         Issued proposal identifier.
-    source_score : float
-        Score of the source candidate used for proposal generation.
     proposal_family_key : str | None, default=None
         Optional proposal-family identifier.
     mutated_leaf_paths : tuple[LeafPath, ...], default=()
@@ -164,7 +200,6 @@ class ProposalAttribution:
     """
 
     proposal_id: str
-    source_score: float
     proposal_family_key: str | None = None
     mutated_leaf_paths: tuple[LeafPath, ...] = ()
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None
@@ -204,7 +239,6 @@ class ProposalAttribution:
         """
         return cls(
             proposal_id=proposal_id,
-            source_score=attribution.source_score,
             proposal_family_key=attribution.proposal_family_key,
             mutated_leaf_paths=attribution.mutated_leaf_paths,
             numeric_subspace_attribution=attribution.numeric_subspace_attribution,

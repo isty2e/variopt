@@ -50,7 +50,7 @@ class CSAProposalStateExportTests:
 
     def test_semantic_submodules_are_importable(self) -> None:
         state = CSAProposalStateDirect.from_policy(CSAProposalPolicy())
-        attribution = PlannedProposalAttributionDirect(source_score=1.0)
+        attribution = PlannedProposalAttributionDirect()
         family_stat = ProposalFamilyStatDirect(family_key="mutation:0")
 
         assert state.update_index == 0

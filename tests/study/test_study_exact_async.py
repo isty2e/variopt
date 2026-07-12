@@ -217,6 +217,12 @@ class StudyExactAsyncTests:
             profile=profile,
             random_state=7,
         )
+        small_batch_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=2,
+            profile=profile,
+            random_state=7,
+        )
         async_optimizer = CSAOptimizer.from_space_defaults(
             space=space,
             bank_capacity=2,
@@ -228,6 +234,11 @@ class StudyExactAsyncTests:
             run_method=sync_optimizer,
             evaluator=SequentialEvaluator[int, int](),
         )
+        small_batch_study = Study(
+            problem=problem,
+            run_method=small_batch_optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
         async_study = Study(
             problem=problem,
             run_method=async_optimizer,
@@ -237,6 +248,12 @@ class StudyExactAsyncTests:
         sync_result, sync_state = sync_study.optimize(
             max_evaluations=12,
             batch_size=2,
+            execution_model=SYNC_BATCH_EXECUTION_MODEL,
+            stop_at_checkpoint_boundary=True,
+        )
+        small_batch_result, small_batch_state = small_batch_study.optimize(
+            max_evaluations=12,
+            batch_size=1,
             execution_model=SYNC_BATCH_EXECUTION_MODEL,
             stop_at_checkpoint_boundary=True,
         )
@@ -254,8 +271,20 @@ class StudyExactAsyncTests:
             (observation.candidate, observation.score)
             for observation in sync_result.observations
         )
+        assert tuple(
+            (observation.candidate, observation.score)
+            for observation in small_batch_result.observations
+        ) == tuple(
+            (observation.candidate, observation.score)
+            for observation in sync_result.observations
+        )
         assert async_optimizer.state_to_dict(
             async_state
+        ) == sync_optimizer.state_to_dict(
+            sync_state,
+        )
+        assert small_batch_optimizer.state_to_dict(
+            small_batch_state,
         ) == sync_optimizer.state_to_dict(
             sync_state,
         )

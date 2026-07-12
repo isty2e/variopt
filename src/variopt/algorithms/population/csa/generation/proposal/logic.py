@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from math import fsum
 from typing import TypeVar
 
 import numpy as np
@@ -19,6 +20,7 @@ from ..perturbation import CSAPerturbationSpec
 from .evidence import (
     CSAProposalEvaluation,
     CSAProposalOutcomeEvidence,
+    derive_proposal_adaptation_signals,
 )
 from .state.aggregate import CSAProposalState
 from .state.attribution import (
@@ -28,6 +30,12 @@ from .state.attribution import (
     NumericSubspaceDisplacement,
     PlannedProposalAttribution,
     ProposalAttribution,
+)
+from .state.generation_evidence import (
+    ProposalFamilyAdaptationSummary,
+    ProposalGenerationAdaptationEvidence,
+    ProposalLeafAdaptationSummary,
+    ProposalNumericDisplacementEvidence,
 )
 
 BoundaryT = TypeVar("BoundaryT")
@@ -39,15 +47,15 @@ class _LeafLocalSearchSignal:
     """File-local local-search signal for one structured leaf path."""
 
     path: LeafPath
-    score_credit: float
-    local_displacement_score_credit: float
+    survival_efficiency: float
+    local_displacement_survival_efficiency: float
     recent_failure_streak: int
     last_update_index: int
 
     @property
-    def total_score_credit(self) -> float:
-        """Return the positive local-search support credit for one path."""
-        return self.score_credit + self.local_displacement_score_credit
+    def combined_survival_efficiency(self) -> float:
+        """Return combined local-search support for one path."""
+        return self.survival_efficiency + self.local_displacement_survival_efficiency
 
 
 def _is_in_failure_cooldown(
@@ -85,26 +93,26 @@ def _leaf_local_search_signals(
     for path in leaf_paths:
         normalized_path = tuple(path)
         leaf_stat = leaf_stats_by_path.get(normalized_path)
-        score_credit = 0.0
+        survival_efficiency = 0.0
         if leaf_stat is not None:
-            score_credit = max(
+            survival_efficiency = max(
                 0.0,
-                leaf_stat.effective_score_credit(
+                leaf_stat.effective_survival_efficiency(
                     current_update_index=state.update_index,
-                    score_decay=state.policy.score_decay,
+                    adaptation_decay=state.policy.adaptation_decay,
                 ),
             )
 
         local_displacement_leaf_stat = local_displacement_leaf_stats_by_path.get(
             normalized_path,
         )
-        local_displacement_score_credit = 0.0
+        local_displacement_survival_efficiency = 0.0
         if local_displacement_leaf_stat is not None:
-            local_displacement_score_credit = max(
+            local_displacement_survival_efficiency = max(
                 0.0,
-                local_displacement_leaf_stat.effective_score_credit(
+                local_displacement_leaf_stat.effective_survival_efficiency(
                     current_update_index=state.update_index,
-                    score_decay=state.policy.score_decay,
+                    adaptation_decay=state.policy.adaptation_decay,
                 ),
             )
 
@@ -129,8 +137,10 @@ def _leaf_local_search_signals(
         signals.append(
             _LeafLocalSearchSignal(
                 path=normalized_path,
-                score_credit=score_credit,
-                local_displacement_score_credit=local_displacement_score_credit,
+                survival_efficiency=survival_efficiency,
+                local_displacement_survival_efficiency=(
+                    local_displacement_survival_efficiency
+                ),
                 recent_failure_streak=recent_failure_streak,
                 last_update_index=last_update_index,
             )
@@ -198,7 +208,7 @@ def mutation_leaf_weights(
     Parameters
     ----------
     state : CSAProposalState
-        Proposal adaptation state providing accumulated leaf credit.
+        Proposal adaptation state providing accumulated leaf evidence.
     leaf_paths : Sequence[LeafPath]
         Structured leaf paths available for mutation.
 
@@ -225,10 +235,10 @@ def mutation_leaf_weights(
     for signal in signals:
         raw_weights.append(
             state.policy.minimum_leaf_weight
-            + (state.policy.leaf_bias_strength * signal.score_credit)
+            + (state.policy.leaf_bias_strength * signal.survival_efficiency)
             + (
                 state.policy.local_displacement_leaf_bias_strength
-                * signal.local_displacement_score_credit
+                * signal.local_displacement_survival_efficiency
             )
         )
 
@@ -269,7 +279,7 @@ def proposal_local_search_context(
     )
     signals_by_path = {signal.path: signal for signal in signals}
     if attribution is None and not any(
-        signal.total_score_credit > 0.0 for signal in signals
+        signal.combined_survival_efficiency > 0.0 for signal in signals
     ):
         return None
 
@@ -306,7 +316,7 @@ def proposal_local_search_context(
         1
         for signal in mutated_signals
         if (
-            signal.total_score_credit > 0.0
+            signal.combined_survival_efficiency > 0.0
             and not _is_in_failure_cooldown(signal=signal, state=state)
         )
     )
@@ -362,7 +372,6 @@ def proposal_local_search_context(
 
 def planned_mutation_attribution(
     *,
-    source_score: float,
     proposal_family_key: str | None = None,
     mutated_leaf_paths: Sequence[LeafPath],
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None,
@@ -372,8 +381,6 @@ def planned_mutation_attribution(
 
     Parameters
     ----------
-    source_score : float
-        Score of the source candidate before mutation.
     proposal_family_key : str | None, default=None
         Canonical proposal family key for the generated child, if any.
     mutated_leaf_paths : Sequence[LeafPath]
@@ -390,7 +397,6 @@ def planned_mutation_attribution(
         Pre-id attribution record ready to be bound to a generated proposal id.
     """
     return PlannedProposalAttribution(
-        source_score=source_score,
         proposal_family_key=proposal_family_key,
         mutated_leaf_paths=tuple(mutated_leaf_paths),
         numeric_subspace_attribution=numeric_subspace_attribution,
@@ -423,6 +429,35 @@ def mutation_family_key(index: int) -> str:
     return f"mutation:{index}"
 
 
+def mutation_family_evidence_is_ready(
+    *,
+    state: CSAProposalState,
+    family: Sequence[CSAPerturbationSpec[CandidateT]],
+) -> bool:
+    """Return whether every current mutation family has conclusive evidence.
+
+    Parameters
+    ----------
+    state : CSAProposalState
+        Proposal adaptation state providing family observations.
+    family : Sequence[CSAPerturbationSpec[CandidateT]]
+        Current mutation family whose keys define the readiness set.
+
+    Returns
+    -------
+    bool
+        Whether each family has at least one completed outcome observation.
+    """
+    family_stats_by_key = {
+        family_stat.family_key: family_stat for family_stat in state.family_stats
+    }
+    for index in range(len(family)):
+        family_stat = family_stats_by_key.get(mutation_family_key(index))
+        if family_stat is None or family_stat.observation_count == 0:
+            return False
+    return True
+
+
 def mutation_family_weights(
     *,
     state: CSAProposalState,
@@ -452,7 +487,10 @@ def mutation_family_weights(
         raise ValueError(msg)
 
     base_weights = tuple(float(spec.count) for spec in family)
-    if not state.policy.enabled:
+    if not state.policy.enabled or not mutation_family_evidence_is_ready(
+        state=state,
+        family=family,
+    ):
         weight_sum = sum(base_weights)
         return tuple(weight / weight_sum for weight in base_weights)
 
@@ -463,20 +501,20 @@ def mutation_family_weights(
     for index, spec in enumerate(family):
         family_key = mutation_family_key(index)
         family_stat = family_stats_by_key.get(family_key)
-        score_credit = 0.0
+        survival_efficiency = 0.0
         if family_stat is not None:
-            score_credit = max(
+            survival_efficiency = max(
                 0.0,
-                family_stat.effective_score_credit(
+                family_stat.effective_survival_efficiency(
                     current_update_index=state.update_index,
-                    score_decay=state.policy.score_decay,
+                    adaptation_decay=state.policy.adaptation_decay,
                 ),
             )
 
         raw_weights.append(
             float(spec.count)
             + state.policy.minimum_family_weight
-            + (state.policy.family_bias_strength * score_credit),
+            + (state.policy.family_bias_strength * survival_efficiency),
         )
 
     weight_sum = sum(raw_weights)
@@ -509,7 +547,10 @@ def sample_mutation_family_indices(
     if total_child_count <= 0:
         return ()
 
-    if not state.policy.enabled:
+    if not state.policy.enabled or not mutation_family_evidence_is_ready(
+        state=state,
+        family=family,
+    ):
         return tuple(
             index for index, spec in enumerate(family) for _ in range(spec.count)
         )
@@ -682,9 +723,9 @@ def update_proposal_state(
     """Reduce completed proposal outcome evidence into adaptive statistics.
 
     The evidence has already joined proposal provenance, successful evaluation
-    metadata, and the conclusive bank transition. This reducer intentionally
-    leaves the reward formula unchanged; comparison- and cost-aware policy is a
-    separate concern.
+    metadata, and the conclusive bank transition. The reducer derives bounded
+    final-bank survival efficiency, canonicalizes proposal order, and applies
+    one state update for the completed generation.
 
     Parameters
     ----------
@@ -706,12 +747,16 @@ def update_proposal_state(
     if not state.policy.enabled or len(outcome_evidence) == 0:
         return state
 
-    next_state = state
-    for evidence in outcome_evidence:
+    adaptation_signals = derive_proposal_adaptation_signals(outcome_evidence)
+    family_efficiencies_by_key: dict[str, list[float]] = {}
+    mutation_leaf_efficiencies_by_path: dict[LeafPath, list[float]] = {}
+    local_leaf_efficiencies_by_path: dict[LeafPath, list[float]] = {}
+    numeric_displacement_evidence: list[ProposalNumericDisplacementEvidence] = []
+    for adaptation_signal in adaptation_signals:
+        evidence = adaptation_signal.outcome_evidence
         attribution = evidence.attribution
         evaluation = evidence.evaluation
         observation = evaluation.observation
-        score_improvement = attribution.source_score - observation.score
         local_displacement_leaf_paths: tuple[LeafPath, ...] = ()
         numeric_displacement: NumericSubspaceDisplacement | None = None
         explicit_leaf_paths = evaluation.refinement_changed_leaf_paths
@@ -722,20 +767,70 @@ def update_proposal_state(
                 observation.proposal.candidate,
                 observation.candidate,
             )
-        if infer_numeric_subspace_displacement is not None:
+        if (
+            adaptation_signal.survival_efficiency > 0.0
+            and infer_numeric_subspace_displacement is not None
+        ):
             numeric_displacement = infer_numeric_subspace_displacement(
                 attribution,
                 observation.candidate,
             )
-        next_state = next_state.record_score_improvement(
-            family_key=attribution.proposal_family_key,
-            leaf_paths=attribution.mutated_leaf_paths,
-            local_displacement_leaf_paths=local_displacement_leaf_paths,
-            numeric_displacement=numeric_displacement,
-            score_improvement=score_improvement,
-        )
 
-    return next_state
+        family_key = attribution.proposal_family_key
+        if family_key is not None:
+            family_efficiencies_by_key.setdefault(family_key, []).append(
+                adaptation_signal.survival_efficiency
+            )
+        for leaf_signal in adaptation_signal.leaf_association_signals(
+            local_displacement_leaf_paths=local_displacement_leaf_paths,
+        ):
+            efficiencies_by_path = (
+                mutation_leaf_efficiencies_by_path
+                if leaf_signal.source == "mutation"
+                else local_leaf_efficiencies_by_path
+            )
+            efficiencies_by_path.setdefault(leaf_signal.path, []).append(
+                leaf_signal.survival_efficiency_share,
+            )
+        if numeric_displacement is not None:
+            numeric_displacement_evidence.append(
+                ProposalNumericDisplacementEvidence(
+                    displacement=numeric_displacement,
+                    survival_efficiency=adaptation_signal.survival_efficiency,
+                ),
+            )
+
+    generation_evidence = ProposalGenerationAdaptationEvidence(
+        evidence_count=len(adaptation_signals),
+        family_summaries=tuple(
+            ProposalFamilyAdaptationSummary(
+                family_key=family_key,
+                observation_count=len(efficiencies),
+                total_survival_efficiency=fsum(efficiencies),
+            )
+            for family_key, efficiencies in family_efficiencies_by_key.items()
+        ),
+        mutation_leaf_summaries=tuple(
+            ProposalLeafAdaptationSummary(
+                path=path,
+                observation_count=len(efficiencies),
+                total_survival_efficiency=fsum(efficiencies),
+            )
+            for path, efficiencies in mutation_leaf_efficiencies_by_path.items()
+        ),
+        local_displacement_leaf_summaries=tuple(
+            ProposalLeafAdaptationSummary(
+                path=path,
+                observation_count=len(efficiencies),
+                total_survival_efficiency=fsum(efficiencies),
+            )
+            for path, efficiencies in local_leaf_efficiencies_by_path.items()
+        ),
+        numeric_displacement_evidence=tuple(numeric_displacement_evidence),
+    )
+    return state.record_generation_evidence(
+        generation_evidence,
+    )
 
 
 def infer_structured_local_displacement_leaf_paths(

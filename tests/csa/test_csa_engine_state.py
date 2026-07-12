@@ -304,7 +304,6 @@ class CSAEngineStateTests:
             proposal_state=state.proposal_state.register_pending_attribution(
                 ProposalAttribution(
                     proposal_id="csa-0",
-                    source_score=10.0,
                     proposal_family_key="regular",
                 ),
             ),

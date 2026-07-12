@@ -16,7 +16,8 @@ from .......json_types import (
 )
 from .......spaces import LeafPath
 from ..policy import CSAProposalPolicy
-from .attribution import NumericSubspaceDisplacement, ProposalProvenance
+from .attribution import ProposalProvenance
+from .generation_evidence import ProposalGenerationAdaptationEvidence
 from .stats import (
     ProposalFamilyStat,
     ProposalLeafStat,
@@ -57,6 +58,67 @@ class CSAProposalState:
     local_displacement_leaf_stats: tuple[ProposalLeafStat, ...] = ()
     numeric_covariance_stats: tuple[ProposalNumericSubspaceCovarianceStat, ...] = ()
     update_index: int = 0
+
+    def __post_init__(self) -> None:
+        """Normalize tuple state and reject misaligned adaptive memory."""
+        object.__setattr__(
+            self, "pending_attributions", tuple(self.pending_attributions)
+        )
+        object.__setattr__(self, "family_stats", tuple(self.family_stats))
+        object.__setattr__(self, "leaf_stats", tuple(self.leaf_stats))
+        object.__setattr__(
+            self,
+            "local_displacement_leaf_stats",
+            tuple(self.local_displacement_leaf_stats),
+        )
+        object.__setattr__(
+            self,
+            "numeric_covariance_stats",
+            tuple(self.numeric_covariance_stats),
+        )
+        if type(self.update_index) is not int:
+            msg = "update_index must be an int"
+            raise TypeError(msg)
+        if self.update_index < 0:
+            msg = "update_index must be non-negative"
+            raise ValueError(msg)
+
+        proposal_ids = tuple(
+            attribution.proposal_id for attribution in self.pending_attributions
+        )
+        if len(set(proposal_ids)) != len(proposal_ids):
+            msg = "pending proposal attributions must use distinct proposal ids"
+            raise ValueError(msg)
+        family_keys = tuple(stat.family_key for stat in self.family_stats)
+        if len(set(family_keys)) != len(family_keys):
+            msg = "family_stats must use distinct family keys"
+            raise ValueError(msg)
+        leaf_paths = tuple(stat.path for stat in self.leaf_stats)
+        if len(set(leaf_paths)) != len(leaf_paths):
+            msg = "leaf_stats must use distinct paths"
+            raise ValueError(msg)
+        local_leaf_paths = tuple(
+            stat.path for stat in self.local_displacement_leaf_stats
+        )
+        if len(set(local_leaf_paths)) != len(local_leaf_paths):
+            msg = "local_displacement_leaf_stats must use distinct paths"
+            raise ValueError(msg)
+        covariance_paths = tuple(
+            stat.leaf_paths for stat in self.numeric_covariance_stats
+        )
+        if len(set(covariance_paths)) != len(covariance_paths):
+            msg = "numeric_covariance_stats must use distinct leaf path families"
+            raise ValueError(msg)
+
+        all_stats = (
+            *self.family_stats,
+            *self.leaf_stats,
+            *self.local_displacement_leaf_stats,
+            *self.numeric_covariance_stats,
+        )
+        if any(stat.last_update_index > self.update_index for stat in all_stats):
+            msg = "proposal stat update indices must not exceed state update_index"
+            raise ValueError(msg)
 
     @classmethod
     def from_policy(cls, policy: CSAProposalPolicy) -> Self:
@@ -388,7 +450,7 @@ class CSAProposalState:
         ----------
         proposal_ids : collections.abc.Set[str]
             Proposal identifiers whose in-flight attributions should be
-            removed without recording score credit.
+            removed without recording adaptation evidence.
 
         Returns
         -------
@@ -427,75 +489,137 @@ class CSAProposalState:
 
         return None
 
-    def record_score_improvement(
+    def record_generation_evidence(
         self,
-        *,
-        family_key: str | None,
-        leaf_paths: Sequence[LeafPath],
-        local_displacement_leaf_paths: Sequence[LeafPath] = (),
-        numeric_displacement: NumericSubspaceDisplacement | None = None,
-        score_improvement: float,
+        batch: ProposalGenerationAdaptationEvidence,
     ) -> "CSAProposalState":
-        """Return a state with one additional proposal-side reward update.
+        """Return state updated from one canonical completed-generation batch.
 
         Parameters
         ----------
-        family_key : str | None
-            Proposal family key associated with the observation, if any.
-        leaf_paths : Sequence[LeafPath]
-            Mutated structured leaf paths credited to the proposal.
-        local_displacement_leaf_paths : Sequence[LeafPath], default=()
-            Additional leaf paths credited through local post-processing.
-        numeric_displacement : NumericSubspaceDisplacement | None, default=None
-            Successful numeric displacement inferred from local post-processing.
-        score_improvement : float
-            Improvement credit, conventionally ``source_score - observed_score``.
+        batch : ProposalGenerationAdaptationEvidence
+            Scale-invariant family, leaf, and displacement evidence.
 
         Returns
         -------
         CSAProposalState
-            Updated proposal state with all applicable adaptive statistics
-            incremented.
+            State after one generation-level decay and evidence update.
         """
-        if (
-            family_key is None
-            and len(leaf_paths) == 0
-            and len(local_displacement_leaf_paths) == 0
-            and numeric_displacement is None
-        ):
+        if not self.policy.enabled:
             return self
 
         next_update_index = self.update_index + 1
-        next_state: CSAProposalState = self
-        if family_key is not None:
-            next_state = next_state.record_family_score_improvement(
-                family_key,
-                score_improvement=score_improvement,
-                next_update_index=next_update_index,
+        next_family_stats_by_key = {
+            family_stat.family_key: family_stat for family_stat in self.family_stats
+        }
+        ordered_family_keys: list[str] = list(next_family_stats_by_key)
+        for summary in batch.family_summaries:
+            current_stat = next_family_stats_by_key.get(summary.family_key)
+            if current_stat is None:
+                current_stat = ProposalFamilyStat(
+                    family_key=summary.family_key,
+                    last_update_index=next_update_index,
+                )
+                ordered_family_keys.append(summary.family_key)
+            next_family_stats_by_key[summary.family_key] = (
+                current_stat.record_generation(
+                    summary,
+                    current_update_index=next_update_index,
+                    adaptation_decay=self.policy.adaptation_decay,
+                )
             )
 
-        if len(leaf_paths) > 0:
-            next_state = next_state.record_leaf_score_improvement(
-                leaf_paths,
-                score_improvement=score_improvement,
-                next_update_index=next_update_index,
+        next_leaf_stats_by_path = {
+            leaf_stat.path: leaf_stat for leaf_stat in self.leaf_stats
+        }
+        ordered_leaf_paths: list[LeafPath] = list(next_leaf_stats_by_path)
+        for summary in batch.mutation_leaf_summaries:
+            current_stat = next_leaf_stats_by_path.get(summary.path)
+            if current_stat is None:
+                current_stat = ProposalLeafStat(
+                    path=summary.path,
+                    last_update_index=next_update_index,
+                )
+                ordered_leaf_paths.append(summary.path)
+            next_leaf_stats_by_path[summary.path] = current_stat.record_generation(
+                summary,
+                current_update_index=next_update_index,
+                adaptation_decay=self.policy.adaptation_decay,
             )
 
-        if len(local_displacement_leaf_paths) > 0:
-            next_state = next_state.record_local_displacement_score_improvement(
-                local_displacement_leaf_paths,
-                score_improvement=score_improvement,
-                next_update_index=next_update_index,
+        next_local_leaf_stats_by_path = {
+            leaf_stat.path: leaf_stat
+            for leaf_stat in self.local_displacement_leaf_stats
+        }
+        ordered_local_leaf_paths: list[LeafPath] = list(next_local_leaf_stats_by_path)
+        for summary in batch.local_displacement_leaf_summaries:
+            current_stat = next_local_leaf_stats_by_path.get(summary.path)
+            if current_stat is None:
+                current_stat = ProposalLeafStat(
+                    path=summary.path,
+                    last_update_index=next_update_index,
+                )
+                ordered_local_leaf_paths.append(summary.path)
+            next_local_leaf_stats_by_path[summary.path] = (
+                current_stat.record_generation(
+                    summary,
+                    current_update_index=next_update_index,
+                    adaptation_decay=self.policy.adaptation_decay,
+                )
             )
 
-        if numeric_displacement is not None:
-            next_state = next_state.record_numeric_covariance_displacement(
-                numeric_displacement,
-                score_improvement=score_improvement,
-                next_update_index=next_update_index,
-            )
+        next_covariance_stats_by_paths = {
+            covariance_stat.leaf_paths: covariance_stat
+            for covariance_stat in self.numeric_covariance_stats
+        }
+        ordered_covariance_paths: list[tuple[LeafPath, ...]] = list(
+            next_covariance_stats_by_paths
+        )
+        if self.policy.numeric_covariance_strength > 0.0:
+            for numeric_evidence in batch.numeric_displacement_evidence:
+                displacement = numeric_evidence.displacement
+                current_stat = next_covariance_stats_by_paths.get(
+                    displacement.leaf_paths
+                )
+                if current_stat is None:
+                    current_stat = ProposalNumericSubspaceCovarianceStat(
+                        leaf_paths=displacement.leaf_paths,
+                        discounted_displacement_sum=tuple(
+                            0.0 for _ in displacement.displacement_coordinates
+                        ),
+                        discounted_outer_product_sum=tuple(
+                            tuple(0.0 for _ in displacement.displacement_coordinates)
+                            for _ in displacement.displacement_coordinates
+                        ),
+                        last_update_index=next_update_index,
+                    )
+                    ordered_covariance_paths.append(displacement.leaf_paths)
+                next_covariance_stats_by_paths[displacement.leaf_paths] = (
+                    current_stat.record_successful_displacement(
+                        displacement,
+                        survival_efficiency=numeric_evidence.survival_efficiency,
+                        current_update_index=next_update_index,
+                        adaptation_decay=self.policy.adaptation_decay,
+                    )
+                )
 
-        return replace(next_state, update_index=next_update_index)
+        return replace(
+            self,
+            family_stats=tuple(
+                next_family_stats_by_key[key] for key in ordered_family_keys
+            ),
+            leaf_stats=tuple(
+                next_leaf_stats_by_path[path] for path in ordered_leaf_paths
+            ),
+            local_displacement_leaf_stats=tuple(
+                next_local_leaf_stats_by_path[path] for path in ordered_local_leaf_paths
+            ),
+            numeric_covariance_stats=tuple(
+                next_covariance_stats_by_paths[paths]
+                for paths in ordered_covariance_paths
+            ),
+            update_index=next_update_index,
+        )
 
     def covariance_stat_for_leaf_paths(
         self,
@@ -519,224 +643,3 @@ class CSAProposalState:
             if covariance_stat.leaf_paths == normalized_leaf_paths:
                 return covariance_stat
         return None
-
-    def record_family_score_improvement(
-        self,
-        family_key: str,
-        *,
-        score_improvement: float,
-        next_update_index: int,
-    ) -> Self:
-        """Return a state with accumulated score-improvement family statistics.
-
-        Parameters
-        ----------
-        family_key : str
-            Proposal family key receiving the reward update.
-        score_improvement : float
-            Improvement credit to accumulate.
-        next_update_index : int
-            Reducer update index associated with this observation.
-
-        Returns
-        -------
-        Self
-            State with updated family-level reward statistics.
-        """
-        next_family_stats_by_key = {
-            family_stat.family_key: family_stat for family_stat in self.family_stats
-        }
-        ordered_keys: list[str] = list(next_family_stats_by_key)
-
-        current_stat = next_family_stats_by_key.get(family_key)
-        if current_stat is None:
-            current_stat = ProposalFamilyStat(
-                family_key=family_key,
-                last_update_index=next_update_index,
-            )
-            ordered_keys.append(family_key)
-
-        next_family_stats_by_key[family_key] = current_stat.record_score_improvement(
-            score_improvement,
-            current_update_index=next_update_index,
-            score_decay=self.policy.score_decay,
-        )
-
-        return replace(
-            self,
-            family_stats=tuple(next_family_stats_by_key[key] for key in ordered_keys),
-        )
-
-    def record_leaf_score_improvement(
-        self,
-        leaf_paths: Sequence[LeafPath],
-        *,
-        score_improvement: float,
-        next_update_index: int,
-    ) -> Self:
-        """Return a state with accumulated per-leaf outcome statistics.
-
-        Parameters
-        ----------
-        leaf_paths : Sequence[LeafPath]
-            Mutated leaf paths receiving the reward update.
-        score_improvement : float
-            Improvement credit to accumulate.
-        next_update_index : int
-            Reducer update index associated with this observation.
-
-        Returns
-        -------
-        Self
-            State with updated per-leaf reward statistics.
-        """
-        if len(leaf_paths) == 0:
-            return self
-
-        next_leaf_stats_by_path = {
-            leaf_stat.path: leaf_stat for leaf_stat in self.leaf_stats
-        }
-        ordered_paths: list[LeafPath] = list(next_leaf_stats_by_path)
-
-        for path in leaf_paths:
-            normalized_path = tuple(path)
-            current_stat = next_leaf_stats_by_path.get(normalized_path)
-            if current_stat is None:
-                current_stat = ProposalLeafStat(
-                    path=normalized_path,
-                    last_update_index=next_update_index,
-                )
-                ordered_paths.append(normalized_path)
-
-            next_leaf_stats_by_path[normalized_path] = current_stat.record_outcome(
-                score_improvement,
-                current_update_index=next_update_index,
-                score_decay=self.policy.score_decay,
-            )
-
-        return replace(
-            self,
-            leaf_stats=tuple(next_leaf_stats_by_path[path] for path in ordered_paths),
-        )
-
-    def record_local_displacement_score_improvement(
-        self,
-        leaf_paths: Sequence[LeafPath],
-        *,
-        score_improvement: float,
-        next_update_index: int,
-    ) -> Self:
-        """Return a state with accumulated local-displacement leaf outcomes.
-
-        Parameters
-        ----------
-        leaf_paths : Sequence[LeafPath]
-            Leaf paths changed by local post-processing.
-        score_improvement : float
-            Improvement credit to accumulate.
-        next_update_index : int
-            Reducer update index associated with this observation.
-
-        Returns
-        -------
-        Self
-            State with updated local-displacement reward statistics.
-        """
-        if len(leaf_paths) == 0:
-            return self
-
-        next_leaf_stats_by_path = {
-            leaf_stat.path: leaf_stat
-            for leaf_stat in self.local_displacement_leaf_stats
-        }
-        ordered_paths: list[LeafPath] = list(next_leaf_stats_by_path)
-
-        for path in leaf_paths:
-            normalized_path = tuple(path)
-            current_stat = next_leaf_stats_by_path.get(normalized_path)
-            if current_stat is None:
-                current_stat = ProposalLeafStat(
-                    path=normalized_path,
-                    last_update_index=next_update_index,
-                )
-                ordered_paths.append(normalized_path)
-
-            next_leaf_stats_by_path[normalized_path] = current_stat.record_outcome(
-                score_improvement,
-                current_update_index=next_update_index,
-                score_decay=self.policy.score_decay,
-            )
-
-        return replace(
-            self,
-            local_displacement_leaf_stats=tuple(
-                next_leaf_stats_by_path[path] for path in ordered_paths
-            ),
-        )
-
-    def record_numeric_covariance_displacement(
-        self,
-        numeric_displacement: NumericSubspaceDisplacement,
-        *,
-        score_improvement: float,
-        next_update_index: int,
-    ) -> Self:
-        """Return a state with one additional numeric covariance update.
-
-        Parameters
-        ----------
-        numeric_displacement : NumericSubspaceDisplacement
-            Successful numeric displacement inferred from a structured local
-            search step.
-        score_improvement : float
-            Improvement credit associated with the displacement.
-        next_update_index : int
-            Reducer update index associated with this observation.
-
-        Returns
-        -------
-        Self
-            State with updated numeric covariance statistics when the policy and
-            score improvement permit it, otherwise the original state.
-        """
-        if score_improvement <= 0.0 or self.policy.numeric_covariance_strength <= 0.0:
-            return self
-
-        next_covariance_stats_by_paths = {
-            covariance_stat.leaf_paths: covariance_stat
-            for covariance_stat in self.numeric_covariance_stats
-        }
-        ordered_leaf_paths: list[tuple[LeafPath, ...]] = list(
-            next_covariance_stats_by_paths
-        )
-        current_stat = next_covariance_stats_by_paths.get(
-            numeric_displacement.leaf_paths,
-        )
-        if current_stat is None:
-            current_stat = ProposalNumericSubspaceCovarianceStat(
-                leaf_paths=numeric_displacement.leaf_paths,
-                discounted_displacement_sum=tuple(
-                    0.0 for _ in numeric_displacement.displacement_coordinates
-                ),
-                discounted_outer_product_sum=tuple(
-                    tuple(0.0 for _ in numeric_displacement.displacement_coordinates)
-                    for _ in numeric_displacement.displacement_coordinates
-                ),
-                last_update_index=next_update_index,
-            )
-            ordered_leaf_paths.append(numeric_displacement.leaf_paths)
-
-        next_covariance_stats_by_paths[numeric_displacement.leaf_paths] = (
-            current_stat.record_successful_displacement(
-                numeric_displacement,
-                current_update_index=next_update_index,
-                score_decay=self.policy.score_decay,
-            )
-        )
-        return replace(
-            self,
-            numeric_covariance_stats=tuple(
-                next_covariance_stats_by_paths[leaf_paths_key]
-                for leaf_paths_key in ordered_leaf_paths
-            ),
-        )

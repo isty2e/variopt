@@ -31,6 +31,10 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
 from variopt.algorithms.population.csa.generation.proposal.state import (
     ProposalAttribution,
 )
+from variopt.algorithms.population.csa.generation.proposal.state.generation_evidence import (
+    ProposalGenerationAdaptationEvidence,
+    ProposalLeafAdaptationSummary,
+)
 from variopt.algorithms.population.permutation import (
     InversionMutation,
     OrderCrossover,
@@ -282,13 +286,19 @@ class CSADefaultComponentTests:
             state.proposal_state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=((1,),),
             ),
-        ).record_score_improvement(
-            family_key=None,
-            leaf_paths=((0,),),
-            score_improvement=5.0,
+        ).record_generation_evidence(
+            ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                mutation_leaf_summaries=(
+                    ProposalLeafAdaptationSummary(
+                        path=(0,),
+                        observation_count=1,
+                        total_survival_efficiency=1.0,
+                    ),
+                ),
+            ),
         )
         state = replace(state, proposal_state=proposal_state)
 

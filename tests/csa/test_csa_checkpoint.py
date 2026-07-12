@@ -240,7 +240,8 @@ def build_populated_engine_state() -> CSAEngineState[int]:
                 ProposalFamilyStat(
                     family_key="mutation",
                     observation_count=4,
-                    discounted_score_credit=2.5,
+                    discounted_survival_efficiency=2.5,
+                    discounted_observation_weight=4.0,
                     last_update_index=7,
                 ),
             ),
@@ -248,7 +249,8 @@ def build_populated_engine_state() -> CSAEngineState[int]:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=3,
-                    discounted_score_credit=1.25,
+                    discounted_survival_efficiency=1.25,
+                    discounted_observation_weight=3.0,
                     last_update_index=7,
                     recent_failure_streak=1,
                 ),
@@ -257,7 +259,8 @@ def build_populated_engine_state() -> CSAEngineState[int]:
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=2,
-                    discounted_score_credit=0.5,
+                    discounted_survival_efficiency=0.5,
+                    discounted_observation_weight=2.0,
                     last_update_index=7,
                 ),
             ),
@@ -316,6 +319,7 @@ class CSAEngineCheckpointTests:
         state = build_populated_engine_state()
 
         snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
+        assert snapshot["version"] == 2
         restored = CSAEngineState[int].from_dict(
             snapshot,
             candidate_from_dict=_int_candidate_from_dict,
@@ -495,19 +499,45 @@ class CSAEngineCheckpointTests:
                 {
                     "family_key": "mutation",
                     "observation_count": True,
-                    "discounted_score_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
+                    "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                 },
             )
 
-        with pytest.raises(ValueError, match="discounted_score_credit must be finite"):
+        with pytest.raises(
+            ValueError, match="discounted_survival_efficiency must be finite"
+        ):
             _ = ProposalFamilyStat.from_dict(
                 {
                     "family_key": "mutation",
                     "observation_count": 0,
-                    "discounted_score_credit": float("inf"),
+                    "discounted_survival_efficiency": float("inf"),
+                    "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                 },
+            )
+
+        with pytest.raises(
+            ValueError,
+            match="discounted_observation_weight must be finite",
+        ):
+            _ = ProposalFamilyStat.from_dict(
+                {
+                    "family_key": "mutation",
+                    "observation_count": 1,
+                    "discounted_survival_efficiency": 0.0,
+                    "discounted_observation_weight": float("nan"),
+                    "last_update_index": 0,
+                },
+            )
+
+        with pytest.raises(ValueError, match="bounded by observations"):
+            _ = ProposalFamilyStat(
+                family_key="mutation",
+                observation_count=1,
+                discounted_survival_efficiency=1.0,
+                discounted_observation_weight=0.5,
             )
 
         with pytest.raises(
@@ -517,16 +547,19 @@ class CSAEngineCheckpointTests:
                 {
                     "path": ["x"],
                     "observation_count": 0,
-                    "discounted_score_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
+                    "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                     "recent_failure_streak": True,
                 },
             )
 
-        with pytest.raises(ValueError, match="discounted_score_credit must be finite"):
+        with pytest.raises(
+            ValueError, match="discounted_survival_efficiency must be finite"
+        ):
             _ = ProposalLeafStat(
                 path=("x",),
-                discounted_score_credit=float("nan"),
+                discounted_survival_efficiency=float("nan"),
             )
 
         with pytest.raises(
@@ -536,7 +569,8 @@ class CSAEngineCheckpointTests:
                 {
                     "path": [True],
                     "observation_count": 0,
-                    "discounted_score_credit": 0.0,
+                    "discounted_survival_efficiency": 0.0,
+                    "discounted_observation_weight": 0.0,
                     "last_update_index": 0,
                     "recent_failure_streak": 0,
                 },
@@ -730,6 +764,14 @@ class CSAEngineCheckpointTests:
                 policy=state.proposal_state.policy,
             )
 
+        family_stat_snapshot = state.proposal_state.family_stats[0].to_dict()
+        del family_stat_snapshot["discounted_observation_weight"]
+        with pytest.raises(
+            TypeError,
+            match="discounted_observation_weight is required",
+        ):
+            _ = ProposalFamilyStat.from_dict(family_stat_snapshot)
+
         numeric_stat_snapshot = ProposalNumericSubspaceCovarianceStat(
             leaf_paths=(("x",),),
             observation_count=1,
@@ -817,9 +859,12 @@ class CSAEngineCheckpointTests:
             )
 
         version_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
-        version_snapshot["version"] = 2
+        version_snapshot["version"] = 3
         version_snapshot["banking_state"] = []
-        with pytest.raises(ValueError, match="unsupported CSA checkpoint version"):
+        with pytest.raises(
+            ValueError,
+            match=r"unsupported CSA checkpoint version: expected 2, received 3",
+        ):
             _ = CSAEngineState[int].from_dict(
                 version_snapshot,
                 candidate_from_dict=_int_candidate_from_dict,
@@ -963,7 +1008,8 @@ class CSAEngineCheckpointTests:
             {
                 "path": ["y"],
                 "observation_count": 2,
-                "discounted_score_credit": 0.5,
+                "discounted_survival_efficiency": 0.5,
+                "discounted_observation_weight": 2.0,
                 "last_update_index": 7,
                 "recent_failure_streak": 0,
             },
@@ -1017,7 +1063,6 @@ class CSAEngineCheckpointTests:
             proposal_state=build_populated_engine_state().proposal_state.register_pending_attribution(
                 ProposalAttribution(
                     proposal_id="csa-20",
-                    source_score=1.0,
                 ),
             ),
         )

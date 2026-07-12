@@ -34,7 +34,7 @@ from .banking_state import CSABankingState
 from .scoring_state import CSAScoringState
 
 _CSA_ENGINE_STATE_FORMAT = "variopt.csa_engine_state"
-_CSA_ENGINE_STATE_VERSION = 1
+_CSA_ENGINE_STATE_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,7 +299,10 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "unsupported CSA checkpoint format"
             raise ValueError(msg)
         if version != _CSA_ENGINE_STATE_VERSION:
-            msg = "unsupported CSA checkpoint version"
+            msg = (
+                "unsupported CSA checkpoint version: "
+                f"expected {_CSA_ENGINE_STATE_VERSION}, received {version}"
+            )
             raise ValueError(msg)
         if "trace_state" in data:
             msg = (

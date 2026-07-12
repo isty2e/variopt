@@ -1,6 +1,6 @@
 """Tests for CSA proposal-adaptation ontology and reducer state."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TypeVar, overload
 
 import numpy as np
@@ -26,13 +26,17 @@ from variopt.algorithms.population.csa.generation.perturbation import (
     CSAPerturbationSpec,
 )
 from variopt.algorithms.population.csa.generation.proposal.evidence import (
+    CSAProposalAdaptationSignal,
     CSAProposalEvaluation,
+    CSAProposalLeafSignal,
     CSAProposalOutcomeEvidence,
+    derive_proposal_adaptation_signals,
 )
 from variopt.algorithms.population.csa.generation.proposal.logic import (
     collect_proposal_outcome_evidence,
     consume_refresh_proposal_provenance,
     infer_structured_local_displacement_leaf_paths,
+    mutation_family_evidence_is_ready,
     mutation_family_key,
     mutation_family_weights,
     mutation_leaf_weights,
@@ -46,10 +50,17 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
 from variopt.algorithms.population.csa.generation.proposal.state import (
     CSAProposalState,
     NonAdaptiveProposalAttribution,
+    NumericSubspaceDisplacement,
     PlannedProposalAttribution,
     ProposalAttribution,
     ProposalFamilyStat,
     ProposalLeafStat,
+)
+from variopt.algorithms.population.csa.generation.proposal.state.generation_evidence import (
+    ProposalFamilyAdaptationSummary,
+    ProposalGenerationAdaptationEvidence,
+    ProposalLeafAdaptationSummary,
+    ProposalNumericDisplacementEvidence,
 )
 from variopt.kernel import ProposalLocalSearchContext
 from variopt.operators import VariationOperator
@@ -149,7 +160,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=(("x",),),
             ),
         )
@@ -176,6 +186,615 @@ class CSAProposalStateTests:
             _ = CSAProposalEvaluation(
                 observation=observation,
                 evaluation_count=evaluation_count,
+            )
+
+    @pytest.mark.parametrize(
+        ("survived_batch", "evaluation_count", "expected_survival_efficiency"),
+        [
+            (False, 1, 0.0),
+            (True, 0, 1.0),
+            (True, 1, 1.0),
+            (True, 4, 0.25),
+        ],
+    )
+    def test_adaptation_signal_uses_final_survival_and_logical_cost(
+        self,
+        survived_batch: bool,
+        evaluation_count: int,
+        expected_survival_efficiency: float,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            evaluation_count=evaluation_count,
+            survived_batch=survived_batch,
+        )
+
+        adaptation_signal = CSAProposalAdaptationSignal(outcome_evidence=evidence)
+
+        assert approx_equal(
+            adaptation_signal.survival_efficiency,
+            expected_survival_efficiency,
+        )
+
+    def test_adaptation_signal_rejects_admission_without_final_survival(
+        self,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            survived_batch=False,
+            disposition="replaced",
+        )
+
+        assert (
+            CSAProposalAdaptationSignal(outcome_evidence=evidence).survival_efficiency
+            == 0.0
+        )
+
+    def test_adaptation_signal_accepts_surviving_growth_append(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            route="growth",
+            disposition="appended",
+        )
+
+        assert (
+            CSAProposalAdaptationSignal(outcome_evidence=evidence).survival_efficiency
+            == 1.0
+        )
+
+    def test_adaptation_signal_remains_bounded_for_large_logical_cost(
+        self,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            evaluation_count=10**12,
+        )
+
+        survival_efficiency = CSAProposalAdaptationSignal(
+            outcome_evidence=evidence
+        ).survival_efficiency
+
+        assert 0.0 < survival_efficiency <= 1.0
+        assert approx_equal(survival_efficiency, 1e-12)
+
+    def test_adaptation_signal_does_not_overflow_for_arbitrary_size_cost(
+        self,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            evaluation_count=10**400,
+        )
+
+        survival_efficiency = CSAProposalAdaptationSignal(
+            outcome_evidence=evidence
+        ).survival_efficiency
+
+        assert survival_efficiency == 0.0
+
+    def test_adaptation_signal_is_positive_affine_invariant(self) -> None:
+        original = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            evaluation_count=2,
+        )
+        transformed = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=307.0,
+            evaluation_count=2,
+        )
+
+        assert (
+            CSAProposalAdaptationSignal(outcome_evidence=original).survival_efficiency
+            == CSAProposalAdaptationSignal(
+                outcome_evidence=transformed
+            ).survival_efficiency
+        )
+
+    def test_adaptation_signal_conserves_multi_stage_leaf_shares(
+        self,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            mutated_leaf_paths=(("x",), ("x",), ("y",)),
+        )
+        adaptation_signal = CSAProposalAdaptationSignal(outcome_evidence=evidence)
+
+        leaf_signals = adaptation_signal.leaf_association_signals(
+            local_displacement_leaf_paths=(("y",), ("z",), ("z",)),
+        )
+
+        assert tuple((item.source, item.path) for item in leaf_signals) == (
+            ("mutation", ("x",)),
+            ("mutation", ("y",)),
+            ("local_displacement", ("y",)),
+            ("local_displacement", ("z",)),
+        )
+        assert all(
+            approx_equal(item.survival_efficiency_share, 0.25) for item in leaf_signals
+        )
+        assert approx_equal(
+            sum(item.survival_efficiency_share for item in leaf_signals),
+            adaptation_signal.survival_efficiency,
+        )
+
+    def test_adaptation_signal_without_leaf_associations_emits_none(
+        self,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+        )
+
+        leaf_signals = CSAProposalAdaptationSignal(
+            outcome_evidence=evidence,
+        ).leaf_association_signals()
+
+        assert leaf_signals == ()
+
+    def test_rejected_proposal_emits_zero_leaf_efficiency_share(
+        self,
+    ) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            survived_batch=False,
+            mutated_leaf_paths=(("x",),),
+        )
+
+        leaf_signals = CSAProposalAdaptationSignal(
+            outcome_evidence=evidence,
+        ).leaf_association_signals()
+
+        assert len(leaf_signals) == 1
+        assert leaf_signals[0].survival_efficiency_share == 0.0
+
+    @pytest.mark.parametrize(
+        "invalid_survival_efficiency_share",
+        [True, float("nan"), float("inf")],
+    )
+    def test_leaf_signal_rejects_noncanonical_efficiency_share(
+        self,
+        invalid_survival_efficiency_share: float,
+    ) -> None:
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="survival_efficiency_share",
+        ):
+            _ = CSAProposalLeafSignal(
+                source="mutation",
+                path=("x",),
+                survival_efficiency_share=invalid_survival_efficiency_share,
+            )
+
+    def test_derive_proposal_signals_uses_canonical_proposal_order(self) -> None:
+        later = self._outcome_evidence(
+            proposal_id="p-2",
+            observed_score=3.0,
+        )
+        earlier = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+        )
+
+        signals = derive_proposal_adaptation_signals((later, earlier))
+
+        assert tuple(signal.proposal_id for signal in signals) == ("p-1", "p-2")
+
+    def test_derive_proposal_signals_rejects_duplicate_proposal_ids(self) -> None:
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+        )
+
+        with pytest.raises(ValueError, match="distinct proposal ids"):
+            _ = derive_proposal_adaptation_signals((evidence, evidence))
+
+    def test_generation_evidence_reduction_is_completion_order_invariant(
+        self,
+    ) -> None:
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(enabled=True, adaptation_decay=0.5),
+        )
+        earlier = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=3.0,
+            survived_batch=False,
+            proposal_family_key="mutation:0",
+            mutated_leaf_paths=(("x",),),
+        )
+        later = self._outcome_evidence(
+            proposal_id="p-2",
+            observed_score=2.0,
+            evaluation_count=2,
+            proposal_family_key="mutation:0",
+            mutated_leaf_paths=(("x",), ("y",)),
+        )
+
+        forward_state = update_proposal_state(state, (earlier, later))
+        reverse_state = update_proposal_state(state, (later, earlier))
+
+        assert forward_state == reverse_state
+        assert forward_state.update_index == 1
+
+    def test_family_survival_efficiency_normalizes_operator_exposure(self) -> None:
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(enabled=True, adaptation_decay=1.0),
+        )
+        evidence = (
+            self._outcome_evidence(
+                proposal_id="p-1",
+                observed_score=1.0,
+                proposal_family_key="mutation:0",
+            ),
+            self._outcome_evidence(
+                proposal_id="p-2",
+                observed_score=2.0,
+                survived_batch=False,
+                proposal_family_key="mutation:0",
+            ),
+            self._outcome_evidence(
+                proposal_id="p-3",
+                observed_score=3.0,
+                proposal_family_key="mutation:1",
+            ),
+        )
+
+        next_state = update_proposal_state(state, evidence)
+
+        family_stats = {stat.family_key: stat for stat in next_state.family_stats}
+        assert family_stats["mutation:0"].observation_count == 2
+        assert (
+            family_stats["mutation:0"].effective_survival_efficiency(
+                current_update_index=next_state.update_index,
+                adaptation_decay=1.0,
+            )
+            == 0.5
+        )
+        assert family_stats["mutation:1"].observation_count == 1
+        assert (
+            family_stats["mutation:1"].effective_survival_efficiency(
+                current_update_index=next_state.update_index,
+                adaptation_decay=1.0,
+            )
+            == 1.0
+        )
+
+    def test_affine_scores_preserve_adaptation_state_and_next_schedule(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(
+                enabled=True,
+                family_bias_strength=10.0,
+                adaptation_decay=1.0,
+            ),
+        )
+        original_evidence = (
+            self._outcome_evidence(
+                proposal_id="p-1",
+                observed_score=2.0,
+                proposal_family_key="mutation:0",
+            ),
+            self._outcome_evidence(
+                proposal_id="p-2",
+                observed_score=5.0,
+                survived_batch=False,
+                proposal_family_key="mutation:1",
+            ),
+        )
+        transformed_evidence = (
+            self._outcome_evidence(
+                proposal_id="p-1",
+                observed_score=207.0,
+                proposal_family_key="mutation:0",
+            ),
+            self._outcome_evidence(
+                proposal_id="p-2",
+                observed_score=507.0,
+                survived_batch=False,
+                proposal_family_key="mutation:1",
+            ),
+        )
+
+        original_state = update_proposal_state(state, original_evidence)
+        transformed_state = update_proposal_state(state, transformed_evidence)
+        original_schedule = sample_mutation_family_indices(
+            state=original_state,
+            family=family,
+            random_state=np.random.RandomState(11),
+        )
+        transformed_schedule = sample_mutation_family_indices(
+            state=transformed_state,
+            family=family,
+            random_state=np.random.RandomState(11),
+        )
+
+        assert original_state == transformed_state
+        assert mutation_family_weights(
+            state=original_state,
+            family=family,
+        ) == mutation_family_weights(
+            state=transformed_state,
+            family=family,
+        )
+        assert original_schedule == transformed_schedule
+
+    def test_generation_adaptation_evidence_rejects_empty_evidence(self) -> None:
+        with pytest.raises(ValueError, match="evidence_count must be positive"):
+            _ = ProposalGenerationAdaptationEvidence(evidence_count=0)
+
+    def test_generation_adaptation_evidence_rejects_bool_evidence_count(
+        self,
+    ) -> None:
+        with pytest.raises(TypeError, match="evidence_count must be an int"):
+            _ = ProposalGenerationAdaptationEvidence(evidence_count=True)
+
+    @pytest.mark.parametrize(
+        ("factory", "expected_error", "match"),
+        [
+            (
+                lambda: ProposalFamilyAdaptationSummary("", 1, 0.5),
+                ValueError,
+                "family_key must not be empty",
+            ),
+            (
+                lambda: ProposalFamilyAdaptationSummary("mutation:0", True, 0.5),
+                TypeError,
+                "observation_count must be an int",
+            ),
+            (
+                lambda: ProposalFamilyAdaptationSummary("mutation:0", 0, 0.0),
+                ValueError,
+                "observation_count must be positive",
+            ),
+            (
+                lambda: ProposalFamilyAdaptationSummary("mutation:0", 1, 1),
+                TypeError,
+                "total_survival_efficiency must be a float",
+            ),
+            (
+                lambda: ProposalFamilyAdaptationSummary(
+                    "mutation:0",
+                    1,
+                    float("inf"),
+                ),
+                ValueError,
+                "total_survival_efficiency must be finite",
+            ),
+            (
+                lambda: ProposalFamilyAdaptationSummary("mutation:0", 1, 1.1),
+                ValueError,
+                "total_survival_efficiency must be bounded",
+            ),
+        ],
+    )
+    def test_family_adaptation_summary_rejects_malformed_values(
+        self,
+        factory: Callable[[], ProposalFamilyAdaptationSummary],
+        expected_error: type[Exception],
+        match: str,
+    ) -> None:
+        with pytest.raises(expected_error, match=match):
+            _ = factory()
+
+    def test_generation_adaptation_evidence_rejects_duplicate_summary_keys(
+        self,
+    ) -> None:
+        summary = ProposalFamilyAdaptationSummary(
+            family_key="mutation:0",
+            observation_count=1,
+            total_survival_efficiency=0.5,
+        )
+
+        with pytest.raises(ValueError, match="distinct family keys"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=2,
+                family_summaries=(summary, summary),
+            )
+
+    def test_generation_adaptation_evidence_rejects_duplicate_mutation_leaf_paths(
+        self,
+    ) -> None:
+        summary = ProposalLeafAdaptationSummary(
+            path=("x",),
+            observation_count=1,
+            total_survival_efficiency=0.5,
+        )
+
+        with pytest.raises(ValueError, match="distinct paths"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=2,
+                mutation_leaf_summaries=(summary, summary),
+            )
+
+    def test_generation_adaptation_evidence_rejects_duplicate_local_leaf_paths(
+        self,
+    ) -> None:
+        summary = ProposalLeafAdaptationSummary(
+            path=("x",),
+            observation_count=1,
+            total_survival_efficiency=0.5,
+        )
+
+        with pytest.raises(ValueError, match="distinct paths"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=2,
+                local_displacement_leaf_summaries=(summary, summary),
+            )
+
+    def test_generation_adaptation_evidence_rejects_summary_observation_overflow(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="must not exceed evidence_count"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                family_summaries=(
+                    ProposalFamilyAdaptationSummary(
+                        family_key="mutation:0",
+                        observation_count=2,
+                        total_survival_efficiency=1.0,
+                    ),
+                ),
+            )
+
+    def test_generation_adaptation_evidence_rejects_family_observation_overflow(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="family observations"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                family_summaries=(
+                    ProposalFamilyAdaptationSummary("mutation:0", 1, 0.4),
+                    ProposalFamilyAdaptationSummary("mutation:1", 1, 0.6),
+                ),
+            )
+
+    def test_generation_adaptation_evidence_rejects_leaf_share_overflow(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="leaf survival-efficiency shares"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                mutation_leaf_summaries=(
+                    ProposalLeafAdaptationSummary(("x",), 1, 0.6),
+                ),
+                local_displacement_leaf_summaries=(
+                    ProposalLeafAdaptationSummary(("y",), 1, 0.6),
+                ),
+            )
+
+    def test_generation_adaptation_evidence_rejects_displacement_count_overflow(
+        self,
+    ) -> None:
+        displacement_evidence = ProposalNumericDisplacementEvidence(
+            displacement=NumericSubspaceDisplacement(
+                leaf_paths=(("x",),),
+                displacement_coordinates=(1.0,),
+            ),
+            survival_efficiency=0.5,
+        )
+
+        with pytest.raises(ValueError, match="numeric displacement count"):
+            _ = ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                numeric_displacement_evidence=(
+                    displacement_evidence,
+                    displacement_evidence,
+                ),
+            )
+
+    @pytest.mark.parametrize(
+        "invalid_survival_efficiency", [0.0, -0.1, 1.1, float("nan")]
+    )
+    def test_numeric_displacement_evidence_requires_positive_bounded_efficiency(
+        self,
+        invalid_survival_efficiency: float,
+    ) -> None:
+        with pytest.raises(ValueError, match="survival_efficiency must lie within"):
+            _ = ProposalNumericDisplacementEvidence(
+                displacement=NumericSubspaceDisplacement(
+                    leaf_paths=(("x",),),
+                    displacement_coordinates=(1.0,),
+                ),
+                survival_efficiency=invalid_survival_efficiency,
+            )
+
+    def test_numeric_displacement_evidence_rejects_bool_efficiency(self) -> None:
+        with pytest.raises(TypeError, match="survival_efficiency must be a float"):
+            _ = ProposalNumericDisplacementEvidence(
+                displacement=NumericSubspaceDisplacement(
+                    leaf_paths=(("x",),),
+                    displacement_coordinates=(1.0,),
+                ),
+                survival_efficiency=True,
+            )
+
+    def test_leaf_adaptation_summary_rejects_efficiency_overflow(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="bounded by observation_count"):
+            _ = ProposalLeafAdaptationSummary(
+                path=("x",),
+                observation_count=1,
+                total_survival_efficiency=1.1,
+            )
+
+    def test_generation_success_resets_leaf_failure_streak_atomically(self) -> None:
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True, adaptation_decay=1.0),
+            leaf_stats=(
+                ProposalLeafStat(
+                    path=("x",),
+                    observation_count=2,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=2.0,
+                    recent_failure_streak=2,
+                ),
+            ),
+        )
+
+        next_state = state.record_generation_evidence(
+            ProposalGenerationAdaptationEvidence(
+                evidence_count=2,
+                mutation_leaf_summaries=(
+                    ProposalLeafAdaptationSummary(
+                        path=("x",),
+                        observation_count=2,
+                        total_survival_efficiency=0.5,
+                    ),
+                ),
+            ),
+        )
+
+        assert next_state.leaf_stats[0].recent_failure_streak == 0
+
+    def test_channel_less_adaptive_evidence_advances_generation_clock(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        evidence = self._outcome_evidence(
+            proposal_id="p-1",
+            observed_score=1.0,
+        )
+
+        next_state = update_proposal_state(state, (evidence,))
+
+        assert next_state.update_index == 1
+        assert next_state.family_stats == ()
+        assert next_state.leaf_stats == ()
+
+    def test_disabled_state_rejects_generation_updates_by_identity(self) -> None:
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=False))
+        batch = ProposalGenerationAdaptationEvidence(evidence_count=1)
+
+        next_state = state.record_generation_evidence(batch)
+
+        assert next_state is state
+
+    def test_proposal_state_rejects_duplicate_and_future_stats(self) -> None:
+        family_stat = ProposalFamilyStat(family_key="mutation:0")
+        with pytest.raises(ValueError, match="distinct family keys"):
+            _ = CSAProposalState(
+                policy=CSAProposalPolicy(enabled=True),
+                family_stats=(family_stat, family_stat),
+            )
+
+        with pytest.raises(ValueError, match="must not exceed"):
+            _ = CSAProposalState(
+                policy=CSAProposalPolicy(enabled=True),
+                leaf_stats=(
+                    ProposalLeafStat(
+                        path=("x",),
+                        last_update_index=1,
+                    ),
+                ),
+                update_index=0,
             )
 
     @pytest.mark.parametrize(
@@ -212,13 +831,51 @@ class CSAProposalStateTests:
                 survived_batch=survived_batch,
             )
 
+    @staticmethod
+    def _outcome_evidence(
+        *,
+        proposal_id: str,
+        observed_score: float,
+        evaluation_count: int = 1,
+        survived_batch: bool = True,
+        mutated_leaf_paths: tuple[LeafPath, ...] = (),
+        proposal_family_key: str | None = None,
+        route: CSABankTransitionRoute = "local",
+        disposition: CSABankTransitionDisposition | None = None,
+    ) -> CSAProposalOutcomeEvidence[int]:
+        canonical_disposition = disposition
+        if canonical_disposition is None:
+            canonical_disposition = "replaced" if survived_batch else "rejected"
+        return CSAProposalOutcomeEvidence(
+            attribution=ProposalAttribution(
+                proposal_id=proposal_id,
+                proposal_family_key=proposal_family_key,
+                mutated_leaf_paths=mutated_leaf_paths,
+            ),
+            evaluation=CSAProposalEvaluation(
+                observation=Observation(
+                    proposal=Proposal(candidate=1, proposal_id=proposal_id),
+                    candidate=1,
+                    value=observed_score,
+                    score=observed_score,
+                ),
+                evaluation_count=evaluation_count,
+            ),
+            bank_transition=CSABankTransition(
+                proposal_id=proposal_id,
+                route=route,
+                disposition=canonical_disposition,
+                target_index=(0 if canonical_disposition != "rejected" else None),
+                survived_batch=survived_batch,
+            ),
+        )
+
     def test_update_proposal_state_consumes_matching_attribution(self) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",), ("y",)),
             ),
@@ -244,14 +901,23 @@ class CSAProposalStateTests:
         assert len(next_state.family_stats) == 1
         assert next_state.family_stats[0].family_key == "mutation:0"
         assert next_state.family_stats[0].observation_count == 1
-        assert next_state.family_stats[0].discounted_score_credit == 7.0
+        assert approx_equal(
+            next_state.family_stats[0].discounted_survival_efficiency, 1.0 / 7.0
+        )
+        assert next_state.family_stats[0].discounted_observation_weight == 1.0
         assert len(next_state.leaf_stats) == 2
         assert next_state.leaf_stats[0].path == ("x",)
         assert next_state.leaf_stats[1].path == ("y",)
         assert next_state.leaf_stats[0].observation_count == 1
         assert next_state.leaf_stats[1].observation_count == 1
-        assert next_state.leaf_stats[0].discounted_score_credit == 7.0
-        assert next_state.leaf_stats[1].discounted_score_credit == 7.0
+        assert approx_equal(
+            next_state.leaf_stats[0].discounted_survival_efficiency, 1.0 / 14.0
+        )
+        assert approx_equal(
+            next_state.leaf_stats[1].discounted_survival_efficiency, 1.0 / 14.0
+        )
+        assert next_state.leaf_stats[0].discounted_observation_weight == 1.0
+        assert next_state.leaf_stats[1].discounted_observation_weight == 1.0
         assert next_state.local_displacement_leaf_stats == ()
 
     def test_outcome_join_consumes_explicit_non_adaptive_provenance(self) -> None:
@@ -279,7 +945,7 @@ class CSAProposalStateTests:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
             state,
-            ProposalAttribution(proposal_id="p-1", source_score=10.0),
+            ProposalAttribution(proposal_id="p-1"),
         )
         observation = Observation(
             proposal=Proposal(candidate=3, proposal_id="p-1"),
@@ -293,7 +959,7 @@ class CSAProposalStateTests:
             _ = proposal_outcome_evidence(consumed_state, observation)
 
     def test_outcome_evidence_rejects_transition_proposal_mismatch(self) -> None:
-        attribution = ProposalAttribution(proposal_id="p-1", source_score=10.0)
+        attribution = ProposalAttribution(proposal_id="p-1")
         observation = Observation(
             proposal=Proposal(candidate=3, proposal_id="p-1"),
             candidate=3,
@@ -319,7 +985,7 @@ class CSAProposalStateTests:
         for proposal_id in ("p-1", "p-2"):
             state = record_proposal_attribution(
                 state,
-                ProposalAttribution(proposal_id=proposal_id, source_score=10.0),
+                ProposalAttribution(proposal_id=proposal_id),
             )
         evaluations = tuple(
             CSAProposalEvaluation.from_observation(
@@ -354,7 +1020,7 @@ class CSAProposalStateTests:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
             state,
-            ProposalAttribution(proposal_id="p-1", source_score=10.0),
+            ProposalAttribution(proposal_id="p-1"),
         )
         evaluation = CSAProposalEvaluation.from_observation(
             Observation(
@@ -379,7 +1045,9 @@ class CSAProposalStateTests:
                 (transition, transition),
             )
 
-    def test_outcome_join_handles_mixed_provenance_without_false_credit(self) -> None:
+    def test_outcome_join_handles_mixed_provenance_without_false_adaptation_signal(
+        self,
+    ) -> None:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
             state,
@@ -387,7 +1055,7 @@ class CSAProposalStateTests:
         )
         state = record_proposal_attribution(
             state,
-            ProposalAttribution(proposal_id="p-2", source_score=10.0),
+            ProposalAttribution(proposal_id="p-2"),
         )
         evaluations = tuple(
             CSAProposalEvaluation.from_observation(
@@ -424,7 +1092,7 @@ class CSAProposalStateTests:
         state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
         state = record_proposal_attribution(
             state,
-            ProposalAttribution(proposal_id="p-1", source_score=10.0),
+            ProposalAttribution(proposal_id="p-1"),
         )
         observation = Observation(
             proposal=Proposal(candidate=1, proposal_id="p-1"),
@@ -493,7 +1161,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",),),
             ),
@@ -523,7 +1190,12 @@ class CSAProposalStateTests:
         assert len(next_state.local_displacement_leaf_stats) == 1
         assert next_state.local_displacement_leaf_stats[0].path == ("y",)
         assert (
-            next_state.local_displacement_leaf_stats[0].discounted_score_credit == 7.0
+            next_state.local_displacement_leaf_stats[0].discounted_survival_efficiency
+            == 0.5
+        )
+        assert (
+            next_state.local_displacement_leaf_stats[0].discounted_observation_weight
+            == 1.0
         )
 
     def test_update_proposal_state_prefers_explicit_refinement_paths(self) -> None:
@@ -532,7 +1204,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",),),
             ),
@@ -570,7 +1241,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=((0,),),
             ),
@@ -612,7 +1282,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=((0,), ("color",)),
             ),
@@ -655,7 +1324,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",),),
             ),
@@ -687,7 +1355,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",),),
             ),
@@ -720,7 +1387,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",),),
             ),
@@ -810,7 +1476,6 @@ class CSAProposalStateTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 proposal_family_key="mutation:0",
                 mutated_leaf_paths=(("x",),),
             ),
@@ -850,7 +1515,7 @@ class CSAProposalStateTests:
         policy = CSAProposalPolicy(
             enabled=True,
             leaf_bias_strength=10.0,
-            score_decay=1.0,
+            adaptation_decay=1.0,
         )
         state = CSAProposalState(
             policy=policy,
@@ -858,12 +1523,14 @@ class CSAProposalStateTests:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=2,
-                    discounted_score_credit=5.0,
+                    discounted_survival_efficiency=1.5,
+                    discounted_observation_weight=2.0,
                 ),
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=2,
-                    discounted_score_credit=0.0,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=2.0,
                 ),
             ),
         )
@@ -887,7 +1554,7 @@ class CSAProposalStateTests:
             enabled=True,
             leaf_bias_strength=0.0,
             local_displacement_leaf_bias_strength=10.0,
-            score_decay=1.0,
+            adaptation_decay=1.0,
         )
         state = CSAProposalState(
             policy=policy,
@@ -895,12 +1562,14 @@ class CSAProposalStateTests:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=2,
-                    discounted_score_credit=5.0,
+                    discounted_survival_efficiency=1.5,
+                    discounted_observation_weight=2.0,
                 ),
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=2,
-                    discounted_score_credit=0.0,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=2.0,
                 ),
             ),
         )
@@ -938,18 +1607,20 @@ class CSAProposalStateTests:
             policy=CSAProposalPolicy(
                 enabled=True,
                 leaf_bias_strength=10.0,
-                score_decay=1.0,
+                adaptation_decay=1.0,
             ),
             leaf_stats=(
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=2,
-                    discounted_score_credit=5.0,
+                    discounted_survival_efficiency=1.5,
+                    discounted_observation_weight=2.0,
                 ),
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=2,
-                    discounted_score_credit=0.0,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=2.0,
                 ),
             ),
         )
@@ -959,7 +1630,6 @@ class CSAProposalStateTests:
             leaf_paths=(("x",), ("y",), ("z",)),
             attribution=ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=(("z",),),
             ),
         )
@@ -980,7 +1650,8 @@ class CSAProposalStateTests:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=3,
-                    discounted_score_credit=0.0,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=3.0,
                     recent_failure_streak=2,
                 ),
             ),
@@ -991,7 +1662,6 @@ class CSAProposalStateTests:
             leaf_paths=(("x",), ("y",)),
             attribution=ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=(("x",),),
             ),
         )
@@ -1009,18 +1679,20 @@ class CSAProposalStateTests:
                 enabled=True,
                 local_search_base_budget=2,
                 local_search_max_budget=8,
-                score_decay=1.0,
+                adaptation_decay=1.0,
             ),
             leaf_stats=(
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=2,
-                    discounted_score_credit=3.0,
+                    discounted_survival_efficiency=1.5,
+                    discounted_observation_weight=2.0,
                 ),
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=2,
-                    discounted_score_credit=1.0,
+                    discounted_survival_efficiency=0.5,
+                    discounted_observation_weight=2.0,
                 ),
             ),
         )
@@ -1030,7 +1702,6 @@ class CSAProposalStateTests:
             leaf_paths=(("x",), ("y",), ("z",)),
             attribution=ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=(("x",), ("y",)),
             ),
         )
@@ -1047,7 +1718,7 @@ class CSAProposalStateTests:
             policy=CSAProposalPolicy(
                 enabled=True,
                 leaf_bias_strength=10.0,
-                score_decay=1.0,
+                adaptation_decay=1.0,
                 local_search_base_budget=2,
                 local_search_max_budget=8,
                 local_search_failure_cooldown_updates=3,
@@ -1056,21 +1727,24 @@ class CSAProposalStateTests:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=3,
-                    discounted_score_credit=5.0,
+                    discounted_survival_efficiency=1.5,
+                    discounted_observation_weight=3.0,
                     last_update_index=10,
                     recent_failure_streak=1,
                 ),
                 ProposalLeafStat(
                     path=("y",),
                     observation_count=3,
-                    discounted_score_credit=3.0,
+                    discounted_survival_efficiency=1.0,
+                    discounted_observation_weight=3.0,
                     last_update_index=6,
                     recent_failure_streak=1,
                 ),
                 ProposalLeafStat(
                     path=("z",),
                     observation_count=2,
-                    discounted_score_credit=1.0,
+                    discounted_survival_efficiency=0.25,
+                    discounted_observation_weight=2.0,
                     last_update_index=2,
                 ),
             ),
@@ -1082,7 +1756,6 @@ class CSAProposalStateTests:
             leaf_paths=(("x",), ("y",), ("z",)),
             attribution=ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=(("x",), ("y",)),
             ),
         )
@@ -1106,7 +1779,8 @@ class CSAProposalStateTests:
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=2,
-                    discounted_score_credit=0.0,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=2.0,
                     last_update_index=4,
                     recent_failure_streak=1,
                 ),
@@ -1119,7 +1793,6 @@ class CSAProposalStateTests:
             leaf_paths=(("x",), ("y",)),
             attribution=ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 mutated_leaf_paths=(("x",),),
             ),
         )
@@ -1145,39 +1818,58 @@ class CSAProposalStateTests:
 
         assert changed_paths == ((1,),)
 
-    def test_record_leaf_score_improvement_applies_lazy_decay(self) -> None:
+    def test_record_leaf_generation_evidence_applies_lazy_decay(
+        self,
+    ) -> None:
         state = CSAProposalState(
-            policy=CSAProposalPolicy(enabled=True, score_decay=0.5),
+            policy=CSAProposalPolicy(enabled=True, adaptation_decay=0.5),
             leaf_stats=(
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=1,
-                    discounted_score_credit=8.0,
+                    discounted_survival_efficiency=0.8,
+                    discounted_observation_weight=1.0,
                     last_update_index=0,
                 ),
             ),
             update_index=2,
         )
 
-        next_state = state.record_score_improvement(
-            family_key=None,
-            leaf_paths=(("x",),),
-            score_improvement=2.0,
+        next_state = state.record_generation_evidence(
+            ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                mutation_leaf_summaries=(
+                    ProposalLeafAdaptationSummary(
+                        path=("x",),
+                        observation_count=1,
+                        total_survival_efficiency=0.5,
+                    ),
+                ),
+            ),
         )
 
         assert next_state.update_index == 3
         assert next_state.leaf_stats[0].observation_count == 2
-        assert approx_equal(next_state.leaf_stats[0].discounted_score_credit, 3.0)
+        assert approx_equal(
+            next_state.leaf_stats[0].discounted_survival_efficiency, 0.6
+        )
+        assert approx_equal(
+            next_state.leaf_stats[0].discounted_observation_weight,
+            1.125,
+        )
         assert next_state.leaf_stats[0].recent_failure_streak == 0
 
-    def test_record_leaf_score_improvement_tracks_recent_failure_streak(self) -> None:
+    def test_record_leaf_generation_evidence_tracks_failure_generations(
+        self,
+    ) -> None:
         state = CSAProposalState(
-            policy=CSAProposalPolicy(enabled=True, score_decay=0.5),
+            policy=CSAProposalPolicy(enabled=True, adaptation_decay=0.5),
             leaf_stats=(
                 ProposalLeafStat(
                     path=("x",),
                     observation_count=1,
-                    discounted_score_credit=8.0,
+                    discounted_survival_efficiency=0.8,
+                    discounted_observation_weight=1.0,
                     last_update_index=0,
                     recent_failure_streak=1,
                 ),
@@ -1185,20 +1877,32 @@ class CSAProposalStateTests:
             update_index=2,
         )
 
-        next_state = state.record_score_improvement(
-            family_key=None,
-            leaf_paths=(("x",),),
-            score_improvement=0.0,
+        next_state = state.record_generation_evidence(
+            ProposalGenerationAdaptationEvidence(
+                evidence_count=1,
+                mutation_leaf_summaries=(
+                    ProposalLeafAdaptationSummary(
+                        path=("x",),
+                        observation_count=1,
+                        total_survival_efficiency=0.0,
+                    ),
+                ),
+            ),
         )
 
         assert next_state.update_index == 3
         assert next_state.leaf_stats[0].observation_count == 2
-        assert approx_equal(next_state.leaf_stats[0].discounted_score_credit, 1.0)
+        assert approx_equal(
+            next_state.leaf_stats[0].discounted_survival_efficiency, 0.1
+        )
+        assert approx_equal(
+            next_state.leaf_stats[0].discounted_observation_weight,
+            1.125,
+        )
         assert next_state.leaf_stats[0].recent_failure_streak == 2
 
     def test_proposal_attribution_can_bind_planned_record_to_proposal_id(self) -> None:
         planned_attribution = PlannedProposalAttribution(
-            source_score=12.0,
             proposal_family_key="mutation:0",
             mutated_leaf_paths=(("x",),),
         )
@@ -1209,7 +1913,6 @@ class CSAProposalStateTests:
         )
 
         assert attribution.proposal_id == "p-1"
-        assert attribution.source_score == 12.0
         assert attribution.proposal_family_key == "mutation:0"
         assert attribution.mutated_leaf_paths == (("x",),)
         assert attribution.generator_kind == "mutation"
@@ -1218,7 +1921,6 @@ class CSAProposalStateTests:
         attribution = ProposalAttribution.from_planned(
             proposal_id="p-1",
             attribution=PlannedProposalAttribution(
-                source_score=12.0,
                 generator_kind="passthrough",
             ),
         )
@@ -1227,12 +1929,10 @@ class CSAProposalStateTests:
 
     def test_planned_mutation_attribution_normalizes_paths(self) -> None:
         attribution = planned_mutation_attribution(
-            source_score=5.0,
             mutated_leaf_paths=[("x",)],
         )
 
         assert attribution == PlannedProposalAttribution(
-            source_score=5.0,
             mutated_leaf_paths=(("x",),),
         )
 
@@ -1245,13 +1945,20 @@ class CSAProposalStateTests:
             policy=CSAProposalPolicy(
                 enabled=True,
                 family_bias_strength=5.0,
-                score_decay=1.0,
+                adaptation_decay=1.0,
             ),
             family_stats=(
                 ProposalFamilyStat(
                     family_key="mutation:0",
                     observation_count=1,
-                    discounted_score_credit=3.0,
+                    discounted_survival_efficiency=1.0,
+                    discounted_observation_weight=1.0,
+                ),
+                ProposalFamilyStat(
+                    family_key="mutation:1",
+                    observation_count=1,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=1.0,
                 ),
             ),
         )
@@ -1269,13 +1976,20 @@ class CSAProposalStateTests:
             policy=CSAProposalPolicy(
                 enabled=True,
                 family_bias_strength=10.0,
-                score_decay=1.0,
+                adaptation_decay=1.0,
             ),
             family_stats=(
                 ProposalFamilyStat(
                     family_key="mutation:0",
                     observation_count=1,
-                    discounted_score_credit=4.0,
+                    discounted_survival_efficiency=1.0,
+                    discounted_observation_weight=1.0,
+                ),
+                ProposalFamilyStat(
+                    family_key="mutation:1",
+                    observation_count=1,
+                    discounted_survival_efficiency=0.0,
+                    discounted_observation_weight=1.0,
                 ),
             ),
         )
@@ -1287,6 +2001,138 @@ class CSAProposalStateTests:
         )
 
         assert sampled_indices == (0, 0)
+
+    def test_adaptive_family_cold_start_preserves_declared_schedule_and_rng(
+        self,
+    ) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=2),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        sampled_random_state = np.random.RandomState(7)
+        control_random_state = np.random.RandomState(7)
+
+        weights = mutation_family_weights(state=state, family=family)
+        sampled_indices = sample_mutation_family_indices(
+            state=state,
+            family=family,
+            random_state=sampled_random_state,
+        )
+
+        assert not mutation_family_evidence_is_ready(state=state, family=family)
+        assert weights == (2.0 / 3.0, 1.0 / 3.0)
+        assert sampled_indices == (0, 0, 1)
+        assert (
+            sampled_random_state.random_sample() == control_random_state.random_sample()
+        )
+
+    def test_partial_family_evidence_does_not_end_cold_start(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=(
+                ProposalFamilyStat(
+                    family_key="mutation:0",
+                    observation_count=3,
+                    discounted_survival_efficiency=3.0,
+                    discounted_observation_weight=3.0,
+                ),
+            ),
+        )
+
+        sampled_indices = sample_mutation_family_indices(
+            state=state,
+            family=family,
+            random_state=np.random.RandomState(0),
+        )
+
+        assert not mutation_family_evidence_is_ready(state=state, family=family)
+        assert sampled_indices == (0, 1)
+
+    def test_zero_observation_family_does_not_end_cold_start(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=(
+                ProposalFamilyStat(family_key="mutation:0"),
+                ProposalFamilyStat(
+                    family_key="mutation:1",
+                    observation_count=1,
+                    discounted_survival_efficiency=1.0,
+                    discounted_observation_weight=1.0,
+                ),
+            ),
+        )
+
+        assert not mutation_family_evidence_is_ready(state=state, family=family)
+
+    def test_current_family_set_controls_evidence_readiness(self) -> None:
+        current_family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        expanded_family = (
+            *current_family,
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=tuple(
+                ProposalFamilyStat(
+                    family_key=family_key,
+                    observation_count=1,
+                    discounted_survival_efficiency=0.5,
+                    discounted_observation_weight=1.0,
+                )
+                for family_key in ("mutation:0", "mutation:1", "mutation:stale")
+            ),
+        )
+
+        assert mutation_family_evidence_is_ready(
+            state=state,
+            family=current_family,
+        )
+        assert not mutation_family_evidence_is_ready(
+            state=state,
+            family=expanded_family,
+        )
+
+    def test_ready_family_sampling_consumes_rng(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=tuple(
+                ProposalFamilyStat(
+                    family_key=f"mutation:{index}",
+                    observation_count=1,
+                    discounted_survival_efficiency=float(index),
+                    discounted_observation_weight=1.0,
+                )
+                for index in range(2)
+            ),
+        )
+        sampled_random_state = np.random.RandomState(7)
+        control_random_state = np.random.RandomState(7)
+
+        _ = sample_mutation_family_indices(
+            state=state,
+            family=family,
+            random_state=sampled_random_state,
+        )
+
+        assert repr(sampled_random_state.get_state()) != repr(
+            control_random_state.get_state()
+        )
 
     def test_mutation_family_key_rejects_negative_index(self) -> None:
         with pytest.raises(ValueError, match="non-negative"):
@@ -1300,6 +2146,50 @@ class CSAProposalStateTests:
     ) -> None:
         with pytest.raises(ValueError, match="non-negative"):
             _ = CSAProposalPolicy(local_displacement_leaf_bias_strength=-1.0)
+
+    @pytest.mark.parametrize(
+        ("factory", "expected_error", "match"),
+        [
+            (
+                lambda: CSAProposalPolicy(adaptation_decay=True),
+                TypeError,
+                "adaptation_decay must be numeric",
+            ),
+            (
+                lambda: CSAProposalPolicy(adaptation_decay=float("nan")),
+                ValueError,
+                "adaptation_decay must be finite",
+            ),
+            (
+                lambda: CSAProposalPolicy(family_bias_strength=float("inf")),
+                ValueError,
+                "family_bias_strength must be finite",
+            ),
+            (
+                lambda: CSAProposalPolicy(local_search_base_budget=True),
+                TypeError,
+                "local_search_base_budget must be an int",
+            ),
+        ],
+    )
+    def test_proposal_policy_rejects_noncanonical_numeric_boundaries(
+        self,
+        factory: Callable[[], CSAProposalPolicy],
+        expected_error: type[Exception],
+        match: str,
+    ) -> None:
+        with pytest.raises(expected_error, match=match):
+            _ = factory()
+
+    @pytest.mark.parametrize("adaptation_decay", [0.0, -0.1, 1.5])
+    def test_proposal_policy_rejects_adaptation_decay_outside_unit_interval(
+        self,
+        adaptation_decay: float,
+    ) -> None:
+        with pytest.raises(
+            ValueError, match=r"adaptation_decay must lie in \(0\.0, 1\.0\]"
+        ):
+            _ = CSAProposalPolicy(adaptation_decay=adaptation_decay)
 
     def test_proposal_policy_rejects_negative_numeric_covariance_strength(self) -> None:
         with pytest.raises(ValueError, match="non-negative"):
