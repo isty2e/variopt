@@ -36,6 +36,7 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
     collect_proposal_outcome_evidence,
     consume_refresh_proposal_provenance,
     infer_structured_local_displacement_leaf_paths,
+    mutation_family_evidence_is_ready,
     mutation_family_key,
     mutation_family_weights,
     mutation_leaf_weights,
@@ -425,6 +426,68 @@ class CSAProposalStateTests:
             == 1.0
         )
 
+    def test_affine_scores_preserve_adaptation_state_and_next_schedule(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(
+                enabled=True,
+                family_bias_strength=10.0,
+                credit_decay=1.0,
+            ),
+        )
+        original_evidence = (
+            self._outcome_evidence(
+                proposal_id="p-1",
+                observed_score=2.0,
+                proposal_family_key="mutation:0",
+            ),
+            self._outcome_evidence(
+                proposal_id="p-2",
+                observed_score=5.0,
+                survived_batch=False,
+                proposal_family_key="mutation:1",
+            ),
+        )
+        transformed_evidence = (
+            self._outcome_evidence(
+                proposal_id="p-1",
+                observed_score=207.0,
+                proposal_family_key="mutation:0",
+            ),
+            self._outcome_evidence(
+                proposal_id="p-2",
+                observed_score=507.0,
+                survived_batch=False,
+                proposal_family_key="mutation:1",
+            ),
+        )
+
+        original_state = update_proposal_state(state, original_evidence)
+        transformed_state = update_proposal_state(state, transformed_evidence)
+        original_schedule = sample_mutation_family_indices(
+            state=original_state,
+            family=family,
+            random_state=np.random.RandomState(11),
+        )
+        transformed_schedule = sample_mutation_family_indices(
+            state=transformed_state,
+            family=family,
+            random_state=np.random.RandomState(11),
+        )
+
+        assert original_state == transformed_state
+        assert mutation_family_weights(
+            state=original_state,
+            family=family,
+        ) == mutation_family_weights(
+            state=transformed_state,
+            family=family,
+        )
+        assert original_schedule == transformed_schedule
+
     def test_generation_credit_batch_rejects_empty_evidence(self) -> None:
         with pytest.raises(ValueError, match="evidence_count must be positive"):
             _ = ProposalGenerationCreditBatch(evidence_count=0)
@@ -499,6 +562,26 @@ class CSAProposalStateTests:
         next_state = state.record_generation_credit(batch)
 
         assert next_state is state
+
+    def test_proposal_state_rejects_duplicate_and_future_stats(self) -> None:
+        family_stat = ProposalFamilyStat(family_key="mutation:0")
+        with pytest.raises(ValueError, match="distinct family keys"):
+            _ = CSAProposalState(
+                policy=CSAProposalPolicy(enabled=True),
+                family_stats=(family_stat, family_stat),
+            )
+
+        with pytest.raises(ValueError, match="must not exceed"):
+            _ = CSAProposalState(
+                policy=CSAProposalPolicy(enabled=True),
+                leaf_stats=(
+                    ProposalLeafStat(
+                        path=("x",),
+                        last_update_index=1,
+                    ),
+                ),
+                update_index=0,
+            )
 
     @pytest.mark.parametrize(
         (
@@ -1638,6 +1721,12 @@ class CSAProposalStateTests:
                     discounted_credit=1.0,
                     discounted_observation_weight=1.0,
                 ),
+                ProposalFamilyStat(
+                    family_key="mutation:1",
+                    observation_count=1,
+                    discounted_credit=0.0,
+                    discounted_observation_weight=1.0,
+                ),
             ),
         )
 
@@ -1663,6 +1752,12 @@ class CSAProposalStateTests:
                     discounted_credit=1.0,
                     discounted_observation_weight=1.0,
                 ),
+                ProposalFamilyStat(
+                    family_key="mutation:1",
+                    observation_count=1,
+                    discounted_credit=0.0,
+                    discounted_observation_weight=1.0,
+                ),
             ),
         )
 
@@ -1673,6 +1768,138 @@ class CSAProposalStateTests:
         )
 
         assert sampled_indices == (0, 0)
+
+    def test_adaptive_family_cold_start_preserves_declared_schedule_and_rng(
+        self,
+    ) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=2),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        sampled_random_state = np.random.RandomState(7)
+        control_random_state = np.random.RandomState(7)
+
+        weights = mutation_family_weights(state=state, family=family)
+        sampled_indices = sample_mutation_family_indices(
+            state=state,
+            family=family,
+            random_state=sampled_random_state,
+        )
+
+        assert not mutation_family_evidence_is_ready(state=state, family=family)
+        assert weights == (2.0 / 3.0, 1.0 / 3.0)
+        assert sampled_indices == (0, 0, 1)
+        assert (
+            sampled_random_state.random_sample() == control_random_state.random_sample()
+        )
+
+    def test_partial_family_evidence_does_not_end_cold_start(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=(
+                ProposalFamilyStat(
+                    family_key="mutation:0",
+                    observation_count=3,
+                    discounted_credit=3.0,
+                    discounted_observation_weight=3.0,
+                ),
+            ),
+        )
+
+        sampled_indices = sample_mutation_family_indices(
+            state=state,
+            family=family,
+            random_state=np.random.RandomState(0),
+        )
+
+        assert not mutation_family_evidence_is_ready(state=state, family=family)
+        assert sampled_indices == (0, 1)
+
+    def test_zero_observation_family_does_not_end_cold_start(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=(
+                ProposalFamilyStat(family_key="mutation:0"),
+                ProposalFamilyStat(
+                    family_key="mutation:1",
+                    observation_count=1,
+                    discounted_credit=1.0,
+                    discounted_observation_weight=1.0,
+                ),
+            ),
+        )
+
+        assert not mutation_family_evidence_is_ready(state=state, family=family)
+
+    def test_current_family_set_controls_evidence_readiness(self) -> None:
+        current_family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        expanded_family = (
+            *current_family,
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=tuple(
+                ProposalFamilyStat(
+                    family_key=family_key,
+                    observation_count=1,
+                    discounted_credit=0.5,
+                    discounted_observation_weight=1.0,
+                )
+                for family_key in ("mutation:0", "mutation:1", "mutation:stale")
+            ),
+        )
+
+        assert mutation_family_evidence_is_ready(
+            state=state,
+            family=current_family,
+        )
+        assert not mutation_family_evidence_is_ready(
+            state=state,
+            family=expanded_family,
+        )
+
+    def test_ready_family_sampling_consumes_rng(self) -> None:
+        family = (
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+            CSAPerturbationSpec(IdentityMutation(), count=1),
+        )
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            family_stats=tuple(
+                ProposalFamilyStat(
+                    family_key=f"mutation:{index}",
+                    observation_count=1,
+                    discounted_credit=float(index),
+                    discounted_observation_weight=1.0,
+                )
+                for index in range(2)
+            ),
+        )
+        sampled_random_state = np.random.RandomState(7)
+        control_random_state = np.random.RandomState(7)
+
+        _ = sample_mutation_family_indices(
+            state=state,
+            family=family,
+            random_state=sampled_random_state,
+        )
+
+        assert repr(sampled_random_state.get_state()) != repr(
+            control_random_state.get_state()
+        )
 
     def test_mutation_family_key_rejects_negative_index(self) -> None:
         with pytest.raises(ValueError, match="non-negative"):

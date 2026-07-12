@@ -22,7 +22,9 @@ format. Stability guarantees for the public surface are documented in the
   likewise expose `effective_credit_rate` instead of `effective_score_credit`.
   Proposal update indices and leaf failure streaks now advance per completed
   generation rather than per outcome, and the CSA engine checkpoint version is
-  `2`.
+  `2`. An enabled policy now emits the declared mutation-family counts without
+  consuming family-selection RNG until every configured family has conclusive
+  outcome evidence; the previous multinomial cold start is removed.
 - `CSABankUpdatePolicy.minimum_significant_score_gap` has been replaced by the
   dimensionless `minimum_significant_score_gap_ratio`. Significant bank updates
   are now measured relative to the larger previous/next bank score span, so

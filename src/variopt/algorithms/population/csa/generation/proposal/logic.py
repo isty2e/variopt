@@ -427,6 +427,35 @@ def mutation_family_key(index: int) -> str:
     return f"mutation:{index}"
 
 
+def mutation_family_evidence_is_ready(
+    *,
+    state: CSAProposalState,
+    family: Sequence[CSAPerturbationSpec[CandidateT]],
+) -> bool:
+    """Return whether every current mutation family has conclusive evidence.
+
+    Parameters
+    ----------
+    state : CSAProposalState
+        Proposal adaptation state providing family observations.
+    family : Sequence[CSAPerturbationSpec[CandidateT]]
+        Current mutation family whose keys define the readiness set.
+
+    Returns
+    -------
+    bool
+        Whether each family has at least one completed outcome observation.
+    """
+    family_stats_by_key = {
+        family_stat.family_key: family_stat for family_stat in state.family_stats
+    }
+    for index in range(len(family)):
+        family_stat = family_stats_by_key.get(mutation_family_key(index))
+        if family_stat is None or family_stat.observation_count == 0:
+            return False
+    return True
+
+
 def mutation_family_weights(
     *,
     state: CSAProposalState,
@@ -456,7 +485,10 @@ def mutation_family_weights(
         raise ValueError(msg)
 
     base_weights = tuple(float(spec.count) for spec in family)
-    if not state.policy.enabled:
+    if not state.policy.enabled or not mutation_family_evidence_is_ready(
+        state=state,
+        family=family,
+    ):
         weight_sum = sum(base_weights)
         return tuple(weight / weight_sum for weight in base_weights)
 
@@ -513,7 +545,10 @@ def sample_mutation_family_indices(
     if total_child_count <= 0:
         return ()
 
-    if not state.policy.enabled:
+    if not state.policy.enabled or not mutation_family_evidence_is_ready(
+        state=state,
+        family=family,
+    ):
         return tuple(
             index for index, spec in enumerate(family) for _ in range(spec.count)
         )

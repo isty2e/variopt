@@ -70,6 +70,22 @@ outcome and avoids candidate comparison in that path. This feedback affects only
 proposal adaptation; bank admission, scoring, evaluation accounting, and
 checkpoint state remain governed by the evaluated records.
 
+When proposal adaptation is enabled, CSA updates it only after a complete
+generation has reached conclusive bank transitions. A proposal receives bounded
+credit only if it remains in the final post-generation bank; that credit is
+divided by `max(1, evaluation_count)` so additional logical evaluations reduce
+the measured efficiency without introducing wall-clock nondeterminism. Mutation
+and local-displacement leaf associations share one outcome's leaf credit rather
+than each receiving a copy of the full result. Numeric covariance treats a
+successful displacement vector as one sample weighted by the same pipeline
+credit.
+
+Adaptive family sampling starts only after every configured mutation family has
+at least one conclusive outcome. Before then, CSA emits the declared per-family
+counts exactly and does not consume family-selection RNG. Proposal adaptation
+remains disabled by default; fixed scheduling is therefore both the default and
+the explicit baseline for comparisons.
+
 For the broader execution boundary, see
 [Candidate Refinement](candidate-refinement.md).
 

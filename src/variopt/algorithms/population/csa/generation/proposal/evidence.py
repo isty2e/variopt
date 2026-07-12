@@ -13,6 +13,26 @@ from .state.attribution import ProposalAttribution
 CSAProposalLeafCreditSource = Literal["mutation", "local_displacement"]
 
 
+def _normalize_leaf_credit_source(value: str) -> CSAProposalLeafCreditSource:
+    if value == "mutation":
+        return "mutation"
+    if value == "local_displacement":
+        return "local_displacement"
+    msg = "source must identify a canonical proposal pipeline stage"
+    raise ValueError(msg)
+
+
+def _normalize_credit(value: int | float) -> float:
+    if isinstance(value, bool):
+        msg = "credit must be numeric"
+        raise TypeError(msg)
+    normalized_value = float(value)
+    if not 0.0 <= normalized_value <= 1.0:
+        msg = "credit must lie within [0, 1]"
+        raise ValueError(msg)
+    return normalized_value
+
+
 @dataclass(frozen=True, slots=True)
 class CSAProposalEvaluation(Generic[CandidateT]):
     """Successful CSA feedback preserved until bank reduction completes.
@@ -109,16 +129,13 @@ class CSAProposalLeafCredit:
 
     def __post_init__(self) -> None:
         """Normalize the path and reject invalid credit records."""
-        if self.source not in ("mutation", "local_displacement"):
-            msg = "source must identify a canonical proposal pipeline stage"
-            raise ValueError(msg)
+        object.__setattr__(
+            self,
+            "source",
+            _normalize_leaf_credit_source(self.source),
+        )
         object.__setattr__(self, "path", tuple(self.path))
-        if type(self.credit) is not float:
-            msg = "credit must be a float"
-            raise TypeError(msg)
-        if not 0.0 <= self.credit <= 1.0:
-            msg = "credit must lie within [0, 1]"
-            raise ValueError(msg)
+        object.__setattr__(self, "credit", _normalize_credit(self.credit))
 
 
 @dataclass(frozen=True, slots=True)

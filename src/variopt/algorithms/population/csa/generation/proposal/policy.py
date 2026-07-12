@@ -4,6 +4,21 @@ from dataclasses import dataclass
 from math import isfinite
 
 
+def _normalize_finite_number(value: int | float, *, field_name: str) -> float:
+    if isinstance(value, bool):
+        msg = f"{field_name} must be numeric"
+        raise TypeError(msg)
+    try:
+        normalized_value = float(value)
+    except (TypeError, ValueError) as error:
+        msg = f"{field_name} must be numeric"
+        raise TypeError(msg) from error
+    if not isfinite(normalized_value):
+        msg = f"{field_name} must be finite"
+        raise ValueError(msg)
+    return normalized_value
+
+
 @dataclass(frozen=True, slots=True)
 class CSAProposalPolicy:
     """Boundary-level policy for history-aware CSA proposal adaptation.
@@ -60,10 +75,6 @@ class CSAProposalPolicy:
 
     def __post_init__(self) -> None:
         """Reject invalid proposal-adaptation boundary settings."""
-        if type(self.enabled) is not bool:
-            msg = "enabled must be a bool"
-            raise TypeError(msg)
-
         float_field_names = (
             "family_bias_strength",
             "leaf_bias_strength",
@@ -75,15 +86,14 @@ class CSAProposalPolicy:
             "numeric_covariance_ridge",
         )
         for field_name in float_field_names:
-            value = getattr(self, field_name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                msg = f"{field_name} must be numeric"
-                raise TypeError(msg)
-            normalized_value = float(value)
-            if not isfinite(normalized_value):
-                msg = f"{field_name} must be finite"
-                raise ValueError(msg)
-            object.__setattr__(self, field_name, normalized_value)
+            object.__setattr__(
+                self,
+                field_name,
+                _normalize_finite_number(
+                    getattr(self, field_name),
+                    field_name=field_name,
+                ),
+            )
 
         integer_field_names = (
             "numeric_covariance_min_observations",
