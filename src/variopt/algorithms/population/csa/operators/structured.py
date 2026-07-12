@@ -26,6 +26,7 @@ from .mutation import (
 from .mutation import (
     random_reset_mutation_on_paths as _random_reset_mutation_on_paths,
 )
+from .mutation import select_mutation_paths as _select_mutation_paths
 from .validation import (
     require_parent_count,
     require_structured_space,
@@ -57,6 +58,14 @@ class StructuredPathMutationOperator(Protocol):
     @property
     def max_selected_path_fraction(self) -> float:
         """Return the maximum fraction of active leaf paths that may be selected."""
+        ...
+
+    def select_validated_space_candidate_paths(
+        self,
+        candidate: SpaceCandidateValue,
+        random_state: np.random.RandomState,
+    ) -> tuple[LeafPath, ...]:
+        """Select paths for an already validated candidate using native semantics."""
         ...
 
     def apply_space_candidate_on_paths(
@@ -315,10 +324,16 @@ class RandomResetMutation(
     ) -> StructuredCandidateT:
         """Return a reset child for parents already validated by CSA state."""
         require_parent_count(parents, arity=self.arity)
-        return _random_reset_mutation(
+        selected_paths = self.select_validated_space_candidate_paths(
+            parents[0],
+            random_state,
+        )
+        if len(selected_paths) == 0:
+            return parents[0]
+        return _random_reset_mutation_on_paths(
             space=self.structured_space,
             candidate=parents[0],
-            max_exchange_fraction=self.max_exchange_fraction,
+            selected_paths=selected_paths,
             random_state=random_state,
             validate_candidate=False,
         )
@@ -368,6 +383,20 @@ class RandomResetMutation(
     def max_selected_path_fraction(self) -> float:
         """Return the maximum fraction of active leaf paths eligible for reset."""
         return self.max_exchange_fraction
+
+    def select_validated_space_candidate_paths(
+        self,
+        candidate: SpaceCandidateValue,
+        random_state: np.random.RandomState,
+    ) -> tuple[LeafPath, ...]:
+        """Select reset paths using the operator's native unweighted distribution."""
+        return _select_mutation_paths(
+            space=self.structured_candidate_space,
+            candidate=candidate,
+            max_exchange_fraction=self.max_exchange_fraction,
+            random_state=random_state,
+            validate_candidate=False,
+        )
 
     def apply_space_candidate_on_paths(
         self,
@@ -491,9 +520,16 @@ class BoundedMutation(
     ) -> StructuredCandidateT:
         """Return a bounded-mutation child for parents already validated by CSA state."""
         require_parent_count(parents, arity=self.arity)
-        return _bounded_mutation(
+        selected_paths = self.select_validated_space_candidate_paths(
+            parents[0],
+            random_state,
+        )
+        if len(selected_paths) == 0:
+            return parents[0]
+        return _bounded_mutation_on_paths(
             space=self.structured_space,
             candidate=parents[0],
+            selected_paths=selected_paths,
             max_perturbation_fraction=self.max_perturbation_fraction,
             random_state=random_state,
             validate_candidate=False,
@@ -545,6 +581,20 @@ class BoundedMutation(
     def max_selected_path_fraction(self) -> float:
         """Return the maximum fraction of active leaf paths eligible for perturbation."""
         return self.max_perturbation_fraction
+
+    def select_validated_space_candidate_paths(
+        self,
+        candidate: SpaceCandidateValue,
+        random_state: np.random.RandomState,
+    ) -> tuple[LeafPath, ...]:
+        """Select bounded-mutation paths using the native unweighted distribution."""
+        return _select_mutation_paths(
+            space=self.structured_candidate_space,
+            candidate=candidate,
+            max_exchange_fraction=self.max_perturbation_fraction,
+            random_state=random_state,
+            validate_candidate=False,
+        )
 
     @property
     def max_coordinate_fraction(self) -> float:

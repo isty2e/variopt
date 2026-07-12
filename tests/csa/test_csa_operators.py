@@ -456,6 +456,32 @@ class OperatorTests:
 
         assert fast_child == public_child
 
+    def test_random_reset_native_path_selection_preserves_child_and_rng(self) -> None:
+        space = ArraySpace(RealSpace(-1.0, 1.0), length=5)
+        operator = RandomResetMutation(space=space, max_exchange_fraction=0.8)
+        candidate = (0.0, 0.0, 0.0, 0.0, 0.0)
+        direct_random_state = rng(17)
+        planned_random_state = rng(17)
+
+        direct_child = operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=direct_random_state,
+        )
+        selected_paths = operator.select_validated_space_candidate_paths(
+            candidate,
+            planned_random_state,
+        )
+        planned_child = operator.apply_validated_space_candidate_on_paths(
+            candidate,
+            selected_paths,
+            planned_random_state,
+        )
+
+        assert planned_child == direct_child
+        assert repr(planned_random_state.get_state()) == repr(
+            direct_random_state.get_state()
+        )
+
     def test_random_reset_space_candidate_path_editing_validates_candidate(
         self,
     ) -> None:
@@ -496,6 +522,32 @@ class OperatorTests:
         )
 
         assert fast_child == public_child
+
+    def test_bounded_native_path_selection_preserves_child_and_rng(self) -> None:
+        space = ArraySpace(RealSpace(-2.0, 2.0), length=5)
+        operator = BoundedMutation(space=space, max_perturbation_fraction=0.8)
+        candidate = (1.5, -1.5, 0.5, -0.5, 0.0)
+        direct_random_state = rng(19)
+        planned_random_state = rng(19)
+
+        direct_child = operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=direct_random_state,
+        )
+        selected_paths = operator.select_validated_space_candidate_paths(
+            candidate,
+            planned_random_state,
+        )
+        planned_child = operator.apply_validated_space_candidate_on_paths(
+            candidate,
+            selected_paths,
+            planned_random_state,
+        )
+
+        assert planned_child == direct_child
+        assert repr(planned_random_state.get_state()) == repr(
+            direct_random_state.get_state()
+        )
 
     def test_bounded_space_candidate_path_editing_validates_candidate(self) -> None:
         space = ArraySpace(IntegerSpace(0, 9), length=2)
