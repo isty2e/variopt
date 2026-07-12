@@ -577,8 +577,6 @@ class CSAProposalState:
         )
         if self.policy.numeric_covariance_strength > 0.0:
             for displacement_credit in batch.numeric_displacement_credits:
-                if displacement_credit.credit == 0.0:
-                    continue
                 displacement = displacement_credit.displacement
                 current_stat = next_covariance_stats_by_paths.get(
                     displacement.leaf_paths

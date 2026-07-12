@@ -50,6 +50,7 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
 from variopt.algorithms.population.csa.generation.proposal.state import (
     CSAProposalState,
     NonAdaptiveProposalAttribution,
+    NumericSubspaceDisplacement,
     PlannedProposalAttribution,
     ProposalAttribution,
     ProposalFamilyStat,
@@ -59,6 +60,7 @@ from variopt.algorithms.population.csa.generation.proposal.state.credit import (
     ProposalFamilyCreditSummary,
     ProposalGenerationCreditBatch,
     ProposalLeafCreditSummary,
+    ProposalNumericDisplacementCredit,
 )
 from variopt.kernel import ProposalLocalSearchContext
 from variopt.operators import VariationOperator
@@ -492,6 +494,58 @@ class CSAProposalStateTests:
         with pytest.raises(ValueError, match="evidence_count must be positive"):
             _ = ProposalGenerationCreditBatch(evidence_count=0)
 
+    def test_generation_credit_batch_rejects_bool_evidence_count(self) -> None:
+        with pytest.raises(TypeError, match="evidence_count must be an int"):
+            _ = ProposalGenerationCreditBatch(evidence_count=True)
+
+    @pytest.mark.parametrize(
+        ("factory", "expected_error", "match"),
+        [
+            (
+                lambda: ProposalFamilyCreditSummary("", 1, 0.5),
+                ValueError,
+                "family_key must not be empty",
+            ),
+            (
+                lambda: ProposalFamilyCreditSummary("mutation:0", True, 0.5),
+                TypeError,
+                "observation_count must be an int",
+            ),
+            (
+                lambda: ProposalFamilyCreditSummary("mutation:0", 0, 0.0),
+                ValueError,
+                "observation_count must be positive",
+            ),
+            (
+                lambda: ProposalFamilyCreditSummary("mutation:0", 1, 1),
+                TypeError,
+                "total_credit must be a float",
+            ),
+            (
+                lambda: ProposalFamilyCreditSummary(
+                    "mutation:0",
+                    1,
+                    float("inf"),
+                ),
+                ValueError,
+                "total_credit must be finite",
+            ),
+            (
+                lambda: ProposalFamilyCreditSummary("mutation:0", 1, 1.1),
+                ValueError,
+                "total_credit must be bounded",
+            ),
+        ],
+    )
+    def test_family_credit_summary_rejects_malformed_values(
+        self,
+        factory: Callable[[], ProposalFamilyCreditSummary],
+        expected_error: type[Exception],
+        match: str,
+    ) -> None:
+        with pytest.raises(expected_error, match=match):
+            _ = factory()
+
     def test_generation_credit_batch_rejects_duplicate_summary_keys(self) -> None:
         summary = ProposalFamilyCreditSummary(
             family_key="mutation:0",
@@ -503,6 +557,117 @@ class CSAProposalStateTests:
             _ = ProposalGenerationCreditBatch(
                 evidence_count=2,
                 family_summaries=(summary, summary),
+            )
+
+    def test_generation_credit_batch_rejects_duplicate_mutation_leaf_paths(
+        self,
+    ) -> None:
+        summary = ProposalLeafCreditSummary(
+            path=("x",),
+            observation_count=1,
+            total_credit=0.5,
+        )
+
+        with pytest.raises(ValueError, match="distinct paths"):
+            _ = ProposalGenerationCreditBatch(
+                evidence_count=2,
+                mutation_leaf_summaries=(summary, summary),
+            )
+
+    def test_generation_credit_batch_rejects_duplicate_local_leaf_paths(
+        self,
+    ) -> None:
+        summary = ProposalLeafCreditSummary(
+            path=("x",),
+            observation_count=1,
+            total_credit=0.5,
+        )
+
+        with pytest.raises(ValueError, match="distinct paths"):
+            _ = ProposalGenerationCreditBatch(
+                evidence_count=2,
+                local_displacement_leaf_summaries=(summary, summary),
+            )
+
+    def test_generation_credit_batch_rejects_summary_observation_overflow(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="must not exceed evidence_count"):
+            _ = ProposalGenerationCreditBatch(
+                evidence_count=1,
+                family_summaries=(
+                    ProposalFamilyCreditSummary(
+                        family_key="mutation:0",
+                        observation_count=2,
+                        total_credit=1.0,
+                    ),
+                ),
+            )
+
+    def test_generation_credit_batch_rejects_family_observation_overflow(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="family observations"):
+            _ = ProposalGenerationCreditBatch(
+                evidence_count=1,
+                family_summaries=(
+                    ProposalFamilyCreditSummary("mutation:0", 1, 0.4),
+                    ProposalFamilyCreditSummary("mutation:1", 1, 0.6),
+                ),
+            )
+
+    def test_generation_credit_batch_rejects_leaf_credit_overflow(self) -> None:
+        with pytest.raises(ValueError, match="leaf association credit"):
+            _ = ProposalGenerationCreditBatch(
+                evidence_count=1,
+                mutation_leaf_summaries=(ProposalLeafCreditSummary(("x",), 1, 0.6),),
+                local_displacement_leaf_summaries=(
+                    ProposalLeafCreditSummary(("y",), 1, 0.6),
+                ),
+            )
+
+    def test_generation_credit_batch_rejects_displacement_count_overflow(
+        self,
+    ) -> None:
+        displacement_credit = ProposalNumericDisplacementCredit(
+            displacement=NumericSubspaceDisplacement(
+                leaf_paths=(("x",),),
+                displacement_coordinates=(1.0,),
+            ),
+            credit=0.5,
+        )
+
+        with pytest.raises(ValueError, match="numeric displacement count"):
+            _ = ProposalGenerationCreditBatch(
+                evidence_count=1,
+                numeric_displacement_credits=(
+                    displacement_credit,
+                    displacement_credit,
+                ),
+            )
+
+    @pytest.mark.parametrize("invalid_credit", [0.0, -0.1, 1.1, float("nan")])
+    def test_numeric_displacement_credit_requires_positive_bounded_credit(
+        self,
+        invalid_credit: float,
+    ) -> None:
+        with pytest.raises(ValueError, match="credit must lie within"):
+            _ = ProposalNumericDisplacementCredit(
+                displacement=NumericSubspaceDisplacement(
+                    leaf_paths=(("x",),),
+                    displacement_coordinates=(1.0,),
+                ),
+                credit=invalid_credit,
+            )
+
+    def test_numeric_displacement_credit_rejects_bool(self) -> None:
+        with pytest.raises(TypeError, match="credit must be a float"):
+            _ = ProposalNumericDisplacementCredit(
+                displacement=NumericSubspaceDisplacement(
+                    leaf_paths=(("x",),),
+                    displacement_coordinates=(1.0,),
+                ),
+                credit=True,
             )
 
     def test_generation_credit_summary_rejects_over_credit(self) -> None:
@@ -1947,6 +2112,16 @@ class CSAProposalStateTests:
     ) -> None:
         with pytest.raises(expected_error, match=match):
             _ = factory()
+
+    @pytest.mark.parametrize("credit_decay", [0.0, -0.1, 1.5])
+    def test_proposal_policy_rejects_credit_decay_outside_unit_interval(
+        self,
+        credit_decay: float,
+    ) -> None:
+        with pytest.raises(
+            ValueError, match=r"credit_decay must lie in \(0\.0, 1\.0\]"
+        ):
+            _ = CSAProposalPolicy(credit_decay=credit_decay)
 
     def test_proposal_policy_rejects_negative_numeric_covariance_strength(self) -> None:
         with pytest.raises(ValueError, match="non-negative"):

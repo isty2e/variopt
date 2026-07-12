@@ -69,6 +69,29 @@ class NumericSubspaceDescriptorTests:
                 source_coordinates=(0.0, 1.0),
             )
 
+    def test_numeric_subspace_attribution_rejects_non_finite_coordinates(
+        self,
+    ) -> None:
+        with np.testing.assert_raises_regex(ValueError, "coordinates must be finite"):
+            _ = NumericSubspaceAttribution(
+                leaf_paths=((0,),),
+                source_coordinates=(float("inf"),),
+            )
+
+    def test_numeric_subspace_attribution_rejects_bool_coordinates(self) -> None:
+        with np.testing.assert_raises_regex(TypeError, "coordinates must be numeric"):
+            _ = NumericSubspaceAttribution(
+                leaf_paths=((0,),),
+                source_coordinates=(True,),
+            )
+
+    def test_numeric_subspace_displacement_rejects_duplicate_paths(self) -> None:
+        with np.testing.assert_raises_regex(ValueError, "distinct leaf paths"):
+            _ = NumericSubspaceDisplacement(
+                leaf_paths=((0,), (0,)),
+                displacement_coordinates=(0.0, 1.0),
+            )
+
     def test_numeric_subspace_displacement_rejects_non_finite_coordinates(
         self,
     ) -> None:
@@ -78,9 +101,180 @@ class NumericSubspaceDescriptorTests:
                 displacement_coordinates=(float("nan"),),
             )
 
+    def test_numeric_subspace_displacement_rejects_bool_coordinates(self) -> None:
+        with np.testing.assert_raises_regex(TypeError, "coordinates must be numeric"):
+            _ = NumericSubspaceDisplacement(
+                leaf_paths=((0,),),
+                displacement_coordinates=(False,),
+            )
+
+    def test_numeric_subspace_displacement_rejects_outer_product_overflow(
+        self,
+    ) -> None:
+        with np.testing.assert_raises_regex(ValueError, "finite outer products"):
+            _ = NumericSubspaceDisplacement(
+                leaf_paths=((0,),),
+                displacement_coordinates=(1e155,),
+            )
+
 
 class CSAProposalCovarianceTests:
     """Regression tests for CSA-private covariance proposal adaptation."""
+
+    def test_covariance_stat_rejects_noncanonical_integer_fields(self) -> None:
+        with np.testing.assert_raises_regex(TypeError, "observation_count"):
+            _ = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                observation_count=True,
+            )
+        with np.testing.assert_raises_regex(TypeError, "last_update_index"):
+            _ = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                last_update_index=False,
+            )
+
+    def test_covariance_stat_rejects_weight_over_observation_count(self) -> None:
+        with np.testing.assert_raises_regex(ValueError, "bounded by observation_count"):
+            _ = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                observation_count=1,
+                discounted_weight=1.1,
+            )
+
+    def test_covariance_stat_rejects_observations_without_weight(self) -> None:
+        with np.testing.assert_raises_regex(ValueError, "must have positive"):
+            _ = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                observation_count=1,
+            )
+
+    def test_covariance_stat_rejects_weight_without_complete_moments(self) -> None:
+        with np.testing.assert_raises_regex(ValueError, "complete moment"):
+            _ = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                observation_count=1,
+                discounted_weight=1.0,
+            )
+
+    def test_covariance_stat_rejects_zero_weight_nonzero_moments(self) -> None:
+        with np.testing.assert_raises_regex(ValueError, "zero moment"):
+            _ = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                discounted_displacement_sum=(1.0,),
+                discounted_outer_product_sum=((1.0,),),
+            )
+
+    def test_covariance_stat_zero_weight_has_zero_moments(self) -> None:
+        covariance_stat = ProposalNumericSubspaceCovarianceStat(
+            leaf_paths=((0,), (1,)),
+        )
+
+        assert covariance_stat.effective_mean(
+            current_update_index=3,
+            credit_decay=0.5,
+        ) == (0.0, 0.0)
+        assert covariance_stat.effective_covariance(
+            current_update_index=3,
+            credit_decay=0.5,
+        ) == ((0.0, 0.0), (0.0, 0.0))
+
+    def test_covariance_lazy_decay_precedes_later_observation(self) -> None:
+        covariance_stat = ProposalNumericSubspaceCovarianceStat(
+            leaf_paths=((0,),),
+            discounted_displacement_sum=(0.0,),
+            discounted_outer_product_sum=((0.0,),),
+        ).record_successful_displacement(
+            NumericSubspaceDisplacement(
+                leaf_paths=((0,),),
+                displacement_coordinates=(1.0,),
+            ),
+            credit=1.0,
+            current_update_index=1,
+            credit_decay=0.5,
+        )
+
+        covariance_stat = covariance_stat.record_successful_displacement(
+            NumericSubspaceDisplacement(
+                leaf_paths=((0,),),
+                displacement_coordinates=(3.0,),
+            ),
+            credit=1.0,
+            current_update_index=3,
+            credit_decay=0.5,
+        )
+
+        assert approx_equal(covariance_stat.discounted_weight, 1.25)
+        assert approx_equal(
+            covariance_stat.effective_mean(
+                current_update_index=3,
+                credit_decay=0.5,
+            )[0],
+            2.6,
+        )
+        assert approx_equal(
+            covariance_stat.effective_covariance(
+                current_update_index=3,
+                credit_decay=0.5,
+            )[0][0],
+            0.64,
+        )
+
+    def test_covariance_is_invariant_to_uniform_credit_scale(self) -> None:
+        covariance_stats: list[ProposalNumericSubspaceCovarianceStat] = []
+        for credit in (1.0, 0.1):
+            covariance_stat = ProposalNumericSubspaceCovarianceStat(
+                leaf_paths=((0,),),
+                discounted_displacement_sum=(0.0,),
+                discounted_outer_product_sum=((0.0,),),
+            )
+            for update_index, coordinate in enumerate(
+                (1.0, 2.0, 3.0, 4.0),
+                start=1,
+            ):
+                covariance_stat = covariance_stat.record_successful_displacement(
+                    NumericSubspaceDisplacement(
+                        leaf_paths=((0,),),
+                        displacement_coordinates=(coordinate,),
+                    ),
+                    credit=credit,
+                    current_update_index=update_index,
+                    credit_decay=1.0,
+                )
+            covariance_stats.append(covariance_stat)
+
+        covariances = tuple(
+            covariance_stat.effective_covariance(
+                current_update_index=4,
+                credit_decay=1.0,
+            )
+            for covariance_stat in covariance_stats
+        )
+        assert approx_equal(covariances[0][0][0], covariances[1][0][0])
+
+    def test_covariance_rejects_outer_product_accumulation_overflow(self) -> None:
+        safe_coordinate = np.sqrt(np.finfo(np.float64).max)
+        displacement = NumericSubspaceDisplacement(
+            leaf_paths=((0,),),
+            displacement_coordinates=(safe_coordinate,),
+        )
+        covariance_stat = ProposalNumericSubspaceCovarianceStat(
+            leaf_paths=((0,),),
+            discounted_displacement_sum=(0.0,),
+            discounted_outer_product_sum=((0.0,),),
+        ).record_successful_displacement(
+            displacement,
+            credit=1.0,
+            current_update_index=1,
+            credit_decay=1.0,
+        )
+
+        with np.testing.assert_raises_regex(ValueError, "moment accumulation"):
+            _ = covariance_stat.record_successful_displacement(
+                displacement,
+                credit=1.0,
+                current_update_index=2,
+                credit_decay=1.0,
+            )
 
     def test_update_proposal_state_records_numeric_covariance_displacement(
         self,

@@ -1,7 +1,8 @@
 """Immutable attribution nouns for CSA proposal adaptation."""
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, sqrt
+from sys import float_info
 from typing import Literal, TypeAlias
 
 from typing_extensions import Self
@@ -26,6 +27,8 @@ NON_ADAPTIVE_PROPOSAL_REASONS: tuple[str, ...] = (
     "initial",
 )
 
+MAX_SAFE_OUTER_PRODUCT_COORDINATE = sqrt(float_info.max)
+
 
 @dataclass(frozen=True, slots=True)
 class NumericSubspaceAttribution:
@@ -45,9 +48,16 @@ class NumericSubspaceAttribution:
     def __post_init__(self) -> None:
         """Normalize and validate numeric-subspace attribution."""
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
-        normalized_source_coordinates = tuple(
-            float(coordinate) for coordinate in self.source_coordinates
-        )
+        if any(isinstance(coordinate, bool) for coordinate in self.source_coordinates):
+            msg = "numeric subspace source coordinates must be numeric"
+            raise TypeError(msg)
+        try:
+            normalized_source_coordinates = tuple(
+                float(coordinate) for coordinate in self.source_coordinates
+            )
+        except (TypeError, ValueError) as error:
+            msg = "numeric subspace source coordinates must be numeric"
+            raise TypeError(msg) from error
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(self, "source_coordinates", normalized_source_coordinates)
         if len(normalized_leaf_paths) == 0:
@@ -82,9 +92,18 @@ class NumericSubspaceDisplacement:
     def __post_init__(self) -> None:
         """Normalize and validate numeric-subspace displacement."""
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
-        normalized_displacement_coordinates = tuple(
-            float(coordinate) for coordinate in self.displacement_coordinates
-        )
+        if any(
+            isinstance(coordinate, bool) for coordinate in self.displacement_coordinates
+        ):
+            msg = "numeric subspace displacement coordinates must be numeric"
+            raise TypeError(msg)
+        try:
+            normalized_displacement_coordinates = tuple(
+                float(coordinate) for coordinate in self.displacement_coordinates
+            )
+        except (TypeError, ValueError) as error:
+            msg = "numeric subspace displacement coordinates must be numeric"
+            raise TypeError(msg) from error
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(
             self,
@@ -102,6 +121,15 @@ class NumericSubspaceDisplacement:
             raise ValueError(msg)
         if any(not isfinite(value) for value in normalized_displacement_coordinates):
             msg = "numeric subspace displacement coordinates must be finite"
+            raise ValueError(msg)
+        if any(
+            abs(value) > MAX_SAFE_OUTER_PRODUCT_COORDINATE
+            for value in normalized_displacement_coordinates
+        ):
+            msg = (
+                "numeric subspace displacement coordinates must support "
+                "finite outer products"
+            )
             raise ValueError(msg)
 
 

@@ -88,27 +88,31 @@ class ProposalNumericSubspaceCovarianceStat:
         normalized_leaf_paths = tuple(tuple(path) for path in self.leaf_paths)
         object.__setattr__(self, "leaf_paths", normalized_leaf_paths)
         object.__setattr__(
-            self,
-            "discounted_displacement_sum",
-            tuple(float(value) for value in self.discounted_displacement_sum),
+            self, "discounted_displacement_sum", tuple(self.discounted_displacement_sum)
         )
         object.__setattr__(
             self,
             "discounted_outer_product_sum",
-            tuple(
-                tuple(float(value) for value in row)
-                for row in self.discounted_outer_product_sum
-            ),
+            tuple(tuple(row) for row in self.discounted_outer_product_sum),
         )
+        if type(self.observation_count) is not int:
+            msg = "observation_count must be an int"
+            raise TypeError(msg)
         if self.observation_count < 0:
             msg = "observation_count must be non-negative"
             raise ValueError(msg)
+        if type(self.discounted_weight) is not float:
+            msg = "discounted_weight must be a float"
+            raise TypeError(msg)
         if not isfinite(self.discounted_weight):
             msg = "discounted_weight must be finite"
             raise ValueError(msg)
-        if self.discounted_weight < 0.0:
-            msg = "discounted_weight must be non-negative"
+        if not 0.0 <= self.discounted_weight <= self.observation_count:
+            msg = "discounted_weight must be bounded by observation_count"
             raise ValueError(msg)
+        if type(self.last_update_index) is not int:
+            msg = "last_update_index must be an int"
+            raise TypeError(msg)
         if self.last_update_index < 0:
             msg = "last_update_index must be non-negative"
             raise ValueError(msg)
@@ -118,6 +122,9 @@ class ProposalNumericSubspaceCovarianceStat:
         if len(self.discounted_displacement_sum) not in {0, len(normalized_leaf_paths)}:
             msg = "discounted_displacement_sum dimensions must match leaf_paths"
             raise ValueError(msg)
+        if any(type(value) is not float for value in self.discounted_displacement_sum):
+            msg = "discounted_displacement_sum values must be floats"
+            raise TypeError(msg)
         if any(not isfinite(value) for value in self.discounted_displacement_sum):
             msg = "discounted_displacement_sum values must be finite"
             raise ValueError(msg)
@@ -131,9 +138,31 @@ class ProposalNumericSubspaceCovarianceStat:
             if len(row) != len(normalized_leaf_paths):
                 msg = "discounted_outer_product_sum must be square"
                 raise ValueError(msg)
+            if any(type(value) is not float for value in row):
+                msg = "discounted_outer_product_sum values must be floats"
+                raise TypeError(msg)
             if any(not isfinite(value) for value in row):
                 msg = "discounted_outer_product_sum values must be finite"
                 raise ValueError(msg)
+        if self.observation_count > 0 and self.discounted_weight == 0.0:
+            msg = "observed covariance stats must have positive discounted_weight"
+            raise ValueError(msg)
+        if self.discounted_weight > 0.0 and (
+            len(self.discounted_displacement_sum) != len(normalized_leaf_paths)
+            or len(self.discounted_outer_product_sum) != len(normalized_leaf_paths)
+        ):
+            msg = "positive covariance weight requires complete moment accumulators"
+            raise ValueError(msg)
+        if self.discounted_weight == 0.0 and (
+            any(value != 0.0 for value in self.discounted_displacement_sum)
+            or any(
+                value != 0.0
+                for row in self.discounted_outer_product_sum
+                for value in row
+            )
+        ):
+            msg = "zero covariance weight requires zero moment accumulators"
+            raise ValueError(msg)
 
     @property
     def dimension(self) -> int:
@@ -479,6 +508,14 @@ class ProposalNumericSubspaceCovarianceStat:
             )
             for row_index in range(self.dimension)
         )
+        if any(not isfinite(value) for value in next_displacement_sum) or any(
+            not isfinite(value) for row in next_outer_product_sum for value in row
+        ):
+            msg = (
+                "numeric covariance moment accumulation must remain finite; "
+                "normalize displacement coordinates"
+            )
+            raise ValueError(msg)
         return replace(
             self,
             observation_count=self.observation_count + 1,

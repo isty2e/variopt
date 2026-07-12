@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from math import isfinite
 from typing import Generic, Literal
 
 from ......artifacts import Observation
@@ -26,7 +27,14 @@ def _normalize_credit(value: int | float) -> float:
     if isinstance(value, bool):
         msg = "credit must be numeric"
         raise TypeError(msg)
-    normalized_value = float(value)
+    try:
+        normalized_value = float(value)
+    except (TypeError, ValueError) as error:
+        msg = "credit must be numeric"
+        raise TypeError(msg) from error
+    if not isfinite(normalized_value):
+        msg = "credit must be finite"
+        raise ValueError(msg)
     if not 0.0 <= normalized_value <= 1.0:
         msg = "credit must lie within [0, 1]"
         raise ValueError(msg)

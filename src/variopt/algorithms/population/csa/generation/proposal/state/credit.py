@@ -105,8 +105,8 @@ class ProposalNumericDisplacementCredit:
         if type(self.credit) is not float:
             msg = "credit must be a float"
             raise TypeError(msg)
-        if not 0.0 <= self.credit <= 1.0:
-            msg = "credit must lie within [0, 1]"
+        if not 0.0 < self.credit <= 1.0:
+            msg = "credit must lie within (0, 1]"
             raise ValueError(msg)
 
 
@@ -185,10 +185,10 @@ class ProposalGenerationCreditBatch:
             msg = "credit summary observations must not exceed evidence_count"
             raise ValueError(msg)
         if (
-            fsum(summary.total_credit for summary in self.family_summaries)
+            sum(summary.observation_count for summary in self.family_summaries)
             > self.evidence_count
         ):
-            msg = "family credit must be bounded by evidence_count"
+            msg = "family observations must be bounded by evidence_count"
             raise ValueError(msg)
         if (
             fsum(

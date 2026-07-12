@@ -299,7 +299,10 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "unsupported CSA checkpoint format"
             raise ValueError(msg)
         if version != _CSA_ENGINE_STATE_VERSION:
-            msg = "unsupported CSA checkpoint version"
+            msg = (
+                "unsupported CSA checkpoint version: "
+                f"expected {_CSA_ENGINE_STATE_VERSION}, received {version}"
+            )
             raise ValueError(msg)
         if "trace_state" in data:
             msg = (

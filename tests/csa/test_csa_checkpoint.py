@@ -857,7 +857,10 @@ class CSAEngineCheckpointTests:
         version_snapshot = state.to_dict(candidate_to_dict=_int_candidate_to_dict)
         version_snapshot["version"] = 3
         version_snapshot["banking_state"] = []
-        with pytest.raises(ValueError, match="unsupported CSA checkpoint version"):
+        with pytest.raises(
+            ValueError,
+            match=r"unsupported CSA checkpoint version: expected 2, received 3",
+        ):
             _ = CSAEngineState[int].from_dict(
                 version_snapshot,
                 candidate_from_dict=_int_candidate_from_dict,
