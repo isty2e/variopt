@@ -82,7 +82,7 @@ caller, from `derive_csa_defaults(...)`, or from
 | Slot | Type | What it controls |
 | --- | --- | --- |
 | `perturbation_schedule` | [`CSAPerturbationSchedule`][variopt.algorithms.population.csa.CSAPerturbationSchedule] | Regular, initial, and mutation family operators used to generate children. |
-| `proposal_policy` | [`CSAProposalPolicy`][variopt.algorithms.population.csa.CSAProposalPolicy] | Final-bank-survival and logical-cost-aware proposal weighting (family, leaf, covariance). Disabled by default. |
+| `proposal_policy` | [`CSAProposalPolicy`][variopt.algorithms.population.csa.CSAProposalPolicy] | Experimental final-bank-survival and logical-cost-aware proposal weighting (family, leaf, covariance). Disabled by default and not enabled by a named preset. |
 
 ### Banking slots
 

@@ -86,6 +86,18 @@ counts exactly and does not consume family-selection RNG. Proposal adaptation
 remains disabled by default; fixed scheduling is therefore both the default and
 the explicit baseline for comparisons.
 
+That cold-start guarantee is limited to mutation-family counts and
+family-selection RNG. Enabling adaptation routes structured mutations through
+the explicit leaf planner even before leaf evidence exists. Its initial weights
+are uniform, but this path is not candidate- or RNG-identical to the disabled
+operator-native path.
+
+Treat proposal adaptation as experimental rather than as a generally stronger
+schedule. A preregistered equal-budget development panel did not justify a
+default or named-preset promotion. Adaptation preserved final-bank diversity in
+more pairs, while fixed scheduling produced better best-observed objective values
+in more pairs. Validate the tradeoff on the target problem before enabling it.
+
 For the broader execution boundary, see
 [Candidate Refinement](candidate-refinement.md).
 

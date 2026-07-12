@@ -122,6 +122,14 @@ format. Stability guarantees for the public surface are documented in the
   `Problem.direction` remains a concrete `OptimizationDirection` and defaults
   unspecified scalar directions to `OptimizationDirection.MINIMIZE`.
 
+### Changed
+
+- Outcome-aligned CSA proposal adaptation remains an explicit opt-in after a
+  preregistered equal-budget development panel did not satisfy the promotion
+  gate for either a named preset or the default. It preserved final-bank
+  diversity in more pairs, while fixed scheduling produced better best-observed
+  objective values in more pairs. Fixed scheduling remains the supported default.
+
 ### Added
 
 - Added pre-commit quality gates for Ruff linting, Ruff formatting, and
