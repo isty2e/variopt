@@ -95,10 +95,11 @@ can actually bias leaf selection. Local-displacement evidence may influence the
 weights after that boundary, but does not establish readiness by itself.
 
 Treat proposal adaptation as experimental rather than as a generally stronger
-schedule. A preregistered equal-budget development panel did not justify a
-default or named-preset promotion. Adaptation preserved final-bank diversity in
-more pairs, while fixed scheduling produced better best-observed objective values
-in more pairs. Validate the tradeoff on the target problem before enabling it.
+schedule. A parity-corrected rerun of the preregistered equal-budget development
+panel did not justify a default or named-preset promotion. Adaptation preserved
+final-bank diversity in more pairs, while fixed scheduling produced better
+best-observed objective values in more pairs. Validate the tradeoff on the target
+problem before enabling it.
 
 For the broader execution boundary, see
 [Candidate Refinement](candidate-refinement.md).
