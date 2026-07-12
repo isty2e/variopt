@@ -25,9 +25,11 @@ from ..generation.proposal.covariance import (
 from ..generation.proposal.logic import (
     mutation_family_key,
     mutation_family_weights,
-    plan_mutated_leaf_paths,
+    mutation_leaf_evidence_is_ready,
+    mutation_leaf_weights,
     planned_mutation_attribution,
     sample_mutation_family_indices,
+    select_weighted_mutation_leaf_paths,
 )
 from ..generation.proposal.state.attribution import (
     AdaptiveProposalGeneratorKind,
@@ -134,17 +136,35 @@ def emit_structured_mutation_candidate(
             ),
         )
 
-    exchange_count = sample_exchange_count(
-        leaf_count=len(editable_paths),
-        max_exchange_fraction=operator.max_selected_path_fraction,
-        random_state=random_state,
-    )
-    selected_paths = plan_mutated_leaf_paths(
+    leaf_weights = None
+    if mutation_leaf_evidence_is_ready(
         state=proposal_state,
         leaf_paths=editable_paths,
-        exchange_count=exchange_count,
-        random_state=random_state,
-    )
+    ):
+        ready_leaf_weights = mutation_leaf_weights(
+            state=proposal_state,
+            leaf_paths=editable_paths,
+        )
+        if any(weight != ready_leaf_weights[0] for weight in ready_leaf_weights[1:]):
+            leaf_weights = ready_leaf_weights
+
+    if leaf_weights is None:
+        selected_paths = operator.select_mutation_leaf_paths(
+            editable_paths,
+            random_state,
+        )
+    else:
+        exchange_count = sample_exchange_count(
+            leaf_count=len(editable_paths),
+            max_exchange_fraction=operator.max_selected_path_fraction,
+            random_state=random_state,
+        )
+        selected_paths = select_weighted_mutation_leaf_paths(
+            leaf_paths=editable_paths,
+            weights=leaf_weights,
+            exchange_count=exchange_count,
+            random_state=random_state,
+        )
 
     numeric_subspace_attribution = None
     covariance_candidate = None

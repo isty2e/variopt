@@ -26,7 +26,7 @@ from .mutation import (
 from .mutation import (
     random_reset_mutation_on_paths as _random_reset_mutation_on_paths,
 )
-from .mutation import select_mutation_paths as _select_mutation_paths
+from .mutation import select_mutation_leaf_paths as _select_mutation_leaf_paths
 from .validation import (
     require_parent_count,
     require_structured_space,
@@ -43,9 +43,10 @@ class StructuredPathMutationOperator(Protocol):
     Notes
     -----
     CSA ask-side planning only needs the operator's structured candidate-space
-    view, its path-selection fraction cap, and the ability to apply one
-    mutation on an explicit set of leaf paths. It does not need the concrete
-    operator class or the exact structured candidate subtype.
+    view, its native selector over validated editable paths, its path-selection
+    fraction cap, and the ability to apply one mutation on an explicit set of
+    leaf paths. It does not need the concrete operator class or the exact
+    structured candidate subtype.
     """
 
     @property
@@ -60,12 +61,12 @@ class StructuredPathMutationOperator(Protocol):
         """Return the maximum fraction of active leaf paths that may be selected."""
         ...
 
-    def select_validated_space_candidate_paths(
+    def select_mutation_leaf_paths(
         self,
-        candidate: SpaceCandidateValue,
+        editable_paths: Sequence[LeafPath],
         random_state: np.random.RandomState,
     ) -> tuple[LeafPath, ...]:
-        """Select paths for an already validated candidate using native semantics."""
+        """Select from validated editable paths using native operator semantics."""
         ...
 
     def apply_space_candidate_on_paths(
@@ -324,8 +325,11 @@ class RandomResetMutation(
     ) -> StructuredCandidateT:
         """Return a reset child for parents already validated by CSA state."""
         require_parent_count(parents, arity=self.arity)
-        selected_paths = self.select_validated_space_candidate_paths(
-            parents[0],
+        editable_paths = (
+            self.structured_space.active_leaf_paths_for_validated_candidate(parents[0])
+        )
+        selected_paths = self.select_mutation_leaf_paths(
+            editable_paths,
             random_state,
         )
         if len(selected_paths) == 0:
@@ -384,18 +388,16 @@ class RandomResetMutation(
         """Return the maximum fraction of active leaf paths eligible for reset."""
         return self.max_exchange_fraction
 
-    def select_validated_space_candidate_paths(
+    def select_mutation_leaf_paths(
         self,
-        candidate: SpaceCandidateValue,
+        editable_paths: Sequence[LeafPath],
         random_state: np.random.RandomState,
     ) -> tuple[LeafPath, ...]:
         """Select reset paths using the operator's native unweighted distribution."""
-        return _select_mutation_paths(
-            space=self.structured_candidate_space,
-            candidate=candidate,
+        return _select_mutation_leaf_paths(
+            editable_paths=editable_paths,
             max_exchange_fraction=self.max_exchange_fraction,
             random_state=random_state,
-            validate_candidate=False,
         )
 
     def apply_space_candidate_on_paths(
@@ -520,8 +522,11 @@ class BoundedMutation(
     ) -> StructuredCandidateT:
         """Return a bounded-mutation child for parents already validated by CSA state."""
         require_parent_count(parents, arity=self.arity)
-        selected_paths = self.select_validated_space_candidate_paths(
-            parents[0],
+        editable_paths = (
+            self.structured_space.active_leaf_paths_for_validated_candidate(parents[0])
+        )
+        selected_paths = self.select_mutation_leaf_paths(
+            editable_paths,
             random_state,
         )
         if len(selected_paths) == 0:
@@ -582,18 +587,16 @@ class BoundedMutation(
         """Return the maximum fraction of active leaf paths eligible for perturbation."""
         return self.max_perturbation_fraction
 
-    def select_validated_space_candidate_paths(
+    def select_mutation_leaf_paths(
         self,
-        candidate: SpaceCandidateValue,
+        editable_paths: Sequence[LeafPath],
         random_state: np.random.RandomState,
     ) -> tuple[LeafPath, ...]:
         """Select bounded-mutation paths using the native unweighted distribution."""
-        return _select_mutation_paths(
-            space=self.structured_candidate_space,
-            candidate=candidate,
+        return _select_mutation_leaf_paths(
+            editable_paths=editable_paths,
             max_exchange_fraction=self.max_perturbation_fraction,
             random_state=random_state,
-            validate_candidate=False,
         )
 
     @property

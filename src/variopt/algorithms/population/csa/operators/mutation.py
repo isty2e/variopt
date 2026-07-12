@@ -19,37 +19,28 @@ BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
 
 
-def select_mutation_paths(
+def select_mutation_leaf_paths(
     *,
-    space: StructuredSearchSpace[BoundaryT, CandidateT],
-    candidate: CandidateT,
+    editable_paths: Sequence[LeafPath],
     max_exchange_fraction: float,
     random_state: np.random.RandomState,
-    validate_candidate: bool = True,
 ) -> tuple[LeafPath, ...]:
     """Select editable leaf paths with the built-in mutation distribution.
 
     Parameters
     ----------
-    space : StructuredSearchSpace[BoundaryT, CandidateT]
-        Structured search space that defines editable leaves.
-    candidate : CandidateT
-        Candidate whose active topology defines selectable paths.
+    editable_paths : Sequence[LeafPath]
+        Validated active leaf paths that define the selection domain.
     max_exchange_fraction : float
         Maximum fraction of active leaves that may be selected.
     random_state : np.random.RandomState
         Random state used for exchange-count and path sampling.
-    validate_candidate : bool, default=True
-        Whether to validate ``candidate`` before using validated-space accessors.
 
     Returns
     -------
     tuple[LeafPath, ...]
         Selected paths, or an empty tuple when no leaves are currently active.
     """
-    if validate_candidate:
-        space.validate(candidate)
-    editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
     if len(editable_paths) == 0:
         return ()
 
@@ -96,12 +87,13 @@ def random_reset_mutation(
         Mutated child with selected leaves redrawn from their declared spaces.
         Returns ``candidate`` unchanged when no leaves are currently active.
     """
-    selected_paths = select_mutation_paths(
-        space=space,
-        candidate=candidate,
+    if validate_candidate:
+        space.validate(candidate)
+    editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
+    selected_paths = select_mutation_leaf_paths(
+        editable_paths=editable_paths,
         max_exchange_fraction=max_exchange_fraction,
         random_state=random_state,
-        validate_candidate=validate_candidate,
     )
     if len(selected_paths) == 0:
         return candidate
@@ -195,12 +187,13 @@ def bounded_mutation(
         Mutated child with selected leaves perturbed relative to the parent.
         Returns ``candidate`` unchanged when no leaves are currently active.
     """
-    selected_paths = select_mutation_paths(
-        space=space,
-        candidate=candidate,
+    if validate_candidate:
+        space.validate(candidate)
+    editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
+    selected_paths = select_mutation_leaf_paths(
+        editable_paths=editable_paths,
         max_exchange_fraction=max_perturbation_fraction,
         random_state=random_state,
-        validate_candidate=validate_candidate,
     )
     if len(selected_paths) == 0:
         return candidate
