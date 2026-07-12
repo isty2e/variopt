@@ -10,6 +10,19 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- CSA proposal adaptation now records final bank-survival credit per logical
+  evaluation cost instead of raw objective deltas. `CSAProposalPolicy.score_decay`
+  is renamed to `credit_decay`, and proposal-state checkpoint statistics now
+  store `discounted_credit` together with `discounted_observation_weight` so
+  allocation can use a decayed credit rate rather than exposure-dependent credit
+  totals. No compatibility alias or old checkpoint migration is provided because
+  retaining the raw-score path would preserve scale-dependent policy behavior;
+  construct new checkpoints under the revised policy and replace custom
+  `score_decay=` arguments with `credit_decay=`. Proposal-family trace artifacts
+  likewise expose `effective_credit_rate` instead of `effective_score_credit`.
+  Proposal update indices and leaf failure streaks now advance per completed
+  generation rather than per outcome, and the CSA engine checkpoint version is
+  `2`.
 - `CSABankUpdatePolicy.minimum_significant_score_gap` has been replaced by the
   dimensionless `minimum_significant_score_gap_ratio`. Significant bank updates
   are now measured relative to the larger previous/next bank score span, so

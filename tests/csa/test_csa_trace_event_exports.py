@@ -29,7 +29,7 @@ class CSATraceEventExportTests:
         family_trace = CSAProposalFamilyTrace(
             family_key="mutation:0",
             observation_count=1,
-            effective_score_credit=0.5,
+            effective_credit_rate=0.5,
             mutation_weight=1.0,
         )
         child_trace = CSAChildEmissionTrace(

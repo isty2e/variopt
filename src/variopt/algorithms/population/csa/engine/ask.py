@@ -95,7 +95,6 @@ def emit_structured_mutation_candidate(
     operator: StructuredPathMutationOperator,
     proposal_state: CSAProposalState,
     seed_candidate: SpaceCandidateValue,
-    seed_score: float,
     mutation_family_index: int,
     random_state: np.random.RandomState,
 ) -> GeneratedCandidate[SpaceCandidateValue]:
@@ -110,8 +109,6 @@ def emit_structured_mutation_candidate(
         guidance.
     seed_candidate : SpaceCandidateValue
         Canonical structured seed candidate taken from the active bank.
-    seed_score : float
-        Scalar score associated with ``seed_candidate``.
     mutation_family_index : int
         Mutation-family index used for attribution keys.
     random_state : np.random.RandomState
@@ -131,7 +128,6 @@ def emit_structured_mutation_candidate(
         return GeneratedCandidate(
             candidate=seed_candidate,
             planned_attribution=planned_mutation_attribution(
-                source_score=seed_score,
                 proposal_family_key=mutation_family_key(mutation_family_index),
                 mutated_leaf_paths=(),
                 generator_kind="passthrough",
@@ -192,7 +188,6 @@ def emit_structured_mutation_candidate(
     return GeneratedCandidate(
         candidate=candidate,
         planned_attribution=planned_mutation_attribution(
-            source_score=seed_score,
             proposal_family_key=mutation_family_key(mutation_family_index),
             mutated_leaf_paths=selected_paths,
             numeric_subspace_attribution=numeric_subspace_attribution,
@@ -324,12 +319,12 @@ def materialize_generation(
                     if family_key not in family_stats_by_key
                     else family_stats_by_key[family_key].observation_count
                 ),
-                effective_score_credit=(
+                effective_credit_rate=(
                     0.0
                     if family_key not in family_stats_by_key
-                    else family_stats_by_key[family_key].effective_score_credit(
+                    else family_stats_by_key[family_key].effective_credit_rate(
                         current_update_index=engine_state.proposal_state.update_index,
-                        score_decay=engine_state.proposal_state.policy.score_decay,
+                        credit_decay=engine_state.proposal_state.policy.credit_decay,
                     )
                 ),
                 mutation_weight=mutation_weights_by_key.get(family_key),
@@ -480,7 +475,6 @@ def materialize_generation(
                     )
 
         seed_candidate = bank.entries[seed_index].candidate
-        seed_score = bank.entries[seed_index].value
         mutation_family = resolved_profile.perturbation_schedule.mutation_family
         mutation_family_indices = sample_mutation_family_indices(
             state=engine_state.proposal_state,
@@ -502,7 +496,6 @@ def materialize_generation(
                     operator=mutation_operator,
                     proposal_state=engine_state.proposal_state,
                     seed_candidate=seed_candidate_value,
-                    seed_score=seed_score,
                     mutation_family_index=mutation_family_index,
                     random_state=random_state,
                 )
@@ -524,7 +517,6 @@ def materialize_generation(
                         else "mutation"
                     )
                     planned_attribution = planned_mutation_attribution(
-                        source_score=seed_score,
                         proposal_family_key=mutation_family_key(
                             mutation_family_index,
                         ),

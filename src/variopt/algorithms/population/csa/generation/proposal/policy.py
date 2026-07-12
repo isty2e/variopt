@@ -1,6 +1,7 @@
 """Boundary policy for CSA proposal adaptation."""
 
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,7 @@ class CSAProposalPolicy:
         Strength of leaf-level weighting.
     local_displacement_leaf_bias_strength : float, default=0.0
         Strength of local-displacement leaf weighting.
-    score_decay : float, default=0.95
+    credit_decay : float, default=0.95
         Exponential decay applied to adaptive proposal credit.
     minimum_family_weight : float, default=1e-3
         Minimum family weight after adaptation.
@@ -46,7 +47,7 @@ class CSAProposalPolicy:
     family_bias_strength: float = 1.0
     leaf_bias_strength: float = 1.0
     local_displacement_leaf_bias_strength: float = 0.0
-    score_decay: float = 0.95
+    credit_decay: float = 0.95
     minimum_family_weight: float = 1e-3
     minimum_leaf_weight: float = 1e-3
     numeric_covariance_strength: float = 0.0
@@ -59,6 +60,43 @@ class CSAProposalPolicy:
 
     def __post_init__(self) -> None:
         """Reject invalid proposal-adaptation boundary settings."""
+        if type(self.enabled) is not bool:
+            msg = "enabled must be a bool"
+            raise TypeError(msg)
+
+        float_field_names = (
+            "family_bias_strength",
+            "leaf_bias_strength",
+            "local_displacement_leaf_bias_strength",
+            "credit_decay",
+            "minimum_family_weight",
+            "minimum_leaf_weight",
+            "numeric_covariance_strength",
+            "numeric_covariance_ridge",
+        )
+        for field_name in float_field_names:
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                msg = f"{field_name} must be numeric"
+                raise TypeError(msg)
+            normalized_value = float(value)
+            if not isfinite(normalized_value):
+                msg = f"{field_name} must be finite"
+                raise ValueError(msg)
+            object.__setattr__(self, field_name, normalized_value)
+
+        integer_field_names = (
+            "numeric_covariance_min_observations",
+            "local_search_base_budget",
+            "local_search_max_budget",
+            "local_search_disable_failure_streak",
+            "local_search_failure_cooldown_updates",
+        )
+        for field_name in integer_field_names:
+            if type(getattr(self, field_name)) is not int:
+                msg = f"{field_name} must be an int"
+                raise TypeError(msg)
+
         if self.family_bias_strength < 0.0:
             msg = "family_bias_strength must be non-negative"
             raise ValueError(msg)
@@ -71,8 +109,8 @@ class CSAProposalPolicy:
             msg = "local_displacement_leaf_bias_strength must be non-negative"
             raise ValueError(msg)
 
-        if self.score_decay <= 0.0 or self.score_decay > 1.0:
-            msg = "score_decay must lie in (0.0, 1.0]"
+        if self.credit_decay <= 0.0 or self.credit_decay > 1.0:
+            msg = "credit_decay must lie in (0.0, 1.0]"
             raise ValueError(msg)
 
         if self.minimum_family_weight <= 0.0:

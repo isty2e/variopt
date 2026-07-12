@@ -4,6 +4,7 @@ from typing import cast
 
 import numpy as np
 
+from tests.numeric_support import approx_equal
 from variopt import IntegerSpace, Observation, Proposal, RealSpace, TupleSpace
 from variopt.algorithms.population.csa import CSAProposalPolicy
 from variopt.algorithms.population.csa.banking.update.transition import (
@@ -61,6 +62,22 @@ class NumericSubspaceDescriptorTests:
 
         assert descriptor is None
 
+    def test_numeric_subspace_attribution_rejects_duplicate_paths(self) -> None:
+        with np.testing.assert_raises_regex(ValueError, "distinct leaf paths"):
+            _ = NumericSubspaceAttribution(
+                leaf_paths=((0,), (0,)),
+                source_coordinates=(0.0, 1.0),
+            )
+
+    def test_numeric_subspace_displacement_rejects_non_finite_coordinates(
+        self,
+    ) -> None:
+        with np.testing.assert_raises_regex(ValueError, "coordinates must be finite"):
+            _ = NumericSubspaceDisplacement(
+                leaf_paths=((0,),),
+                displacement_coordinates=(float("nan"),),
+            )
+
 
 class CSAProposalCovarianceTests:
     """Regression tests for CSA-private covariance proposal adaptation."""
@@ -70,7 +87,7 @@ class CSAProposalCovarianceTests:
     ) -> None:
         policy = CSAProposalPolicy(
             enabled=True,
-            score_decay=1.0,
+            credit_decay=1.0,
             numeric_covariance_strength=1.0,
             numeric_covariance_min_observations=1,
         )
@@ -79,7 +96,6 @@ class CSAProposalCovarianceTests:
             state,
             ProposalAttribution(
                 proposal_id="p-1",
-                source_score=10.0,
                 numeric_subspace_attribution=NumericSubspaceAttribution(
                     leaf_paths=((0,), (1,)),
                     source_coordinates=(0.0, 0.0),
@@ -95,7 +111,7 @@ class CSAProposalCovarianceTests:
 
         evidence, state = collect_proposal_outcome_evidence(
             state,
-            (CSAProposalEvaluation.from_observation(observation),),
+            (CSAProposalEvaluation(observation=observation, evaluation_count=4),),
             (
                 CSABankTransition(
                     proposal_id="p-1",
@@ -122,10 +138,149 @@ class CSAProposalCovarianceTests:
         assert len(next_state.numeric_covariance_stats) == 1
         covariance_stat = next_state.numeric_covariance_stats[0]
         assert covariance_stat.observation_count == 1
+        assert covariance_stat.discounted_weight == 0.25
         assert covariance_stat.effective_mean(
             current_update_index=next_state.update_index,
-            score_decay=1.0,
+            credit_decay=1.0,
         ) == (1.0, -1.0)
+
+    def test_covariance_moments_weight_displacements_by_logical_cost(self) -> None:
+        policy = CSAProposalPolicy(
+            enabled=True,
+            credit_decay=1.0,
+            numeric_covariance_strength=1.0,
+            numeric_covariance_min_observations=1,
+        )
+        state = CSAProposalState.from_policy(policy)
+        for proposal_id in ("p-1", "p-2"):
+            state = record_proposal_attribution(
+                state,
+                ProposalAttribution(
+                    proposal_id=proposal_id,
+                    numeric_subspace_attribution=NumericSubspaceAttribution(
+                        leaf_paths=((0,),),
+                        source_coordinates=(0.0,),
+                    ),
+                ),
+            )
+        observations = tuple(
+            Observation(
+                proposal=Proposal(candidate=(0.0,), proposal_id=proposal_id),
+                candidate=(displacement,),
+                value=displacement,
+                score=displacement,
+            )
+            for proposal_id, displacement in (("p-1", 1.0), ("p-2", 3.0))
+        )
+        evaluations = tuple(
+            CSAProposalEvaluation(
+                observation=observation,
+                evaluation_count=evaluation_count,
+            )
+            for observation, evaluation_count in zip(
+                observations,
+                (1, 3),
+                strict=True,
+            )
+        )
+        transitions = tuple(
+            CSABankTransition(
+                proposal_id=proposal_id,
+                route="local",
+                disposition="replaced",
+                target_index=index,
+                survived_batch=True,
+            )
+            for index, proposal_id in enumerate(("p-1", "p-2"))
+        )
+        evidence, state = collect_proposal_outcome_evidence(
+            state,
+            evaluations,
+            transitions,
+        )
+
+        next_state = update_proposal_state(
+            state,
+            evidence,
+            infer_numeric_subspace_displacement=(
+                lambda attribution, observed_candidate: (
+                    NumericSubspaceDisplacement(
+                        leaf_paths=attribution.numeric_subspace_attribution.leaf_paths,
+                        displacement_coordinates=observed_candidate,
+                    )
+                    if attribution.numeric_subspace_attribution is not None
+                    else None
+                )
+            ),
+        )
+
+        covariance_stat = next_state.numeric_covariance_stats[0]
+        assert approx_equal(covariance_stat.discounted_weight, 4.0 / 3.0)
+        assert approx_equal(
+            covariance_stat.effective_mean(
+                current_update_index=next_state.update_index,
+                credit_decay=1.0,
+            )[0],
+            1.5,
+        )
+        assert approx_equal(
+            covariance_stat.effective_covariance(
+                current_update_index=next_state.update_index,
+                credit_decay=1.0,
+            )[0][0],
+            0.75,
+        )
+
+    def test_rejected_outcome_does_not_infer_numeric_displacement(self) -> None:
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(
+                enabled=True,
+                numeric_covariance_strength=1.0,
+            ),
+        )
+        state = record_proposal_attribution(
+            state,
+            ProposalAttribution(
+                proposal_id="p-1",
+                numeric_subspace_attribution=NumericSubspaceAttribution(
+                    leaf_paths=((0,),),
+                    source_coordinates=(0.0,),
+                ),
+            ),
+        )
+        observation = Observation(
+            proposal=Proposal(candidate=(0.0,), proposal_id="p-1"),
+            candidate=(1.0,),
+            value=1.0,
+            score=1.0,
+        )
+        evidence, state = collect_proposal_outcome_evidence(
+            state,
+            (CSAProposalEvaluation.from_observation(observation),),
+            (
+                CSABankTransition(
+                    proposal_id="p-1",
+                    route="local",
+                    disposition="rejected",
+                    target_index=None,
+                    survived_batch=False,
+                ),
+            ),
+        )
+
+        def raise_if_called(
+            _attribution: ProposalAttribution,
+            _candidate: tuple[float, ...],
+        ) -> NumericSubspaceDisplacement | None:
+            raise AssertionError("rejected outcomes must not infer displacement")
+
+        next_state = update_proposal_state(
+            state,
+            evidence,
+            infer_numeric_subspace_displacement=raise_if_called,
+        )
+
+        assert next_state.numeric_covariance_stats == ()
 
     def test_covariance_guided_candidate_masks_unselected_paths(self) -> None:
         space = TupleSpace(
@@ -138,7 +293,7 @@ class CSAProposalCovarianceTests:
         proposal_state = CSAProposalState(
             policy=CSAProposalPolicy(
                 enabled=True,
-                score_decay=1.0,
+                credit_decay=1.0,
                 numeric_covariance_strength=1.0,
                 numeric_covariance_min_observations=1,
             ),

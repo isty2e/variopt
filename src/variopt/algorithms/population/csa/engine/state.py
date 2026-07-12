@@ -34,7 +34,7 @@ from .banking_state import CSABankingState
 from .scoring_state import CSAScoringState
 
 _CSA_ENGINE_STATE_FORMAT = "variopt.csa_engine_state"
-_CSA_ENGINE_STATE_VERSION = 1
+_CSA_ENGINE_STATE_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)

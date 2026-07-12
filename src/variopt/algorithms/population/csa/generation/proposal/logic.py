@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from math import fsum
 from typing import TypeVar
 
 import numpy as np
@@ -19,6 +20,7 @@ from ..perturbation import CSAPerturbationSpec
 from .evidence import (
     CSAProposalEvaluation,
     CSAProposalOutcomeEvidence,
+    derive_proposal_credits,
 )
 from .state.aggregate import CSAProposalState
 from .state.attribution import (
@@ -28,6 +30,12 @@ from .state.attribution import (
     NumericSubspaceDisplacement,
     PlannedProposalAttribution,
     ProposalAttribution,
+)
+from .state.credit import (
+    ProposalFamilyCreditSummary,
+    ProposalGenerationCreditBatch,
+    ProposalLeafCreditSummary,
+    ProposalNumericDisplacementCredit,
 )
 
 BoundaryT = TypeVar("BoundaryT")
@@ -39,15 +47,15 @@ class _LeafLocalSearchSignal:
     """File-local local-search signal for one structured leaf path."""
 
     path: LeafPath
-    score_credit: float
-    local_displacement_score_credit: float
+    credit_rate: float
+    local_displacement_credit_rate: float
     recent_failure_streak: int
     last_update_index: int
 
     @property
-    def total_score_credit(self) -> float:
+    def total_credit_rate(self) -> float:
         """Return the positive local-search support credit for one path."""
-        return self.score_credit + self.local_displacement_score_credit
+        return self.credit_rate + self.local_displacement_credit_rate
 
 
 def _is_in_failure_cooldown(
@@ -85,26 +93,26 @@ def _leaf_local_search_signals(
     for path in leaf_paths:
         normalized_path = tuple(path)
         leaf_stat = leaf_stats_by_path.get(normalized_path)
-        score_credit = 0.0
+        credit_rate = 0.0
         if leaf_stat is not None:
-            score_credit = max(
+            credit_rate = max(
                 0.0,
-                leaf_stat.effective_score_credit(
+                leaf_stat.effective_credit_rate(
                     current_update_index=state.update_index,
-                    score_decay=state.policy.score_decay,
+                    credit_decay=state.policy.credit_decay,
                 ),
             )
 
         local_displacement_leaf_stat = local_displacement_leaf_stats_by_path.get(
             normalized_path,
         )
-        local_displacement_score_credit = 0.0
+        local_displacement_credit_rate = 0.0
         if local_displacement_leaf_stat is not None:
-            local_displacement_score_credit = max(
+            local_displacement_credit_rate = max(
                 0.0,
-                local_displacement_leaf_stat.effective_score_credit(
+                local_displacement_leaf_stat.effective_credit_rate(
                     current_update_index=state.update_index,
-                    score_decay=state.policy.score_decay,
+                    credit_decay=state.policy.credit_decay,
                 ),
             )
 
@@ -129,8 +137,8 @@ def _leaf_local_search_signals(
         signals.append(
             _LeafLocalSearchSignal(
                 path=normalized_path,
-                score_credit=score_credit,
-                local_displacement_score_credit=local_displacement_score_credit,
+                credit_rate=credit_rate,
+                local_displacement_credit_rate=local_displacement_credit_rate,
                 recent_failure_streak=recent_failure_streak,
                 last_update_index=last_update_index,
             )
@@ -225,10 +233,10 @@ def mutation_leaf_weights(
     for signal in signals:
         raw_weights.append(
             state.policy.minimum_leaf_weight
-            + (state.policy.leaf_bias_strength * signal.score_credit)
+            + (state.policy.leaf_bias_strength * signal.credit_rate)
             + (
                 state.policy.local_displacement_leaf_bias_strength
-                * signal.local_displacement_score_credit
+                * signal.local_displacement_credit_rate
             )
         )
 
@@ -269,7 +277,7 @@ def proposal_local_search_context(
     )
     signals_by_path = {signal.path: signal for signal in signals}
     if attribution is None and not any(
-        signal.total_score_credit > 0.0 for signal in signals
+        signal.total_credit_rate > 0.0 for signal in signals
     ):
         return None
 
@@ -306,7 +314,7 @@ def proposal_local_search_context(
         1
         for signal in mutated_signals
         if (
-            signal.total_score_credit > 0.0
+            signal.total_credit_rate > 0.0
             and not _is_in_failure_cooldown(signal=signal, state=state)
         )
     )
@@ -362,7 +370,6 @@ def proposal_local_search_context(
 
 def planned_mutation_attribution(
     *,
-    source_score: float,
     proposal_family_key: str | None = None,
     mutated_leaf_paths: Sequence[LeafPath],
     numeric_subspace_attribution: NumericSubspaceAttribution | None = None,
@@ -372,8 +379,6 @@ def planned_mutation_attribution(
 
     Parameters
     ----------
-    source_score : float
-        Score of the source candidate before mutation.
     proposal_family_key : str | None, default=None
         Canonical proposal family key for the generated child, if any.
     mutated_leaf_paths : Sequence[LeafPath]
@@ -390,7 +395,6 @@ def planned_mutation_attribution(
         Pre-id attribution record ready to be bound to a generated proposal id.
     """
     return PlannedProposalAttribution(
-        source_score=source_score,
         proposal_family_key=proposal_family_key,
         mutated_leaf_paths=tuple(mutated_leaf_paths),
         numeric_subspace_attribution=numeric_subspace_attribution,
@@ -463,20 +467,20 @@ def mutation_family_weights(
     for index, spec in enumerate(family):
         family_key = mutation_family_key(index)
         family_stat = family_stats_by_key.get(family_key)
-        score_credit = 0.0
+        credit_rate = 0.0
         if family_stat is not None:
-            score_credit = max(
+            credit_rate = max(
                 0.0,
-                family_stat.effective_score_credit(
+                family_stat.effective_credit_rate(
                     current_update_index=state.update_index,
-                    score_decay=state.policy.score_decay,
+                    credit_decay=state.policy.credit_decay,
                 ),
             )
 
         raw_weights.append(
             float(spec.count)
             + state.policy.minimum_family_weight
-            + (state.policy.family_bias_strength * score_credit),
+            + (state.policy.family_bias_strength * credit_rate),
         )
 
     weight_sum = sum(raw_weights)
@@ -682,9 +686,9 @@ def update_proposal_state(
     """Reduce completed proposal outcome evidence into adaptive statistics.
 
     The evidence has already joined proposal provenance, successful evaluation
-    metadata, and the conclusive bank transition. This reducer intentionally
-    leaves the reward formula unchanged; comparison- and cost-aware policy is a
-    separate concern.
+    metadata, and the conclusive bank transition. The reducer derives bounded
+    final-survival credit, canonicalizes proposal order, and applies one state
+    update for the completed generation.
 
     Parameters
     ----------
@@ -706,12 +710,16 @@ def update_proposal_state(
     if not state.policy.enabled or len(outcome_evidence) == 0:
         return state
 
-    next_state = state
-    for evidence in outcome_evidence:
+    proposal_credits = derive_proposal_credits(outcome_evidence)
+    family_credits_by_key: dict[str, list[float]] = {}
+    mutation_leaf_credits_by_path: dict[LeafPath, list[float]] = {}
+    local_leaf_credits_by_path: dict[LeafPath, list[float]] = {}
+    numeric_displacement_credits: list[ProposalNumericDisplacementCredit] = []
+    for proposal_credit in proposal_credits:
+        evidence = proposal_credit.outcome_evidence
         attribution = evidence.attribution
         evaluation = evidence.evaluation
         observation = evaluation.observation
-        score_improvement = attribution.source_score - observation.score
         local_displacement_leaf_paths: tuple[LeafPath, ...] = ()
         numeric_displacement: NumericSubspaceDisplacement | None = None
         explicit_leaf_paths = evaluation.refinement_changed_leaf_paths
@@ -722,20 +730,68 @@ def update_proposal_state(
                 observation.proposal.candidate,
                 observation.candidate,
             )
-        if infer_numeric_subspace_displacement is not None:
+        if (
+            proposal_credit.pipeline_credit > 0.0
+            and infer_numeric_subspace_displacement is not None
+        ):
             numeric_displacement = infer_numeric_subspace_displacement(
                 attribution,
                 observation.candidate,
             )
-        next_state = next_state.record_score_improvement(
-            family_key=attribution.proposal_family_key,
-            leaf_paths=attribution.mutated_leaf_paths,
-            local_displacement_leaf_paths=local_displacement_leaf_paths,
-            numeric_displacement=numeric_displacement,
-            score_improvement=score_improvement,
-        )
 
-    return next_state
+        family_key = attribution.proposal_family_key
+        if family_key is not None:
+            family_credits_by_key.setdefault(family_key, []).append(
+                proposal_credit.pipeline_credit
+            )
+        for leaf_credit in proposal_credit.leaf_association_credits(
+            local_displacement_leaf_paths=local_displacement_leaf_paths,
+        ):
+            credits_by_path = (
+                mutation_leaf_credits_by_path
+                if leaf_credit.source == "mutation"
+                else local_leaf_credits_by_path
+            )
+            credits_by_path.setdefault(leaf_credit.path, []).append(leaf_credit.credit)
+        if numeric_displacement is not None:
+            numeric_displacement_credits.append(
+                ProposalNumericDisplacementCredit(
+                    displacement=numeric_displacement,
+                    credit=proposal_credit.pipeline_credit,
+                ),
+            )
+
+    generation_credit = ProposalGenerationCreditBatch(
+        evidence_count=len(proposal_credits),
+        family_summaries=tuple(
+            ProposalFamilyCreditSummary(
+                family_key=family_key,
+                observation_count=len(credits),
+                total_credit=fsum(credits),
+            )
+            for family_key, credits in family_credits_by_key.items()
+        ),
+        mutation_leaf_summaries=tuple(
+            ProposalLeafCreditSummary(
+                path=path,
+                observation_count=len(credits),
+                total_credit=fsum(credits),
+            )
+            for path, credits in mutation_leaf_credits_by_path.items()
+        ),
+        local_displacement_leaf_summaries=tuple(
+            ProposalLeafCreditSummary(
+                path=path,
+                observation_count=len(credits),
+                total_credit=fsum(credits),
+            )
+            for path, credits in local_leaf_credits_by_path.items()
+        ),
+        numeric_displacement_credits=tuple(numeric_displacement_credits),
+    )
+    return state.record_generation_credit(
+        generation_credit,
+    )
 
 
 def infer_structured_local_displacement_leaf_paths(

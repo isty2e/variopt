@@ -465,9 +465,9 @@ def record_generation_completion(
         CSAProposalFamilyTrace(
             family_key=family_stat.family_key,
             observation_count=family_stat.observation_count,
-            effective_score_credit=family_stat.effective_score_credit(
+            effective_credit_rate=family_stat.effective_credit_rate(
                 current_update_index=proposal_state.update_index,
-                score_decay=proposal_state.policy.score_decay,
+                credit_decay=proposal_state.policy.credit_decay,
             ),
             mutation_weight=None,
         )
