@@ -110,9 +110,10 @@ reduction speed exactly. Keep the fixed schedule unless the opt-in policy has
 been compared under the target problem's real budget.
 
 Custom adaptive cutoff schedules can consume `CSACutoffObservation`. Such a
-subclass must override both `requires_reduction_observation` to return `True`
-and `resolve_reduction_speed(...)`; fixed schedules leave the former `False` so
-the optimizer does not materialize unused route evidence.
+subclass overrides `resolve_reduction_speed(...)`; the inherited
+`requires_reduction_observation` property detects that override automatically.
+Fixed schedules inherit the base resolver, so the optimizer does not materialize
+unused route evidence.
 
 ## Pattern 2: Full Custom Perturbation Schedule
 

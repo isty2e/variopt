@@ -15,6 +15,7 @@ from tests.csa_support import (
 )
 from variopt import IntegerSpace, Observation, Proposal
 from variopt.algorithms.population.csa.banking.bank import Bank, BankEntry
+from variopt.algorithms.population.csa.banking.queries import infer_score_gap
 from variopt.algorithms.population.csa.progression.cutoff.logic import (
     advance_cutoff_state,
 )
@@ -33,8 +34,8 @@ from variopt.algorithms.population.csa.progression.state import (
 )
 
 
-class FixedResolverMustNotRun(CSACutoffSchedule):
-    """Fixed schedule that exposes accidental adaptive resolver calls."""
+class DoubleSpeedCutoffSchedule(CSACutoffSchedule):
+    """Custom schedule that requests observations by overriding its resolver."""
 
     @override
     def resolve_reduction_speed(
@@ -42,9 +43,9 @@ class FixedResolverMustNotRun(CSACutoffSchedule):
         *,
         observation: CSACutoffObservation,
     ) -> float:
-        """Fail because fixed schedules do not request observations."""
-        del observation
-        raise AssertionError("fixed cutoff must not resolve adaptive speed")
+        """Return a constant double-speed adaptive step."""
+        _ = observation
+        return 2.0
 
 
 def cutoff_observation(
@@ -68,6 +69,21 @@ def test_cutoff_observation_derives_local_route_fraction() -> None:
 
     assert observation.score_gap == 2.0
     assert observation.local_route_fraction == 0.25
+
+
+@pytest.mark.parametrize(
+    ("score_gap", "expected_score_gap"),
+    [(None, None), (0.0, 0.0), (2, 2.0)],
+)
+def test_cutoff_observation_accepts_available_and_missing_score_gaps(
+    score_gap: float | None,
+    expected_score_gap: float | None,
+) -> None:
+    observation = cutoff_observation(score_gap=score_gap)
+
+    assert observation.score_gap == expected_score_gap
+    if expected_score_gap is not None:
+        assert type(observation.score_gap) is float
 
 
 def test_cutoff_observation_distinguishes_missing_route_evidence() -> None:
@@ -130,14 +146,33 @@ def test_cutoff_schedule_rejects_non_finite_configuration(value: float) -> None:
 def test_cutoff_schedule_rejects_boolean_configuration() -> None:
     with pytest.raises(TypeError, match="initial_distance_cutoff must be numeric"):
         _ = CSACutoffSchedule(initial_distance_cutoff=True)
+    with pytest.raises(TypeError, match="minimum_distance_cutoff must be numeric"):
+        _ = CSACutoffSchedule(minimum_distance_cutoff=True)
     with pytest.raises(TypeError, match="initial_distance_divisor must be numeric"):
         _ = CSACutoffSchedule(initial_distance_divisor=True)
+    with pytest.raises(TypeError, match="minimum_distance_divisor must be numeric"):
+        _ = CSACutoffSchedule(minimum_distance_divisor=True)
     with pytest.raises(TypeError, match="reduction_factor must be numeric"):
         _ = CSACutoffSchedule(reduction_factor=True)
     with pytest.raises(TypeError, match="stagnation_update_limit must be an integer"):
         _ = CSACutoffSchedule(stagnation_update_limit=True)
     with pytest.raises(TypeError, match="recover_steps must be an integer"):
         _ = CSACutoffSchedule(recover_steps=True)
+
+
+def test_cutoff_schedule_rejects_non_boolean_cycle_gate() -> None:
+    schedule = CSACutoffSchedule()
+    object.__setattr__(
+        schedule,
+        "cycle_increment_requires_minimum_cutoff",
+        1,
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="cycle_increment_requires_minimum_cutoff must be a bool",
+    ):
+        schedule.__post_init__()
 
 
 def test_cutoff_schedule_normalizes_numeric_configuration() -> None:
@@ -172,6 +207,46 @@ def test_cutoff_schedule_rejects_invalid_speed(speed: float) -> None:
             distance_cutoff=4.0,
             minimum_distance_cutoff=1.0,
             speed=speed,
+        )
+
+
+def test_cutoff_schedule_rejects_invalid_runtime_cutoffs() -> None:
+    schedule = CSACutoffSchedule()
+    with pytest.raises(TypeError, match="distance_cutoff must be numeric"):
+        _ = schedule.reduce(
+            distance_cutoff=True,
+            minimum_distance_cutoff=0.0,
+        )
+    with pytest.raises(ValueError, match="distance_cutoff must be finite"):
+        _ = schedule.reduce(
+            distance_cutoff=float("nan"),
+            minimum_distance_cutoff=0.0,
+        )
+    with pytest.raises(ValueError, match="minimum_distance_cutoff must be finite"):
+        _ = schedule.reduce(
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=float("inf"),
+        )
+    with pytest.raises(ValueError, match="distance_cutoff must be non-negative"):
+        _ = schedule.reduce(
+            distance_cutoff=-1.0,
+            minimum_distance_cutoff=0.0,
+        )
+    with pytest.raises(
+        ValueError,
+        match="minimum_distance_cutoff must be non-negative",
+    ):
+        _ = schedule.reduce(
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=-1.0,
+        )
+    with pytest.raises(
+        ValueError,
+        match="minimum_distance_cutoff must not exceed distance_cutoff",
+    ):
+        _ = schedule.reduce(
+            distance_cutoff=1.0,
+            minimum_distance_cutoff=2.0,
         )
 
 
@@ -225,6 +300,22 @@ def test_cutoff_schedule_scales_exponential_and_linear_reduction() -> None:
             speed=2.0,
         )
         == 7.0
+    )
+    assert (
+        CSACutoffSchedule(reduction_factor=0.5).reduce(
+            distance_cutoff=8.0,
+            minimum_distance_cutoff=1.0,
+            speed=1,
+        )
+        == 4.0
+    )
+    assert (
+        CSACutoffSchedule(reduction_factor=0.5).reduce(
+            distance_cutoff=8.0,
+            minimum_distance_cutoff=1.0,
+            speed=1e10,
+        )
+        == 1.0
     )
 
 
@@ -414,7 +505,21 @@ def test_adaptive_reduction_cannot_override_explicit_recovery() -> None:
     assert next_state.cutoff_recover_limit == 4.0
 
 
-def test_optimizer_caps_overflowing_finite_score_gap() -> None:
+def test_score_gap_query_distinguishes_missing_and_finite_evidence() -> None:
+    assert infer_score_gap(()) is None
+    assert infer_score_gap((BankEntry(candidate=0, value=3.0),)) == 0.0
+    assert (
+        infer_score_gap(
+            (
+                BankEntry(candidate=0, value=-1.0),
+                BankEntry(candidate=1, value=3.0),
+            )
+        )
+        == 4.0
+    )
+
+
+def test_overflowing_score_gap_is_unavailable_and_cannot_trigger_recovery() -> None:
     optimizer = make_optimizer(
         space=IntegerSpace(low=0, high=20),
         diversity_metric=AbsoluteDistance(),
@@ -427,7 +532,34 @@ def test_optimizer_caps_overflowing_finite_score_gap() -> None:
         BankEntry(candidate=1, value=1e308),
     )
 
-    assert optimizer.infer_score_gap_for_entries(entries) == float_info.max
+    overflow_gap = infer_score_gap(entries)
+    assert overflow_gap is None
+    assert optimizer.infer_score_gap_for_entries(entries) is None
+
+    schedule = CSACutoffSchedule(
+        reduction_factor=0.5,
+        recover_steps=2,
+        recover_mode="score_gap_decrease",
+    )
+    state = CSAProgressionState().initialize_cutoff(
+        distance_cutoff=4.0,
+        minimum_distance_cutoff=1.0,
+        previous_score_gap=10.0,
+    )
+    state, _ = advance_cutoff_state(
+        state=state,
+        schedule=schedule,
+        score_gap=overflow_gap,
+        unused_entry_count=1,
+    )
+    state, _ = advance_cutoff_state(
+        state=state,
+        schedule=schedule,
+        score_gap=1.0,
+        unused_entry_count=1,
+    )
+
+    assert state.distance_cutoff == 1.0
 
 
 def prime_bank_for_cutoff_test(
@@ -511,19 +643,22 @@ def test_fixed_schedule_preserves_end_to_end_cutoff_step() -> None:
     assert optimizer.state.distance_cutoff == 2.5
 
 
-def test_fixed_schedule_does_not_call_adaptive_resolver() -> None:
+def test_custom_resolver_automatically_enters_adaptive_path() -> None:
+    schedule = DoubleSpeedCutoffSchedule(
+        initial_distance_cutoff=5.0,
+        minimum_distance_cutoff=0.0,
+        reduction_factor=0.5,
+    )
+    assert schedule.requires_reduction_observation
+
     optimizer, proposal = prime_bank_for_cutoff_test(
-        cutoff_schedule=FixedResolverMustNotRun(
-            initial_distance_cutoff=5.0,
-            minimum_distance_cutoff=0.0,
-            reduction_factor=0.5,
-        ),
+        cutoff_schedule=schedule,
         proposal_candidate=0,
     )
 
     tell_inferior_proposal(optimizer, proposal)
 
-    assert optimizer.state.distance_cutoff == 2.5
+    assert optimizer.state.distance_cutoff == 1.25
 
 
 def test_optimizer_supplies_same_batch_local_route_fraction() -> None:
@@ -598,6 +733,41 @@ def test_optimizer_aggregates_mixed_routes_independently_of_batch_order(
     )
 
     assert optimizer.state.distance_cutoff == 1.25
+
+
+def test_local_route_cutoff_remains_monotone_and_bounded_across_iterations() -> None:
+    schedule = CSALocalRouteCutoffSchedule(
+        reduction_factor=0.5,
+        stagnation_update_limit=0,
+    )
+    state = CSAProgressionState().initialize_cutoff(
+        distance_cutoff=8.0,
+        minimum_distance_cutoff=1.0,
+        previous_score_gap=2.0,
+    )
+
+    for local_transition_count in (0, 4, 1, 3, 0, 4):
+        previous_distance_cutoff = state.distance_cutoff
+        assert previous_distance_cutoff is not None
+        observation = cutoff_observation(
+            full_bank_transition_count=4,
+            local_transition_count=local_transition_count,
+        )
+        state, cycle_increment = advance_cutoff_state(
+            state=state,
+            schedule=schedule,
+            score_gap=observation.score_gap,
+            unused_entry_count=1,
+            reduction_speed=schedule.resolve_reduction_speed(
+                observation=observation,
+            ),
+        )
+
+        assert state.distance_cutoff is not None
+        assert 1.0 <= state.distance_cutoff <= previous_distance_cutoff
+        assert not cycle_increment
+
+    assert state.distance_cutoff == 1.0
 
 
 def test_local_route_cutoff_trajectory_is_positive_affine_invariant() -> None:

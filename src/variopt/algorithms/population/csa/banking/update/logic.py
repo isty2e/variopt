@@ -789,24 +789,3 @@ def initialize_cutoff_if_needed(
         average_distance=average_distance,
         score_gap=infer_score_gap(bank.entries),
     )
-
-
-def infer_score_gap(entries: Sequence[BankEntry[CandidateT]]) -> float | None:
-    """Infer the min-max score gap across bank entries.
-
-    Parameters
-    ----------
-    entries : Sequence[BankEntry[CandidateT]]
-        Entries whose score spread is summarized.
-
-    Returns
-    -------
-    float | None
-        Difference between maximum and minimum objective value, or ``None``
-        when no entries are available.
-    """
-    if not entries:
-        return None
-
-    values = tuple(entry.value for entry in entries)
-    return max(values) - min(values)

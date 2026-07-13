@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from math import exp, isfinite, log
 from numbers import Real
-from typing import Literal
+from typing import Literal, final
 
 from typing_extensions import override
 
@@ -265,6 +265,7 @@ class CSACutoffSchedule:
         return 1.0
 
     @property
+    @final
     def requires_reduction_observation(self) -> bool:
         """Return whether the schedule needs adaptive reduction evidence.
 
@@ -273,11 +274,15 @@ class CSACutoffSchedule:
         bool
             ``True`` when the optimizer must construct a
             :class:`CSACutoffObservation` and call
-            :meth:`resolve_reduction_speed`. Custom adaptive schedules must
-            override this property together with that method. ``False`` keeps
-            the fixed-schedule hot path free of observation materialization.
+            :meth:`resolve_reduction_speed`. This capability is derived from
+            whether a subclass overrides that resolver, so custom adaptive
+            schedules override only the resolver. ``False`` keeps the fixed
+            schedule hot path free of observation materialization.
         """
-        return False
+        return (
+            type(self).resolve_reduction_speed
+            is not CSACutoffSchedule.resolve_reduction_speed
+        )
 
     def reduce(
         self,
@@ -291,9 +296,10 @@ class CSACutoffSchedule:
         Parameters
         ----------
         distance_cutoff : float
-            Current active cutoff.
+            Canonical finite non-negative active cutoff from cutoff runtime
+            state.
         minimum_distance_cutoff : float
-            Lower bound for cutoff decay.
+            Canonical finite non-negative lower bound from cutoff runtime state.
         speed : float, default=1.0
             Positive multiplier applied to the configured reduction step.
 
@@ -301,8 +307,34 @@ class CSACutoffSchedule:
         -------
         float
             Reduced cutoff after clamping to the minimum cutoff.
+
+        Raises
+        ------
+        TypeError
+            If a cutoff or ``speed`` is not numeric or is a boolean.
+        ValueError
+            If a cutoff is non-finite, negative, or out of order, or if
+            ``speed`` is non-finite or not positive.
         """
-        if type(speed) is float and speed == 1.0:
+        distance_cutoff = _normalize_finite_float(
+            distance_cutoff,
+            field_name="distance_cutoff",
+        )
+        minimum_distance_cutoff = _normalize_finite_float(
+            minimum_distance_cutoff,
+            field_name="minimum_distance_cutoff",
+        )
+        if distance_cutoff < 0.0:
+            msg = "distance_cutoff must be non-negative"
+            raise ValueError(msg)
+        if minimum_distance_cutoff < 0.0:
+            msg = "minimum_distance_cutoff must be non-negative"
+            raise ValueError(msg)
+        if minimum_distance_cutoff > distance_cutoff:
+            msg = "minimum_distance_cutoff must not exceed distance_cutoff"
+            raise ValueError(msg)
+
+        if (type(speed) is float or type(speed) is int) and speed == 1.0:
             if self.reduction_method == "linear":
                 next_distance_cutoff = distance_cutoff - self.reduction_factor
             else:
@@ -509,15 +541,3 @@ class CSALocalRouteCutoffSchedule(CSACutoffSchedule):
         if exponent >= _MAXIMUM_REDUCTION_EXPONENT:
             return _MAXIMUM_REDUCTION_SPEED
         return exp(exponent)
-
-    @property
-    @override
-    def requires_reduction_observation(self) -> bool:
-        """Return that local-route control needs transition evidence.
-
-        Returns
-        -------
-        bool
-            Always ``True``.
-        """
-        return True

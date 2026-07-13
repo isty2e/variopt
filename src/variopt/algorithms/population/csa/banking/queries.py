@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from math import isfinite
 from typing import ClassVar, Generic, Protocol, TypeVar, cast
 
 from .....distance import require_valid_distance
@@ -47,6 +48,32 @@ class CandidateEntry(Protocol[EntryCandidateT]):
             Objective value associated with the entry.
         """
         ...
+
+
+def infer_score_gap(
+    entries: Sequence[CandidateEntry[CandidateT]],
+) -> float | None:
+    """Infer the finite min-max objective-value gap across bank entries.
+
+    Parameters
+    ----------
+    entries : Sequence[CandidateEntry[CandidateT]]
+        Entries whose objective-value spread is summarized.
+
+    Returns
+    -------
+    float | None
+        Finite difference between maximum and minimum objective value, or
+        ``None`` when no entries are available or the difference overflows.
+    """
+    if not entries:
+        return None
+
+    values = tuple(entry.value for entry in entries)
+    score_gap = max(values) - min(values)
+    if not isfinite(score_gap):
+        return None
+    return score_gap
 
 
 class BankDistanceWorkspace(Generic[CandidateT]):
