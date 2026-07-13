@@ -242,6 +242,8 @@ def test_optimizer_materializes_pairwise_distances_in_stable_row_order() -> None
         BankEntry(candidate=10, value=100.0),
     )
 
+    assert optimizer.optimizer.infer_pairwise_distances_for_entries(()) == ()
+    assert optimizer.optimizer.infer_pairwise_distances_for_entries(entries[:1]) == ()
     assert optimizer.optimizer.infer_pairwise_distances_for_entries(entries) == (
         4.0,
         10.0,
