@@ -68,6 +68,60 @@ def test_cutoff_observation_has_no_fraction_without_eligible_entries() -> None:
 
 
 @pytest.mark.parametrize(
+    ("eligible_entry_count", "unused_entry_count", "field_name"),
+    [
+        (True, 1, "eligible_entry_count"),
+        (False, 0, "eligible_entry_count"),
+        (1, True, "unused_entry_count"),
+        (1, False, "unused_entry_count"),
+    ],
+)
+def test_cutoff_observation_rejects_boolean_entry_counts(
+    eligible_entry_count: int,
+    unused_entry_count: int,
+    field_name: str,
+) -> None:
+    with pytest.raises(TypeError, match=f"{field_name} must be an integer"):
+        _ = CSACutoffObservation(
+            score_gap=None,
+            eligible_entry_count=eligible_entry_count,
+            unused_entry_count=unused_entry_count,
+        )
+
+
+@pytest.mark.parametrize("score_gap", [-1.0, float("nan"), float("inf")])
+def test_cutoff_observation_rejects_invalid_score_gap(score_gap: float) -> None:
+    with pytest.raises(
+        ValueError,
+        match="score_gap must be a finite non-negative float",
+    ):
+        _ = CSACutoffObservation(
+            score_gap=score_gap,
+            eligible_entry_count=1,
+            unused_entry_count=1,
+        )
+
+
+def test_cutoff_observation_rejects_boolean_score_and_distance() -> None:
+    with pytest.raises(TypeError, match="score_gap must be numeric"):
+        _ = CSACutoffObservation(
+            score_gap=True,
+            eligible_entry_count=1,
+            unused_entry_count=1,
+        )
+    with pytest.raises(
+        TypeError,
+        match="pairwise_distances must contain numeric values",
+    ):
+        _ = CSACutoffObservation(
+            score_gap=None,
+            eligible_entry_count=1,
+            unused_entry_count=1,
+            pairwise_distances=(False,),
+        )
+
+
+@pytest.mark.parametrize(
     ("eligible_entry_count", "unused_entry_count", "message"),
     [
         (-1, 0, "eligible_entry_count must be non-negative"),
@@ -113,6 +167,66 @@ def test_cutoff_schedule_requests_pairwise_distances_lazily() -> None:
 
     assert not fixed_schedule.requires_pairwise_distances
     assert pairwise_schedule.requires_pairwise_distances
+
+
+def test_fixed_cutoff_schedule_preserves_reduction_algebra() -> None:
+    schedule = CSACutoffSchedule(reduction_factor=0.75)
+    state = CSACutoffState(
+        distance_cutoff=4.0,
+        minimum_distance_cutoff=1.0,
+    )
+    observation = CSACutoffObservation(
+        score_gap=2.0,
+        eligible_entry_count=4,
+        unused_entry_count=2,
+    )
+
+    assert schedule.resolve_next_distance_cutoff(
+        state=state,
+        observation=observation,
+    ) == schedule.reduce(
+        distance_cutoff=4.0,
+        minimum_distance_cutoff=1.0,
+    )
+
+
+def test_cutoff_schedule_rejects_uninitialized_state() -> None:
+    schedule = CSACutoffSchedule()
+    observation = CSACutoffObservation(
+        score_gap=None,
+        eligible_entry_count=0,
+        unused_entry_count=0,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="cutoff state must be initialized before advancement",
+    ):
+        schedule.resolve_next_distance_cutoff(
+            state=CSACutoffState(),
+            observation=observation,
+        )
+
+
+def test_optimizer_materializes_pairwise_distances_in_stable_row_order() -> None:
+    optimizer = make_optimizer(
+        space=IntegerSpace(low=0, high=20),
+        diversity_metric=AbsoluteDistance(),
+        variation_operator=RepeatParent(),
+        bank_capacity=3,
+        random_state=0,
+    )
+    entries = (
+        BankEntry(candidate=0, value=0.0),
+        BankEntry(candidate=4, value=16.0),
+        BankEntry(candidate=10, value=100.0),
+    )
+
+    assert optimizer.optimizer.infer_pairwise_distances_for_entries(entries) == (
+        4.0,
+        10.0,
+        6.0,
+    )
 
 
 def test_optimizer_supplies_current_bank_pairwise_distances() -> None:
