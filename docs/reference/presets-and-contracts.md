@@ -97,7 +97,7 @@ caller, from `derive_csa_defaults(...)`, or from
 
 | Slot | Type | What it controls |
 | --- | --- | --- |
-| `cutoff_schedule` | [`CSACutoffSchedule`][variopt.algorithms.population.csa.CSACutoffSchedule] | Distance-cutoff initialization, decay, and recovery. |
+| `cutoff_schedule` | [`CSACutoffSchedule`][variopt.algorithms.population.csa.CSACutoffSchedule] | Distance-cutoff initialization, decay, and recovery. [`CSALocalRouteCutoffSchedule`][variopt.algorithms.population.csa.CSALocalRouteCutoffSchedule] is an opt-in adaptive subtype; named presets retain fixed decay. |
 | `refresh_policy` | [`CSARefreshPolicy`][variopt.algorithms.population.csa.CSARefreshPolicy] | Refresh and restart behavior at run boundaries. |
 | `restart_lite` | `bool \| None` | Whether lightweight restarts are enabled after convergence events. |
 | `cycle_limit` | `int \| None` | Maximum number of CSA cycles before staged lifecycle actions fire. |

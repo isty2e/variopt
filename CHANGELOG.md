@@ -8,6 +8,20 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
+### Added
+
+- Added `CSALocalRouteCutoffSchedule`, an opt-in CSA cutoff schedule that keeps
+  fixed exponential annealing as its backbone while bounding decay speed from
+  the current local share of full-bank transition routes. Fixed cutoff
+  annealing remains the default for both named presets. `CSACutoffObservation`
+  is exported from the advanced CSA facade for custom schedule type hints.
+
+### Fixed
+
+- CSA cutoff schedule construction now rejects non-finite numeric settings and
+  boolean values supplied where numeric counts or magnitudes are required,
+  preventing malformed policies from failing later during cutoff advancement.
+
 ### Breaking
 
 - CSA proposal adaptation now records final-bank survival efficiency per logical

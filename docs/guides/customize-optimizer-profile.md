@@ -76,6 +76,44 @@ What actually happens:
 This is the pattern to reach for first. It keeps the house defaults except for
 the one axis you meant to change.
 
+### Opt In To Local-Route Cutoff Control
+
+The fixed cutoff schedule remains the preset default. To let the current share
+of local full-bank update routes modulate annealing speed, replace only the
+`cutoff_schedule` slot:
+
+```python
+from variopt import RealSpace
+from variopt.algorithms.population.csa import (
+    CSALocalRouteCutoffSchedule,
+    CSAOptimizer,
+    CSAProfile,
+)
+
+
+space = RealSpace(low=-5.0, high=5.0)
+
+optimizer = CSAOptimizer.from_space_defaults(
+    space=space,
+    bank_capacity=16,
+    profile=CSAProfile(
+        cutoff_schedule=CSALocalRouteCutoffSchedule(),
+    ),
+)
+```
+
+The defaults reproduce the opt-in configuration that passed the held-out
+experimental gate; they are not a universal recommendation. The override
+replaces the preset cutoff slot rather than layering on top of it. No full-bank
+transition in a batch means no adaptive signal, so that update uses the fixed
+reduction speed exactly. Keep the fixed schedule unless the opt-in policy has
+been compared under the target problem's real budget.
+
+Custom adaptive cutoff schedules can consume `CSACutoffObservation`. Such a
+subclass must override both `requires_reduction_observation` to return `True`
+and `resolve_reduction_speed(...)`; fixed schedules leave the former `False` so
+the optimizer does not materialize unused route evidence.
+
 ## Pattern 2: Full Custom Perturbation Schedule
 
 When the space-derived perturbation schedule is not what you want — different

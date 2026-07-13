@@ -56,6 +56,28 @@ The *mutation* family sits alongside the regular schedule and is used to
 inject occasional diversity, particularly late in the run when the cutoff has
 contracted.
 
+## Fixed And Local-Route Cutoff Schedules
+
+`CSACutoffSchedule` uses one fixed reduction step per cutoff update and remains
+the default for both named presets. `CSALocalRouteCutoffSchedule` is an opt-in
+alternative that preserves the same exponential annealing backbone but changes
+the speed of each step from current bank-update evidence.
+
+The signal is the local share among full-bank `local`, `cluster`, and `far`
+transition routes. Initial-bank and growth appends are not comparable
+full-bank decisions and are therefore excluded. A batch with no full-bank
+transition is neutral and applies exactly one fixed reduction step.
+
+The configured target defaults to `0.25`. A larger observed local share speeds
+up decay; a smaller share slows it. Speed is bounded to `[0.25, 4.0]`, so the
+controller cannot reverse annealing or increase the cutoff. Existing explicit
+recovery policy remains the only path that can increase it.
+
+This schedule is not enabled by a preset. Its relative benefit is
+problem-dependent, especially for structured and mixed spaces, so compare it
+with the fixed schedule under the target problem's actual evaluation budget
+before adopting it.
+
 ## Local Refinement Feedback
 
 When a kernel or evaluator refines a CSA proposal before evaluation, the
