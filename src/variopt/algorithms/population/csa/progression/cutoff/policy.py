@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from .observation import CSACutoffObservation
 from .state import CSACutoffState
 
 CSAReductionMethod = Literal["exponential", "linear"]
@@ -204,41 +203,6 @@ class CSACutoffSchedule:
             next_distance_cutoff = distance_cutoff * self.reduction_factor
 
         return max(minimum_distance_cutoff, next_distance_cutoff)
-
-    @property
-    def requires_pairwise_distances(self) -> bool:
-        """Return whether cutoff advancement needs current bank distances."""
-        return False
-
-    def resolve_next_distance_cutoff(
-        self,
-        *,
-        state: CSACutoffState,
-        observation: CSACutoffObservation,
-    ) -> float:
-        """Return the next cutoff proposed by this scheduling policy.
-
-        Parameters
-        ----------
-        state : CSACutoffState
-            Current initialized cutoff runtime state.
-        observation : CSACutoffObservation
-            Canonical post-update evidence for the current iteration.
-
-        Returns
-        -------
-        float
-            Proposed next distance cutoff before common recovery and minimum
-            cutoff handling.
-        """
-        _ = observation
-        if state.distance_cutoff is None or state.minimum_distance_cutoff is None:
-            msg = "cutoff state must be initialized before advancement"
-            raise ValueError(msg)
-        return self.reduce(
-            distance_cutoff=state.distance_cutoff,
-            minimum_distance_cutoff=state.minimum_distance_cutoff,
-        )
 
     def recover(self, *, distance_cutoff: float) -> float:
         """Return the cutoff after one recovery jump.

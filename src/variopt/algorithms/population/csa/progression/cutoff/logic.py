@@ -1,7 +1,6 @@
 """CSA cutoff runtime-state transition logic."""
 
 from ..state import CSAProgressionState
-from .observation import CSACutoffObservation
 from .policy import CSACutoffSchedule
 
 
@@ -48,7 +47,8 @@ def advance_cutoff_state(
     *,
     state: CSAProgressionState,
     schedule: CSACutoffSchedule,
-    observation: CSACutoffObservation,
+    score_gap: float | None,
+    unused_entry_count: int,
 ) -> tuple[CSAProgressionState, bool]:
     """Advance cutoff runtime by one CSA iteration.
 
@@ -58,8 +58,10 @@ def advance_cutoff_state(
         Current progression state with initialized cutoff runtime.
     schedule : CSACutoffSchedule
         Cutoff schedule controlling decay, recovery, and cycle increments.
-    observation : CSACutoffObservation
-        Canonical post-update evidence used by cutoff and cycle control.
+    score_gap : float | None
+        Current score-gap observation.
+    unused_entry_count : int
+        Number of unused bank entries used by cycle-increment logic.
 
     Returns
     -------
@@ -71,15 +73,15 @@ def advance_cutoff_state(
     assert state.minimum_distance_cutoff is not None
     assert state.cutoff_recover_limit is not None
 
-    next_distance_cutoff = schedule.resolve_next_distance_cutoff(
-        state=state.cutoff_state,
-        observation=observation,
+    next_distance_cutoff = schedule.reduce(
+        distance_cutoff=state.distance_cutoff,
+        minimum_distance_cutoff=state.minimum_distance_cutoff,
     )
     next_recover_limit = state.cutoff_recover_limit
     if (
         schedule.should_recover(
             previous_score_gap=state.previous_score_gap,
-            current_score_gap=observation.score_gap,
+            current_score_gap=score_gap,
         )
         and next_recover_limit >= state.distance_cutoff
     ):
@@ -93,13 +95,13 @@ def advance_cutoff_state(
         next_recover_limit = state.minimum_distance_cutoff
 
     cycle_increment = schedule.should_increment_cycle(
-        unused_entry_count=observation.unused_entry_count,
+        unused_entry_count=unused_entry_count,
         cutoff_at_minimum=next_distance_cutoff <= state.minimum_distance_cutoff,
     )
     next_state = state.advance_iteration(
         distance_cutoff=next_distance_cutoff,
         cycle_increment=cycle_increment,
         cutoff_recover_limit=next_recover_limit,
-        previous_score_gap=observation.score_gap,
+        previous_score_gap=score_gap,
     )
     return next_state, cycle_increment
