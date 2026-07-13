@@ -854,6 +854,7 @@ class CSAOptimizer(
                 refresh_policy=self.resolved_profile.refresh_policy,
                 update_policy=self.bank_update_policy,
                 infer_average_distance=self.infer_average_distance_for_entries,
+                infer_pairwise_distances=self.infer_pairwise_distances_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
@@ -870,6 +871,7 @@ class CSAOptimizer(
                 update_policy=self.bank_update_policy,
                 random_state=random_state,
                 infer_average_distance=self.infer_average_distance_for_entries,
+                infer_pairwise_distances=self.infer_pairwise_distances_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
@@ -1135,6 +1137,34 @@ class CSAOptimizer(
             return 0.0
 
         return distance_sum / float(pair_count)
+
+    def infer_pairwise_distances_for_entries(
+        self,
+        entries: Sequence[BankEntry[CandidateT]],
+    ) -> tuple[float, ...]:
+        """Materialize validated pairwise bank distances.
+
+        Parameters
+        ----------
+        entries : Sequence[BankEntry[CandidateT]]
+            Bank entries whose pairwise distances are requested.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Distances in stable upper-triangular row order. Banks with fewer
+            than two entries produce an empty tuple.
+        """
+        return tuple(
+            require_valid_distance(
+                self.diversity_metric.distance(
+                    left_entry.candidate,
+                    right_entry.candidate,
+                )
+            )
+            for left_index, left_entry in enumerate(entries[:-1])
+            for right_entry in entries[left_index + 1 :]
+        )
 
     def infer_score_gap_for_entries(
         self,

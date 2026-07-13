@@ -23,6 +23,7 @@ from ..generation.proposal.state.attribution import (
     ProposalAttribution,
 )
 from ..progression.cutoff.logic import advance_cutoff_state
+from ..progression.cutoff.observation import CSACutoffObservation
 from ..progression.cutoff.policy import CSACutoffSchedule
 from ..progression.refresh import CSARefreshPolicy
 from ..trace.events.artifacts import CSAProposalFamilyTrace
@@ -34,6 +35,10 @@ from .boundary import (
 from .state import CSAEngineState
 
 InferAverageDistance = Callable[[Sequence[BankEntry[CandidateT]]], float]
+InferPairwiseDistances = Callable[
+    [Sequence[BankEntry[CandidateT]]],
+    tuple[float, ...],
+]
 InferScoreGap = Callable[[Sequence[BankEntry[CandidateT]]], float | None]
 InferLocalDisplacementLeafPaths = Callable[
     [CandidateT, CandidateT], tuple[LeafPath, ...]
@@ -55,6 +60,7 @@ def apply_tell(
     update_policy: CSABankUpdatePolicy,
     random_state: np.random.RandomState | None = None,
     infer_average_distance: InferAverageDistance[CandidateT],
+    infer_pairwise_distances: InferPairwiseDistances[CandidateT],
     infer_score_gap: InferScoreGap[CandidateT],
     infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT]
     | None = None,
@@ -84,6 +90,9 @@ def apply_tell(
         Optional random state for stochastic banking decisions.
     infer_average_distance : InferAverageDistance[CandidateT]
         Callback that computes average distance over bank entries.
+    infer_pairwise_distances : InferPairwiseDistances[CandidateT]
+        Callback that materializes validated pairwise bank distances when the
+        configured cutoff schedule requests them.
     infer_score_gap : InferScoreGap[CandidateT]
         Callback that computes score gap over bank entries.
     infer_local_displacement_leaf_paths : InferLocalDisplacementLeafPaths[CandidateT] | None, default=None
@@ -288,15 +297,32 @@ def apply_tell(
         and bank_was_full
         and engine_state.progression_state.cutoff_is_initialized
     ):
+        entries = engine_state.banking_state.bank.entries
+        entry_count = len(entries)
+        ignored_entry_count = sum(
+            1
+            for index in engine_state.progression_state.seed_mask
+            if 0 <= index < entry_count
+        )
+        eligible_entry_count = entry_count - ignored_entry_count
         unused_entry_count = engine_state.selection_state.count_unused_entries(
-            entry_count=len(engine_state.banking_state.bank.entries),
+            entry_count=entry_count,
             ignored_indices=engine_state.progression_state.seed_mask,
+        )
+        observation = CSACutoffObservation(
+            score_gap=infer_score_gap(entries),
+            eligible_entry_count=eligible_entry_count,
+            unused_entry_count=unused_entry_count,
+            pairwise_distances=(
+                infer_pairwise_distances(entries)
+                if cutoff_schedule.requires_pairwise_distances
+                else None
+            ),
         )
         next_progression_state, cycle_increment = advance_cutoff_state(
             state=engine_state.progression_state,
             schedule=cutoff_schedule,
-            score_gap=infer_score_gap(engine_state.banking_state.bank.entries),
-            unused_entry_count=unused_entry_count,
+            observation=observation,
         )
         engine_state = replace(engine_state, progression_state=next_progression_state)
         if cycle_increment:
