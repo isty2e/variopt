@@ -1,8 +1,11 @@
 """Public CSA cutoff scheduling policy."""
 
 from dataclasses import dataclass
+from math import isfinite
+from numbers import Real
 from typing import Literal
 
+from .observation import CSACutoffObservation
 from .state import CSACutoffState
 
 CSAReductionMethod = Literal["exponential", "linear"]
@@ -180,8 +183,38 @@ class CSACutoffSchedule:
 
         return float(distance_cutoff), float(minimum_distance_cutoff)
 
+    @property
+    def requires_bank_crowding(self) -> bool:
+        """Return whether cutoff advancement needs current bank geometry."""
+        return False
+
+    def resolve_reduction_speed(
+        self,
+        *,
+        observation: CSACutoffObservation,
+    ) -> float:
+        """Return the multiplier applied to one fixed annealing step.
+
+        Parameters
+        ----------
+        observation : CSACutoffObservation
+            Canonical post-update evidence for the current iteration.
+
+        Returns
+        -------
+        float
+            Positive reduction-speed multiplier. The fixed schedule always
+            returns ``1.0``.
+        """
+        _ = observation
+        return 1.0
+
     def reduce(
-        self, *, distance_cutoff: float, minimum_distance_cutoff: float
+        self,
+        *,
+        distance_cutoff: float,
+        minimum_distance_cutoff: float,
+        speed: float = 1.0,
     ) -> float:
         """Return the next cutoff after one decay step.
 
@@ -191,16 +224,35 @@ class CSACutoffSchedule:
             Current active cutoff.
         minimum_distance_cutoff : float
             Lower bound for cutoff decay.
+        speed : float, default=1.0
+            Positive multiplier applied to the configured reduction step.
 
         Returns
         -------
         float
             Reduced cutoff after clamping to the minimum cutoff.
         """
-        if self.reduction_method == "linear":
-            next_distance_cutoff = distance_cutoff - self.reduction_factor
+        if type(speed) is bool or not isinstance(speed, Real):
+            msg = "speed must be numeric"
+            raise TypeError(msg)
+        normalized_speed = float(speed)
+        if not isfinite(normalized_speed) or normalized_speed <= 0.0:
+            msg = "speed must be finite and positive"
+            raise ValueError(msg)
+
+        if normalized_speed == 1.0:
+            if self.reduction_method == "linear":
+                next_distance_cutoff = distance_cutoff - self.reduction_factor
+            else:
+                next_distance_cutoff = distance_cutoff * self.reduction_factor
+        elif self.reduction_method == "linear":
+            next_distance_cutoff = (
+                distance_cutoff - self.reduction_factor * normalized_speed
+            )
         else:
-            next_distance_cutoff = distance_cutoff * self.reduction_factor
+            next_distance_cutoff = distance_cutoff * (
+                self.reduction_factor**normalized_speed
+            )
 
         return max(minimum_distance_cutoff, next_distance_cutoff)
 

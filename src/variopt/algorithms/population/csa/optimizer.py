@@ -2,6 +2,8 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from math import isfinite
+from sys import float_info
 from typing import Generic, Literal, TypeVar, cast
 
 import numpy as np
@@ -855,6 +857,7 @@ class CSAOptimizer(
                 update_policy=self.bank_update_policy,
                 infer_average_distance=self.infer_average_distance_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
+                infer_crowded_entry_count=self.infer_crowded_entry_count_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
             )
@@ -871,6 +874,7 @@ class CSAOptimizer(
                 random_state=random_state,
                 infer_average_distance=self.infer_average_distance_for_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
+                infer_crowded_entry_count=self.infer_crowded_entry_count_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
             ),
@@ -1136,6 +1140,44 @@ class CSAOptimizer(
 
         return distance_sum / float(pair_count)
 
+    def infer_crowded_entry_count_for_entries(
+        self,
+        entries: Sequence[BankEntry[CandidateT]],
+        distance_cutoff: float,
+    ) -> int:
+        """Count bank entries with a neighbor inside the active cutoff.
+
+        Parameters
+        ----------
+        entries : Sequence[BankEntry[CandidateT]]
+            Bank entries whose nearest-neighbor occupancy is summarized.
+        distance_cutoff : float
+            Active cutoff used by full-bank admission.
+
+        Returns
+        -------
+        int
+            Number of entries with at least one neighbor strictly inside the
+            cutoff.
+        """
+        crowded_indices: set[int] = set()
+        for left_index, left_entry in enumerate(entries[:-1]):
+            for right_index in range(left_index + 1, len(entries)):
+                right_entry = entries[right_index]
+                distance = require_valid_distance(
+                    self.diversity_metric.distance(
+                        left_entry.candidate,
+                        right_entry.candidate,
+                    )
+                )
+                if distance < distance_cutoff:
+                    crowded_indices.add(left_index)
+                    crowded_indices.add(right_index)
+            if len(crowded_indices) == len(entries):
+                break
+
+        return len(crowded_indices)
+
     def infer_score_gap_for_entries(
         self,
         entries: Sequence[BankEntry[CandidateT]],
@@ -1157,4 +1199,7 @@ class CSAOptimizer(
             return None
 
         values = tuple(entry.value for entry in entries)
-        return max(values) - min(values)
+        score_gap = max(values) - min(values)
+        if isfinite(score_gap):
+            return score_gap
+        return float_info.max
