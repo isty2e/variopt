@@ -1,6 +1,6 @@
 """Tests for CSA cutoff-control observations and schedule dispatch."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from typing_extensions import override
@@ -17,6 +17,7 @@ from variopt.algorithms.population.csa.progression.cutoff.policy import (
 from variopt.algorithms.population.csa.progression.cutoff.state import (
     CSACutoffState,
 )
+from variopt.algorithms.population.csa.selection.state import SeedSelectionState
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,25 @@ class PairwiseMedianCutoffSchedule(CSACutoffSchedule):
             raise ValueError(msg)
         ordered_distances = sorted(pairwise_distances)
         return ordered_distances[len(ordered_distances) // 2]
+
+
+@dataclass(frozen=True, slots=True)
+class UsedFractionCutoffSchedule(CSACutoffSchedule):
+    """Test schedule that exposes the canonical utilization observation."""
+
+    @override
+    def resolve_next_distance_cutoff(
+        self,
+        *,
+        state: CSACutoffState,
+        observation: CSACutoffObservation,
+    ) -> float:
+        used_entry_fraction = observation.used_entry_fraction
+        if used_entry_fraction is None:
+            if state.distance_cutoff is None:
+                raise ValueError("cutoff state must be initialized")
+            return state.distance_cutoff
+        return used_entry_fraction
 
 
 def test_cutoff_observation_reports_used_entry_fraction() -> None:
@@ -270,3 +290,62 @@ def test_optimizer_supplies_current_bank_pairwise_distances() -> None:
     )
 
     assert optimizer.state.distance_cutoff == 6.0
+
+
+def test_optimizer_excludes_valid_seed_masks_from_utilization() -> None:
+    cutoff_schedule = UsedFractionCutoffSchedule(
+        initial_distance_cutoff=1.0,
+        minimum_distance_cutoff=0.0,
+        reduction_factor=1.0,
+    )
+    optimizer = make_optimizer(
+        space=IntegerSpace(low=0, high=20),
+        diversity_metric=AbsoluteDistance(),
+        variation_operator=RepeatParent(),
+        bank_capacity=3,
+        cutoff_schedule=cutoff_schedule,
+        random_state=0,
+    )
+    optimizer.bank = Bank(
+        capacity=3,
+        entries=(
+            BankEntry(candidate=0, value=0.0, proposal_id="b0"),
+            BankEntry(candidate=4, value=16.0, proposal_id="b1"),
+            BankEntry(candidate=10, value=100.0, proposal_id="b2"),
+        ),
+    )
+    optimizer.cutoff_state = CSACutoffState(
+        distance_cutoff=1.0,
+        minimum_distance_cutoff=0.0,
+    )
+    optimizer.engine_state = replace(
+        optimizer.engine_state,
+        progression_state=replace(
+            optimizer.engine_state.progression_state,
+            stage_state=(
+                optimizer.engine_state.progression_state.stage_state.with_masks(
+                    seed_mask=frozenset({1, 99}),
+                    partner_mask=frozenset(),
+                )
+            ),
+        ),
+        selection_state=SeedSelectionState(
+            used_entry_indices=frozenset({0}),
+            bank_status=(True, False, False),
+        ),
+    )
+    proposal = Proposal(candidate=0, proposal_id="p0")
+    optimizer.set_pending_proposals((proposal,))
+
+    optimizer.tell(
+        (
+            Observation(
+                proposal=proposal,
+                candidate=0,
+                value=0.0,
+                score=0.0,
+            ),
+        )
+    )
+
+    assert optimizer.state.distance_cutoff == 0.5
