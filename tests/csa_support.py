@@ -54,9 +54,6 @@ from variopt.algorithms.population.csa.generation.proposal import CSAProposalPol
 from variopt.algorithms.population.csa.progression.cutoff.logic import (
     advance_cutoff_state,
 )
-from variopt.algorithms.population.csa.progression.cutoff.observation import (
-    CSACutoffObservation,
-)
 from variopt.algorithms.population.csa.progression.cutoff.state import (
     CSACutoffState,
 )
@@ -639,16 +636,11 @@ class CSAOptimizerDriver:
 
     def advance_state(self, *, unused_entry_count: int) -> bool:
         entries = self.engine_state.banking_state.bank.entries
-        entry_count = len(entries)
         next_progression_state, cycle_increment = advance_cutoff_state(
             state=self.engine_state.progression_state,
             schedule=self.optimizer.resolved_profile.cutoff_schedule,
-            observation=CSACutoffObservation(
-                score_gap=self.optimizer.infer_score_gap_for_entries(entries),
-                eligible_entry_count=entry_count,
-                unused_entry_count=unused_entry_count,
-                bank_entry_count=entry_count,
-            ),
+            score_gap=self.optimizer.infer_score_gap_for_entries(entries),
+            unused_entry_count=unused_entry_count,
         )
         self.engine_state = replace(
             self.engine_state,

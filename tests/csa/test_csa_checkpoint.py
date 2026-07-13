@@ -19,7 +19,12 @@ from variopt import (
     TupleSpace,
 )
 from variopt.algorithms.local_search import StructuredStochasticNeighborhoodKernel
-from variopt.algorithms.population.csa import CSAOptimizer, CSAProfile
+from variopt.algorithms.population.csa import (
+    CSACutoffSchedule,
+    CSALocalRouteCutoffSchedule,
+    CSAOptimizer,
+    CSAProfile,
+)
 from variopt.algorithms.population.csa.banking.bank import Bank, BankEntry
 from variopt.algorithms.population.csa.banking.clustering import (
     CSAClusteringPolicy,
@@ -1123,13 +1128,24 @@ class CSAOptimizerCheckpointTests:
         with pytest.raises(expected_error, match=match):
             _ = optimizer.state_from_dict(snapshot)
 
+    @pytest.mark.parametrize(
+        "cutoff_schedule",
+        [
+            pytest.param(None, id="fixed-preset"),
+            pytest.param(CSALocalRouteCutoffSchedule(), id="local-route"),
+        ],
+    )
     def test_structured_optimizer_checkpoint_round_trip_matches_uninterrupted_run(
         self,
+        cutoff_schedule: CSACutoffSchedule | None,
     ) -> None:
         optimizer = CSAOptimizer.from_space_defaults(
             space=IntegerSpace(-10, 10),
             bank_capacity=6,
-            profile=CSAProfile(seed_count=3),
+            profile=CSAProfile(
+                seed_count=3,
+                cutoff_schedule=cutoff_schedule,
+            ),
             random_state=7,
         )
 

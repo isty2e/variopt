@@ -4,6 +4,7 @@ import variopt.algorithms as root_algorithms
 import variopt.algorithms.population as population_algorithms
 import variopt.algorithms.population.clearing_ga as clearing_ga_algorithms
 import variopt.algorithms.population.csa as csa_algorithms
+import variopt.algorithms.population.csa.progression.cutoff as csa_cutoff
 import variopt.algorithms.population.de as de_algorithms
 import variopt.algorithms.population.ga as ga_algorithms
 import variopt.algorithms.population.generational_ga as generational_ga_algorithms
@@ -32,6 +33,35 @@ EXPECTED_POPULATION_ALL = (
     "SpeciesConservingGeneticAlgorithmOptimizer",
     "SpeciesGAProfile",
     "SwapMutation",
+)
+
+EXPECTED_CSA_ALL = (
+    "Bank",
+    "BoundedMutation",
+    "CSAAcceptancePolicy",
+    "CSAAdaptivePotential",
+    "CSAAdaptivePotentialAxis",
+    "CSACutoffObservation",
+    "CSACutoffSchedule",
+    "CSALocalRouteCutoffSchedule",
+    "CSADefaultComponents",
+    "CSAClusteringPolicy",
+    "CSABankUpdatePolicy",
+    "CSABiasedPotential",
+    "CSABankGrowthPolicy",
+    "CSANicheQualityPolicy",
+    "CSAOptimizer",
+    "CSAProfile",
+    "CSAProposalPolicy",
+    "CSAPerturbationSchedule",
+    "CSAPerturbationSpec",
+    "CSARefreshPolicy",
+    "CSAScoreModel",
+    "DifferentialEvolutionVariation",
+    "MixtureVariation",
+    "RandomResetMutation",
+    "UniformCrossover",
+    "derive_csa_defaults",
 )
 
 EXPECTED_ROOT_ALGORITHMS_ALL = (
@@ -170,4 +200,17 @@ class PopulationFacadeExportTests:
         assert (
             root_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
             is population_algorithms.RestrictedTournamentGeneticAlgorithmOptimizer
+        )
+
+
+class CSAFacadeExportTests:
+    """Lock the advanced CSA policy facade surface."""
+
+    def test_csa_facade_reexports_cutoff_contracts(self) -> None:
+        assert tuple(csa_algorithms.__all__) == EXPECTED_CSA_ALL
+        assert csa_algorithms.CSACutoffObservation is csa_cutoff.CSACutoffObservation
+        assert csa_algorithms.CSACutoffSchedule is csa_cutoff.CSACutoffSchedule
+        assert (
+            csa_algorithms.CSALocalRouteCutoffSchedule
+            is csa_cutoff.CSALocalRouteCutoffSchedule
         )

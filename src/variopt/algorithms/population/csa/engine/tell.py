@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 
 import numpy as np
+from typing_extensions import assert_never
 
 from .....diversity import DiversityMetric
 from .....spaces import LeafPath
@@ -36,10 +37,6 @@ from .state import CSAEngineState
 
 InferAverageDistance = Callable[[Sequence[BankEntry[CandidateT]]], float]
 InferScoreGap = Callable[[Sequence[BankEntry[CandidateT]]], float | None]
-InferCrowdedEntryCount = Callable[
-    [Sequence[BankEntry[CandidateT]], float],
-    int,
-]
 InferLocalDisplacementLeafPaths = Callable[
     [CandidateT, CandidateT], tuple[LeafPath, ...]
 ]
@@ -61,7 +58,6 @@ def apply_tell(
     random_state: np.random.RandomState | None = None,
     infer_average_distance: InferAverageDistance[CandidateT],
     infer_score_gap: InferScoreGap[CandidateT],
-    infer_crowded_entry_count: InferCrowdedEntryCount[CandidateT],
     infer_local_displacement_leaf_paths: InferLocalDisplacementLeafPaths[CandidateT]
     | None = None,
     infer_numeric_subspace_displacement: InferNumericSubspaceDisplacement[CandidateT]
@@ -92,9 +88,6 @@ def apply_tell(
         Callback that computes average distance over bank entries.
     infer_score_gap : InferScoreGap[CandidateT]
         Callback that computes score gap over bank entries.
-    infer_crowded_entry_count : InferCrowdedEntryCount[CandidateT]
-        Callback that counts bank entries with a neighbor inside the active
-        cutoff when the schedule requests geometry.
     infer_local_displacement_leaf_paths : InferLocalDisplacementLeafPaths[CandidateT] | None, default=None
         Optional callback that infers leaf-path displacement for proposal
         attribution.
@@ -299,42 +292,42 @@ def apply_tell(
     ):
         entries = engine_state.banking_state.bank.entries
         entry_count = len(entries)
-        ignored_entry_count = sum(
-            1
-            for index in engine_state.progression_state.seed_mask
-            if 0 <= index < entry_count
-        )
-        eligible_entry_count = entry_count - ignored_entry_count
         unused_entry_count = engine_state.selection_state.count_unused_entries(
             entry_count=entry_count,
             ignored_indices=engine_state.progression_state.seed_mask,
         )
-        cutoff_sensitive_transition_count = sum(
-            transition.route in {"local", "cluster", "far"}
-            for transition in batch_result.transitions
-        )
-        local_transition_count = sum(
-            transition.route == "local" for transition in batch_result.transitions
-        )
-        distance_cutoff = engine_state.progression_state.distance_cutoff
-        assert distance_cutoff is not None
-        observation = CSACutoffObservation(
-            score_gap=infer_score_gap(entries),
-            eligible_entry_count=eligible_entry_count,
-            unused_entry_count=unused_entry_count,
-            bank_entry_count=entry_count,
-            crowded_entry_count=(
-                infer_crowded_entry_count(entries, distance_cutoff)
-                if cutoff_schedule.requires_bank_crowding
-                else None
-            ),
-            cutoff_sensitive_transition_count=cutoff_sensitive_transition_count,
-            local_transition_count=local_transition_count,
-        )
+        score_gap = infer_score_gap(entries)
+        reduction_speed = 1.0
+        if cutoff_schedule.requires_reduction_observation:
+            full_bank_transition_count = 0
+            local_transition_count = 0
+            for transition in batch_result.transitions:
+                route = transition.route
+                if route == "local":
+                    local_transition_count += 1
+                    full_bank_transition_count += 1
+                elif route == "cluster" or route == "far":
+                    full_bank_transition_count += 1
+                elif route == "initial" or route == "growth":
+                    continue
+                else:
+                    assert_never(route)
+            observation = CSACutoffObservation(
+                score_gap=score_gap,
+                unused_entry_count=unused_entry_count,
+                full_bank_transition_count=full_bank_transition_count,
+                local_transition_count=local_transition_count,
+            )
+            score_gap = observation.score_gap
+            reduction_speed = cutoff_schedule.resolve_reduction_speed(
+                observation=observation,
+            )
         next_progression_state, cycle_increment = advance_cutoff_state(
             state=engine_state.progression_state,
             schedule=cutoff_schedule,
-            observation=observation,
+            score_gap=score_gap,
+            unused_entry_count=unused_entry_count,
+            reduction_speed=reduction_speed,
         )
         engine_state = replace(engine_state, progression_state=next_progression_state)
         if cycle_increment:
