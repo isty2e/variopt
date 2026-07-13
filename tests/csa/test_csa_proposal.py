@@ -39,12 +39,13 @@ from variopt.algorithms.population.csa.generation.proposal.logic import (
     mutation_family_evidence_is_ready,
     mutation_family_key,
     mutation_family_weights,
+    mutation_leaf_evidence_is_ready,
     mutation_leaf_weights,
-    plan_mutated_leaf_paths,
     planned_mutation_attribution,
     proposal_local_search_context,
     record_proposal_attribution,
     sample_mutation_family_indices,
+    select_weighted_mutation_leaf_paths,
     update_proposal_state,
 )
 from variopt.algorithms.population.csa.generation.proposal.state import (
@@ -1511,7 +1512,7 @@ class CSAProposalStateTests:
         assert len(next_state.local_displacement_leaf_stats) == 1
         assert next_state.local_displacement_leaf_stats[0].path == ("y",)
 
-    def test_plan_mutated_leaf_paths_prefers_recently_successful_leaf(self) -> None:
+    def test_weighted_mutation_paths_prefer_recently_successful_leaf(self) -> None:
         policy = CSAProposalPolicy(
             enabled=True,
             leaf_bias_strength=10.0,
@@ -1539,9 +1540,9 @@ class CSAProposalStateTests:
             state=state,
             leaf_paths=(("x",), ("y",)),
         )
-        selected_paths = plan_mutated_leaf_paths(
-            state=state,
+        selected_paths = select_weighted_mutation_leaf_paths(
             leaf_paths=(("x",), ("y",)),
+            weights=weights,
             exchange_count=1,
             random_state=np.random.RandomState(0),
         )
@@ -1549,7 +1550,106 @@ class CSAProposalStateTests:
         assert weights[0] > weights[1]
         assert selected_paths == (("x",),)
 
-    def test_plan_mutated_leaf_paths_can_prefer_local_displacement_signal(self) -> None:
+    def test_mutation_leaf_evidence_requires_every_current_leaf(self) -> None:
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            leaf_stats=(
+                ProposalLeafStat(
+                    path=("x",),
+                    observation_count=1,
+                    discounted_observation_weight=1.0,
+                ),
+                ProposalLeafStat(
+                    path=("stale",),
+                    observation_count=3,
+                    discounted_observation_weight=3.0,
+                ),
+            ),
+        )
+
+        assert not mutation_leaf_evidence_is_ready(
+            state=state,
+            leaf_paths=(("x",), ("y",)),
+        )
+
+    def test_mutation_leaf_evidence_rejects_zero_observation_stat(self) -> None:
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            leaf_stats=(ProposalLeafStat(path=("x",)),),
+        )
+
+        assert not mutation_leaf_evidence_is_ready(
+            state=state,
+            leaf_paths=(("x",),),
+        )
+
+    def test_mutation_leaf_evidence_ignores_local_displacement_only_stats(
+        self,
+    ) -> None:
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            local_displacement_leaf_stats=(
+                ProposalLeafStat(
+                    path=("x",),
+                    observation_count=1,
+                    discounted_observation_weight=1.0,
+                ),
+            ),
+        )
+
+        assert not mutation_leaf_evidence_is_ready(
+            state=state,
+            leaf_paths=(("x",),),
+        )
+
+    def test_mutation_leaf_evidence_accepts_complete_current_coverage(self) -> None:
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            leaf_stats=tuple(
+                ProposalLeafStat(
+                    path=(name,),
+                    observation_count=1,
+                    discounted_observation_weight=1.0,
+                )
+                for name in ("x", "y")
+            ),
+        )
+
+        assert mutation_leaf_evidence_is_ready(
+            state=state,
+            leaf_paths=(("x",), ("y",)),
+        )
+
+    def test_mutation_leaf_evidence_uses_current_dynamic_topology(self) -> None:
+        state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            leaf_stats=(
+                ProposalLeafStat(
+                    path=("active",),
+                    observation_count=1,
+                    discounted_observation_weight=1.0,
+                ),
+                ProposalLeafStat(path=("inactive",)),
+            ),
+        )
+
+        assert mutation_leaf_evidence_is_ready(
+            state=state,
+            leaf_paths=(("active",),),
+        )
+
+    def test_weighted_mutation_path_selection_rejects_misaligned_weights(
+        self,
+    ) -> None:
+        with pytest.raises(ValueError, match="align one-to-one"):
+            _ = select_weighted_mutation_leaf_paths(
+                leaf_paths=(("x",), ("y",)),
+                weights=(1.0,),
+                exchange_count=1,
+                random_state=np.random.RandomState(0),
+            )
+
+    def test_weighted_mutation_paths_can_prefer_local_displacement_signal(self) -> None:
         policy = CSAProposalPolicy(
             enabled=True,
             leaf_bias_strength=0.0,
@@ -1578,9 +1678,9 @@ class CSAProposalStateTests:
             state=state,
             leaf_paths=(("x",), ("y",)),
         )
-        selected_paths = plan_mutated_leaf_paths(
-            state=state,
+        selected_paths = select_weighted_mutation_leaf_paths(
             leaf_paths=(("x",), ("y",)),
+            weights=weights,
             exchange_count=1,
             random_state=np.random.RandomState(0),
         )

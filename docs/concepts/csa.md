@@ -86,6 +86,21 @@ counts exactly and does not consume family-selection RNG. Proposal adaptation
 remains disabled by default; fixed scheduling is therefore both the default and
 the explicit baseline for comparisons.
 
+Structured leaf adaptation has an analogous evidence boundary. Until every
+currently editable leaf has direct mutation-outcome evidence, CSA uses the
+operator's native unweighted path selector. Complete evidence that still yields
+equal leaf weights also stays on that native path. The enabled policy therefore
+preserves fixed-schedule mutation candidates and RNG advancement until evidence
+can actually bias leaf selection. Local-displacement evidence may influence the
+weights after that boundary, but does not establish readiness by itself.
+
+Treat proposal adaptation as experimental rather than as a generally stronger
+schedule. A parity-corrected rerun of the preregistered equal-budget development
+panel did not justify a default or named-preset promotion. Adaptation preserved
+final-bank diversity in more pairs, while fixed scheduling produced better
+best-observed objective values in more pairs. Validate the tradeoff on the target
+problem before enabling it.
+
 For the broader execution boundary, see
 [Candidate Refinement](candidate-refinement.md).
 

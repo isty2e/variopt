@@ -25,10 +25,15 @@ from variopt.algorithms.population.csa import (
     UniformCrossover,
     derive_csa_defaults,
 )
+from variopt.algorithms.population.csa.engine.ask import (
+    apply_variation_operator_from_validated_parents,
+)
 from variopt.algorithms.population.csa.generation.proposal.logic import (
     record_proposal_attribution,
+    sample_mutation_family_indices,
 )
 from variopt.algorithms.population.csa.generation.proposal.state import (
+    CSAProposalState,
     ProposalAttribution,
 )
 from variopt.algorithms.population.csa.generation.proposal.state.generation_evidence import (
@@ -264,6 +269,47 @@ class CSADefaultComponentTests:
         result, _ = study.optimize(max_evaluations=40)
 
         assert result.best_observation is not None
+
+    def test_permutation_mutation_cold_start_preserves_declared_children_and_rng(
+        self,
+    ) -> None:
+        space = PermutationSpace(size=6)
+        family = derive_csa_defaults(space).perturbation_schedule.mutation_family
+        proposal_state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        adaptive_random_state = np.random.RandomState(37)
+        fixed_random_state = np.random.RandomState(37)
+        candidate = (0, 1, 2, 3, 4, 5)
+
+        adaptive_indices = sample_mutation_family_indices(
+            state=proposal_state,
+            family=family,
+            random_state=adaptive_random_state,
+        )
+        fixed_indices = tuple(
+            index for index, spec in enumerate(family) for _ in range(spec.count)
+        )
+        adaptive_children = tuple(
+            apply_variation_operator_from_validated_parents(
+                operator=family[index].operator,
+                parents=(candidate,),
+                random_state=adaptive_random_state,
+            )
+            for index in adaptive_indices
+        )
+        fixed_children = tuple(
+            apply_variation_operator_from_validated_parents(
+                operator=family[index].operator,
+                parents=(candidate,),
+                random_state=fixed_random_state,
+            )
+            for index in fixed_indices
+        )
+
+        assert adaptive_indices == fixed_indices
+        assert adaptive_children == fixed_children
+        assert repr(adaptive_random_state.get_state()) == repr(
+            fixed_random_state.get_state()
+        )
 
     def test_csa_optimizer_can_emit_history_conditioned_local_search_contexts(
         self,

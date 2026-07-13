@@ -19,6 +19,43 @@ BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
 
 
+def select_mutation_leaf_paths(
+    *,
+    editable_paths: Sequence[LeafPath],
+    max_exchange_fraction: float,
+    random_state: np.random.RandomState,
+) -> tuple[LeafPath, ...]:
+    """Select editable leaf paths with the built-in mutation distribution.
+
+    Parameters
+    ----------
+    editable_paths : Sequence[LeafPath]
+        Validated active leaf paths that define the selection domain.
+    max_exchange_fraction : float
+        Maximum fraction of active leaves that may be selected.
+    random_state : np.random.RandomState
+        Random state used for exchange-count and path sampling.
+
+    Returns
+    -------
+    tuple[LeafPath, ...]
+        Selected paths, or an empty tuple when no leaves are currently active.
+    """
+    if len(editable_paths) == 0:
+        return ()
+
+    exchange_count = sample_exchange_count(
+        leaf_count=len(editable_paths),
+        max_exchange_fraction=max_exchange_fraction,
+        random_state=random_state,
+    )
+    return choose_paths_without_replacement(
+        editable_paths,
+        exchange_count,
+        random_state,
+    )
+
+
 def random_reset_mutation(
     *,
     space: StructuredSearchSpace[BoundaryT, CandidateT],
@@ -53,24 +90,21 @@ def random_reset_mutation(
     if validate_candidate:
         space.validate(candidate)
     editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
-    if len(editable_paths) == 0:
-        return candidate
-
-    exchange_count = sample_exchange_count(
-        leaf_count=len(editable_paths),
+    selected_paths = select_mutation_leaf_paths(
+        editable_paths=editable_paths,
         max_exchange_fraction=max_exchange_fraction,
         random_state=random_state,
     )
-    selected_paths = choose_paths_without_replacement(
-        editable_paths,
-        exchange_count,
-        random_state,
+    if len(selected_paths) == 0:
+        return candidate
+
+    return random_reset_mutation_on_paths(
+        space=space,
+        candidate=candidate,
+        selected_paths=selected_paths,
+        random_state=random_state,
+        validate_candidate=False,
     )
-    replacements = {
-        path: sample_leaf_value(space.leaf_space_at_path(path), random_state)
-        for path in selected_paths
-    }
-    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)
 
 
 def random_reset_mutation_on_paths(
@@ -156,29 +190,22 @@ def bounded_mutation(
     if validate_candidate:
         space.validate(candidate)
     editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
-    if len(editable_paths) == 0:
-        return candidate
-
-    exchange_count = sample_exchange_count(
-        leaf_count=len(editable_paths),
+    selected_paths = select_mutation_leaf_paths(
+        editable_paths=editable_paths,
         max_exchange_fraction=max_perturbation_fraction,
         random_state=random_state,
     )
-    selected_paths = choose_paths_without_replacement(
-        editable_paths,
-        exchange_count,
-        random_state,
+    if len(selected_paths) == 0:
+        return candidate
+
+    return bounded_mutation_on_paths(
+        space=space,
+        candidate=candidate,
+        selected_paths=selected_paths,
+        max_perturbation_fraction=max_perturbation_fraction,
+        random_state=random_state,
+        validate_candidate=False,
     )
-    replacements = {
-        path: mutate_leaf_value(
-            space=space.leaf_space_at_path(path),
-            value=space.leaf_value_at_validated_path(candidate, path),
-            max_perturbation_fraction=max_perturbation_fraction,
-            random_state=random_state,
-        )
-        for path in selected_paths
-    }
-    return space.replace_leaf_values_in_validated_candidate(candidate, replacements)
 
 
 def bounded_mutation_on_paths(

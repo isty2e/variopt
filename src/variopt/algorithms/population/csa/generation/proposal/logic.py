@@ -149,21 +149,56 @@ def _leaf_local_search_signals(
     return tuple(signals)
 
 
-def plan_mutated_leaf_paths(
+def mutation_leaf_evidence_is_ready(
     *,
     state: CSAProposalState,
     leaf_paths: Sequence[LeafPath],
-    exchange_count: int,
-    random_state: np.random.RandomState,
-) -> tuple[LeafPath, ...]:
-    """Return one weighted mutation-path selection from proposal history.
+) -> bool:
+    """Return whether every current leaf has direct mutation-outcome evidence.
 
     Parameters
     ----------
     state : CSAProposalState
-        Proposal adaptation state providing leaf-level weights.
+        Proposal adaptation state providing direct mutation-leaf observations.
+    leaf_paths : Sequence[LeafPath]
+        Current editable leaf paths that define the readiness set.
+
+    Returns
+    -------
+    bool
+        Whether every current path has at least one direct mutation observation.
+
+    Notes
+    -----
+    Local-displacement evidence can influence a ready leaf's weight, but does not
+    make leaf-selection adaptation ready by itself.
+    """
+    if len(leaf_paths) == 0 or len(state.leaf_stats) < len(leaf_paths):
+        return False
+
+    observed_paths = {
+        leaf_stat.path
+        for leaf_stat in state.leaf_stats
+        if leaf_stat.observation_count > 0
+    }
+    return all(tuple(path) in observed_paths for path in leaf_paths)
+
+
+def select_weighted_mutation_leaf_paths(
+    *,
+    leaf_paths: Sequence[LeafPath],
+    weights: Sequence[float],
+    exchange_count: int,
+    random_state: np.random.RandomState,
+) -> tuple[LeafPath, ...]:
+    """Return one weighted selection from aligned mutation paths and weights.
+
+    Parameters
+    ----------
     leaf_paths : Sequence[LeafPath]
         Structured leaf paths available for mutation.
+    weights : Sequence[float]
+        Normalized selection weights aligned one-to-one with ``leaf_paths``.
     exchange_count : int
         Number of distinct leaf paths to select.
     random_state : numpy.random.RandomState
@@ -188,7 +223,10 @@ def plan_mutated_leaf_paths(
         msg = "exchange_count must not exceed the number of leaf paths"
         raise ValueError(msg)
 
-    weights = mutation_leaf_weights(state=state, leaf_paths=leaf_paths)
+    if len(weights) != len(leaf_paths):
+        msg = "weights must align one-to-one with leaf_paths"
+        raise ValueError(msg)
+
     selected_indices = random_state_choice_indices_without_replacement(
         random_state,
         len(leaf_paths),

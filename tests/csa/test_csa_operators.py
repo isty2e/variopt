@@ -17,6 +17,7 @@ from variopt import (
     Problem,
     Proposal,
     RealSpace,
+    RecordSpace,
     Study,
 )
 from variopt.algorithms.population.csa import (
@@ -34,9 +35,16 @@ from variopt.algorithms.population.csa import (
 )
 from variopt.algorithms.population.csa.engine.ask import (
     apply_variation_operator_from_validated_parents,
+    emit_structured_mutation_candidate,
+)
+from variopt.algorithms.population.csa.generation.proposal.logic import (
+    mutation_leaf_weights,
+    select_weighted_mutation_leaf_paths,
 )
 from variopt.algorithms.population.csa.generation.proposal.state import (
+    CSAProposalState,
     ProposalAttribution,
+    ProposalLeafStat,
 )
 from variopt.algorithms.population.csa.operators.editing import (
     sample_exchange_count,
@@ -456,6 +464,32 @@ class OperatorTests:
 
         assert fast_child == public_child
 
+    def test_random_reset_native_path_selection_preserves_child_and_rng(self) -> None:
+        space = ArraySpace(RealSpace(-1.0, 1.0), length=5)
+        operator = RandomResetMutation(space=space, max_exchange_fraction=0.8)
+        candidate = (0.0, 0.0, 0.0, 0.0, 0.0)
+        direct_random_state = rng(17)
+        planned_random_state = rng(17)
+
+        direct_child = operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=direct_random_state,
+        )
+        selected_paths = operator.select_mutation_leaf_paths(
+            space.active_leaf_paths_for_validated_candidate(candidate),
+            planned_random_state,
+        )
+        planned_child = operator.apply_validated_space_candidate_on_paths(
+            candidate,
+            selected_paths,
+            planned_random_state,
+        )
+
+        assert planned_child == direct_child
+        assert repr(planned_random_state.get_state()) == repr(
+            direct_random_state.get_state()
+        )
+
     def test_random_reset_space_candidate_path_editing_validates_candidate(
         self,
     ) -> None:
@@ -496,6 +530,194 @@ class OperatorTests:
         )
 
         assert fast_child == public_child
+
+    def test_bounded_native_path_selection_preserves_child_and_rng(self) -> None:
+        space = ArraySpace(RealSpace(-2.0, 2.0), length=5)
+        operator = BoundedMutation(space=space, max_perturbation_fraction=0.8)
+        candidate = (1.5, -1.5, 0.5, -0.5, 0.0)
+        direct_random_state = rng(19)
+        planned_random_state = rng(19)
+
+        direct_child = operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=direct_random_state,
+        )
+        selected_paths = operator.select_mutation_leaf_paths(
+            space.active_leaf_paths_for_validated_candidate(candidate),
+            planned_random_state,
+        )
+        planned_child = operator.apply_validated_space_candidate_on_paths(
+            candidate,
+            selected_paths,
+            planned_random_state,
+        )
+
+        assert planned_child == direct_child
+        assert repr(planned_random_state.get_state()) == repr(
+            direct_random_state.get_state()
+        )
+
+    @pytest.mark.parametrize("evidence_kind", ["none", "partial", "uniform"])
+    def test_adaptive_bounded_mutation_preserves_native_sampling_until_biased(
+        self,
+        evidence_kind: Literal["none", "partial", "uniform"],
+    ) -> None:
+        space = ArraySpace(RealSpace(-2.0, 2.0), length=4)
+        operator = BoundedMutation(space=space, max_perturbation_fraction=0.75)
+        candidate = (1.5, -1.5, 0.5, -0.5)
+        leaf_stats: tuple[ProposalLeafStat, ...] = ()
+        if evidence_kind == "partial":
+            leaf_stats = (
+                ProposalLeafStat(
+                    path=(0,),
+                    observation_count=1,
+                    discounted_observation_weight=1.0,
+                ),
+            )
+        elif evidence_kind == "uniform":
+            leaf_stats = tuple(
+                ProposalLeafStat(
+                    path=(index,),
+                    observation_count=1,
+                    discounted_observation_weight=1.0,
+                )
+                for index in range(4)
+            )
+        proposal_state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True),
+            leaf_stats=leaf_stats,
+        )
+        seeds = range(42) if evidence_kind == "none" else (23,)
+        for seed in seeds:
+            native_random_state = rng(seed)
+            adaptive_random_state = rng(seed)
+
+            native_child = operator.apply_from_validated_parents(
+                parents=(candidate,),
+                random_state=native_random_state,
+            )
+            adaptive_child = emit_structured_mutation_candidate(
+                operator=operator,
+                proposal_state=proposal_state,
+                seed_candidate=candidate,
+                mutation_family_index=0,
+                random_state=adaptive_random_state,
+            )
+
+            assert adaptive_child.candidate == native_child
+            assert repr(adaptive_random_state.get_state()) == repr(
+                native_random_state.get_state()
+            )
+
+    def test_adaptive_record_reset_preserves_native_sampling_without_evidence(
+        self,
+    ) -> None:
+        space = RecordSpace(
+            temperature=RealSpace(-1.0, 1.0),
+            depth=IntegerSpace(0, 9),
+            width=RealSpace(0.0, 2.0),
+        )
+        operator = RandomResetMutation(space=space, max_exchange_fraction=0.75)
+        candidate = space.normalize({"temperature": 0.0, "depth": 3, "width": 1.0})
+        proposal_state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        for seed in range(42):
+            native_random_state = rng(seed)
+            adaptive_random_state = rng(seed)
+
+            native_child = operator.apply_from_validated_parents(
+                parents=(candidate,),
+                random_state=native_random_state,
+            )
+            adaptive_child = emit_structured_mutation_candidate(
+                operator=operator,
+                proposal_state=proposal_state,
+                seed_candidate=candidate,
+                mutation_family_index=0,
+                random_state=adaptive_random_state,
+            )
+
+            assert adaptive_child.candidate == native_child
+            assert repr(adaptive_random_state.get_state()) == repr(
+                native_random_state.get_state()
+            )
+
+    def test_adaptive_single_leaf_reset_preserves_native_sampling_and_rng(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=1)
+        operator = RandomResetMutation(space=space, max_exchange_fraction=1.0)
+        candidate = (3,)
+        proposal_state = CSAProposalState.from_policy(CSAProposalPolicy(enabled=True))
+        native_random_state = rng(41)
+        adaptive_random_state = rng(41)
+
+        native_child = operator.apply_from_validated_parents(
+            parents=(candidate,),
+            random_state=native_random_state,
+        )
+        adaptive_child = emit_structured_mutation_candidate(
+            operator=operator,
+            proposal_state=proposal_state,
+            seed_candidate=candidate,
+            mutation_family_index=0,
+            random_state=adaptive_random_state,
+        )
+
+        assert adaptive_child.candidate == native_child
+        assert repr(adaptive_random_state.get_state()) == repr(
+            native_random_state.get_state()
+        )
+
+    def test_complete_biased_leaf_evidence_activates_weighted_sampling(self) -> None:
+        space = ArraySpace(RealSpace(-2.0, 2.0), length=4)
+        operator = BoundedMutation(space=space, max_perturbation_fraction=0.75)
+        candidate = (1.5, -1.5, 0.5, -0.5)
+        proposal_state = CSAProposalState(
+            policy=CSAProposalPolicy(enabled=True, leaf_bias_strength=10.0),
+            leaf_stats=tuple(
+                ProposalLeafStat(
+                    path=(index,),
+                    observation_count=1,
+                    discounted_survival_efficiency=(1.0 if index == 0 else 0.0),
+                    discounted_observation_weight=1.0,
+                )
+                for index in range(4)
+            ),
+        )
+        expected_random_state = rng(31)
+        adaptive_random_state = rng(31)
+        editable_paths = space.active_leaf_paths_for_validated_candidate(candidate)
+        exchange_count = sample_exchange_count(
+            leaf_count=len(editable_paths),
+            max_exchange_fraction=operator.max_selected_path_fraction,
+            random_state=expected_random_state,
+        )
+        weights = mutation_leaf_weights(
+            state=proposal_state,
+            leaf_paths=editable_paths,
+        )
+        expected_paths = select_weighted_mutation_leaf_paths(
+            leaf_paths=editable_paths,
+            weights=weights,
+            exchange_count=exchange_count,
+            random_state=expected_random_state,
+        )
+        expected_candidate = operator.apply_validated_space_candidate_on_paths(
+            candidate,
+            expected_paths,
+            expected_random_state,
+        )
+
+        adaptive_child = emit_structured_mutation_candidate(
+            operator=operator,
+            proposal_state=proposal_state,
+            seed_candidate=candidate,
+            mutation_family_index=0,
+            random_state=adaptive_random_state,
+        )
+
+        assert adaptive_child.candidate == expected_candidate
+        assert repr(adaptive_random_state.get_state()) == repr(
+            expected_random_state.get_state()
+        )
 
     def test_bounded_space_candidate_path_editing_validates_candidate(self) -> None:
         space = ArraySpace(IntegerSpace(0, 9), length=2)

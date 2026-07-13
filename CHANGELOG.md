@@ -28,7 +28,10 @@ format. Stability guarantees for the public surface are documented in the
   generation rather than per outcome, and the CSA engine checkpoint version is
   `2`. An enabled policy now emits the declared mutation-family counts without
   consuming family-selection RNG until every configured family has conclusive
-  outcome evidence; the previous multinomial cold start is removed.
+  outcome evidence; the previous multinomial cold start is removed. Structured
+  leaf selection likewise preserves operator-native candidates and RNG state
+  until every currently editable leaf has direct mutation-outcome evidence,
+  and retains the native path when the resulting weights remain equal.
 - `CSABankUpdatePolicy.minimum_significant_score_gap` has been replaced by the
   dimensionless `minimum_significant_score_gap_ratio`. Significant bank updates
   are now measured relative to the larger previous/next bank score span, so
@@ -121,6 +124,15 @@ format. Stability guarantees for the public surface are documented in the
   implementations must omit it or pass `None`. Internally,
   `Problem.direction` remains a concrete `OptimizationDirection` and defaults
   unspecified scalar directions to `OptimizationDirection.MINIMIZE`.
+
+### Changed
+
+- Outcome-aligned CSA proposal adaptation remains an explicit opt-in after a
+  parity-corrected rerun of the preregistered equal-budget development panel did
+  not satisfy the promotion gate for either a named preset or the default. It
+  preserved final-bank diversity in more pairs, while fixed scheduling produced
+  better best-observed objective values in more pairs. Fixed scheduling remains
+  the supported default.
 
 ### Added
 
