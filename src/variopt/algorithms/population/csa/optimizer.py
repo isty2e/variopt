@@ -49,6 +49,7 @@ from ....typevars import CandidateT
 from .banking.bank import Bank, BankEntry
 from .banking.clustering import CSAClusteringState
 from .banking.growth import CSABankGrowthState
+from .banking.queries import infer_score_gap
 from .banking.reference import ReferenceBank
 from .banking.update import CSABankUpdatePolicy
 from .defaults import derive_csa_defaults
@@ -1150,11 +1151,7 @@ class CSAOptimizer(
         Returns
         -------
         float | None
-            Difference between maximum and minimum objective value, or
-            ``None`` when no entries are available.
+            Finite difference between maximum and minimum objective value, or
+            ``None`` when no entries are available or the difference overflows.
         """
-        if not entries:
-            return None
-
-        values = tuple(entry.value for entry in entries)
-        return max(values) - min(values)
+        return infer_score_gap(entries)

@@ -635,12 +635,18 @@ class CSAOptimizerDriver:
         self.engine_state = begin_stage_transition(self.engine_state, transition)
 
     def advance_state(self, *, unused_entry_count: int) -> bool:
+        entries = self.engine_state.banking_state.bank.entries
+        cutoff_schedule = self.optimizer.resolved_profile.cutoff_schedule
+        if cutoff_schedule.requires_reduction_observation:
+            msg = (
+                "CSAOptimizerDriver.advance_state cannot synthesize adaptive "
+                "cutoff observations"
+            )
+            raise AssertionError(msg)
         next_progression_state, cycle_increment = advance_cutoff_state(
             state=self.engine_state.progression_state,
-            schedule=self.optimizer.resolved_profile.cutoff_schedule,
-            score_gap=self.optimizer.infer_score_gap_for_entries(
-                self.engine_state.banking_state.bank.entries,
-            ),
+            schedule=cutoff_schedule,
+            score_gap=self.optimizer.infer_score_gap_for_entries(entries),
             unused_entry_count=unused_entry_count,
         )
         self.engine_state = replace(

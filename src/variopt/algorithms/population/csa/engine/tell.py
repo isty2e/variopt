@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 
 import numpy as np
+from typing_extensions import assert_never
 
 from .....diversity import DiversityMetric
 from .....spaces import LeafPath
@@ -23,6 +24,7 @@ from ..generation.proposal.state.attribution import (
     ProposalAttribution,
 )
 from ..progression.cutoff.logic import advance_cutoff_state
+from ..progression.cutoff.observation import CSACutoffObservation
 from ..progression.cutoff.policy import CSACutoffSchedule
 from ..progression.refresh import CSARefreshPolicy
 from ..trace.events.artifacts import CSAProposalFamilyTrace
@@ -288,15 +290,44 @@ def apply_tell(
         and bank_was_full
         and engine_state.progression_state.cutoff_is_initialized
     ):
+        entries = engine_state.banking_state.bank.entries
+        entry_count = len(entries)
         unused_entry_count = engine_state.selection_state.count_unused_entries(
-            entry_count=len(engine_state.banking_state.bank.entries),
+            entry_count=entry_count,
             ignored_indices=engine_state.progression_state.seed_mask,
         )
+        score_gap = infer_score_gap(entries)
+        reduction_speed = 1.0
+        if cutoff_schedule.requires_reduction_observation:
+            full_bank_transition_count = 0
+            local_transition_count = 0
+            for transition in batch_result.transitions:
+                route = transition.route
+                if route == "local":
+                    local_transition_count += 1
+                    full_bank_transition_count += 1
+                elif route == "cluster" or route == "far":
+                    full_bank_transition_count += 1
+                elif route == "initial" or route == "growth":
+                    continue
+                else:
+                    assert_never(route)
+            observation = CSACutoffObservation(
+                score_gap=score_gap,
+                unused_entry_count=unused_entry_count,
+                full_bank_transition_count=full_bank_transition_count,
+                local_transition_count=local_transition_count,
+            )
+            score_gap = observation.score_gap
+            reduction_speed = cutoff_schedule.resolve_reduction_speed(
+                observation=observation,
+            )
         next_progression_state, cycle_increment = advance_cutoff_state(
             state=engine_state.progression_state,
             schedule=cutoff_schedule,
-            score_gap=infer_score_gap(engine_state.banking_state.bank.entries),
+            score_gap=score_gap,
             unused_entry_count=unused_entry_count,
+            reduction_speed=reduction_speed,
         )
         engine_state = replace(engine_state, progression_state=next_progression_state)
         if cycle_increment:

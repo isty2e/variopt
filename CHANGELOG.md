@@ -10,6 +10,18 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- CSA cutoff schedule construction now rejects non-finite numeric settings and
+  boolean values supplied where numeric counts or magnitudes are required, and
+  direct reduction rejects malformed runtime cutoff pairs. Accepted numeric
+  magnitudes are normalized to canonical floats. No deprecation path is provided
+  because retaining malformed settings would preserve states that cannot safely
+  participate in cutoff advancement.
+- `CSAOptimizer.infer_score_gap_for_entries(...)` now returns `None` when the
+  spread of finite bank values exceeds the representable float range, rather
+  than returning a non-finite value. Treat `None` as unavailable score-gap
+  evidence, as already permitted by the return type. No compatibility path is
+  retained because non-finite gaps violate the cutoff-state contract and can
+  trigger false recovery decisions.
 - CSA proposal adaptation now records final-bank survival efficiency per logical
   evaluation cost instead of raw objective deltas. `CSAProposalPolicy.score_decay`
   is renamed to `adaptation_decay`, and proposal-state checkpoint statistics now
@@ -136,6 +148,11 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- Added `CSALocalRouteCutoffSchedule`, an opt-in CSA cutoff schedule that keeps
+  fixed exponential annealing as its backbone while bounding decay speed from
+  the current local share of full-bank transition routes. Fixed cutoff
+  annealing remains the default for both named presets. `CSACutoffObservation`
+  is exported from the advanced CSA facade for custom schedule type hints.
 - Added pre-commit quality gates for Ruff linting, Ruff formatting, and
   basedpyright standard-mode type checking, plus a scheduled workflow that opens
   hook-version update pull requests.

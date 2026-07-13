@@ -49,6 +49,7 @@ def advance_cutoff_state(
     schedule: CSACutoffSchedule,
     score_gap: float | None,
     unused_entry_count: int,
+    reduction_speed: float = 1.0,
 ) -> tuple[CSAProgressionState, bool]:
     """Advance cutoff runtime by one CSA iteration.
 
@@ -62,6 +63,8 @@ def advance_cutoff_state(
         Current score-gap observation.
     unused_entry_count : int
         Number of unused bank entries used by cycle-increment logic.
+    reduction_speed : float, default=1.0
+        Positive multiplier applied to one configured reduction step.
 
     Returns
     -------
@@ -76,6 +79,7 @@ def advance_cutoff_state(
     next_distance_cutoff = schedule.reduce(
         distance_cutoff=state.distance_cutoff,
         minimum_distance_cutoff=state.minimum_distance_cutoff,
+        speed=reduction_speed,
     )
     next_recover_limit = state.cutoff_recover_limit
     if (

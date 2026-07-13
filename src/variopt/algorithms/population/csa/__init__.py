@@ -16,7 +16,11 @@ from .operators import (
 )
 from .optimizer import CSAOptimizer
 from .profile import CSAProfile
-from .progression.cutoff import CSACutoffSchedule
+from .progression.cutoff import (
+    CSACutoffObservation,
+    CSACutoffSchedule,
+    CSALocalRouteCutoffSchedule,
+)
 from .progression.refresh import CSARefreshPolicy
 from .scoring.acceptance import CSAAcceptancePolicy
 from .scoring.model import (
@@ -32,7 +36,9 @@ __all__ = [
     "CSAAcceptancePolicy",
     "CSAAdaptivePotential",
     "CSAAdaptivePotentialAxis",
+    "CSACutoffObservation",
     "CSACutoffSchedule",
+    "CSALocalRouteCutoffSchedule",
     "CSADefaultComponents",
     "CSAClusteringPolicy",
     "CSABankUpdatePolicy",
