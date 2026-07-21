@@ -5,7 +5,6 @@ from typing import cast
 
 import numpy as np
 import numpy.typing as npt
-from scipy.cluster import hierarchy  # pyright: ignore[reportMissingTypeStubs]
 
 from ......distance import require_valid_distance
 from ......diversity import DiversityMetric
@@ -40,6 +39,9 @@ def cluster_labels_for_entries(
 
     if len(entries) == 1:
         return (1,)
+
+    # Keep the SciPy backend outside population-facade initialization.
+    from scipy.cluster import hierarchy  # pyright: ignore[reportMissingTypeStubs]
 
     condensed_distance_values = np.asarray(
         condensed_distances(entries=entries, diversity_metric=diversity_metric),

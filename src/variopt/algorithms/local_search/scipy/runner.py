@@ -2,8 +2,6 @@
 
 from collections.abc import Callable, Sequence
 
-from scipy import optimize  # pyright: ignore[reportMissingTypeStubs]
-
 from .contracts import ScipyMinimizeMethod, ScipyOptimizeResult
 
 
@@ -38,6 +36,9 @@ def run_scipy_minimize(
     ScipyOptimizeResult
         Raw SciPy optimize result exposing the supported result surface.
     """
+    # Keep the SciPy backend outside algorithm-facade initialization.
+    from scipy import optimize  # pyright: ignore[reportMissingTypeStubs]
+
     return optimize.minimize(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         objective_in_coordinate_space,
         x0=initial_coordinates,
