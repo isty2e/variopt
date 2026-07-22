@@ -139,6 +139,10 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- Algorithm-family imports now defer SciPy backend loading until SciPy-backed
+  local search or CSA clustering actually executes. Importing population-only
+  algorithm surfaces no longer initializes SciPy.
+
 - Outcome-aligned CSA proposal adaptation remains an explicit opt-in after a
   parity-corrected rerun of the preregistered equal-budget development panel did
   not satisfy the promotion gate for either a named preset or the default. It
