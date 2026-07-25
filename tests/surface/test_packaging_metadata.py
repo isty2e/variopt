@@ -60,7 +60,8 @@ class PackagingMetadataTests:
 
         dependencies = set(pyproject_data["project"]["dependencies"])
 
-        assert "joblib>=1.4.0" in dependencies
+        assert "cloudpickle>=3.1.0" in dependencies
+        assert "joblib>=1.5.0" in dependencies
         assert "numpy>=1.23.5" in dependencies
         assert "scipy>=1.10.0" in dependencies
         assert "typing_extensions>=4.12.0" in dependencies
