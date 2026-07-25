@@ -41,6 +41,48 @@ labels.
   recommendation, because the built-in population optimizers do not advertise
   `stale_async`
 
+## Reusing a Problem in Joblib Workers
+
+`JoblibEvaluator` sends the problem with each batch by default. If the problem
+contains a large, immutable evaluation context and objective calls are much
+smaller, opt into one snapshot per synchronous run:
+
+```python
+from variopt.evaluators import JoblibEvaluator
+
+evaluator = JoblibEvaluator(
+    n_jobs=4,
+    backend="loky",
+    problem_transport="worker_session",
+)
+```
+
+This mode binds the exact `Problem` instance for one `Study.run(...)`,
+`Study.optimize(...)`, or `Study.step(...)` scope. A custom kernel cannot
+substitute another problem inside that scope. The default `per_request` mode
+continues to accept the problem supplied with each evaluator call.
+
+Each loky process decodes an independent problem instance and retains at most
+one current generation. A worker may replace that generation when concurrent
+runs share the process pool, or reconstruct it after worker replacement.
+Therefore observable evaluation behavior must be derived from the request and
+the immutable snapshot. Process-local memoization is suitable; mutable random
+streams, counters, wall-clock-dependent state, and cross-worker coordination
+are not restart-equivalent unless their observable results are request-derived.
+
+Threading backends and effective single-worker execution use direct shared
+references and do not create the snapshot transport. Checkpoints never contain
+the worker session: resuming a run creates a new generation from the
+coordinator-owned problem. Concurrent sessions remain isolated but frequent
+generation switching can reduce cache reuse.
+
+The snapshot is serialized with `cloudpickle` into an owner-only temporary
+directory and exposed to workers as a read-only NumPy memory map. It is trusted
+same-process-family data, not a portable or long-term file format. Normal and
+exceptional scope closure removes the transport; abrupt coordinator termination
+can leave an artifact in the operating system temporary directory for ordinary
+temporary-file cleanup to reclaim.
+
 ## Related Reading
 
 - [Concepts / Study and Execution Models](../concepts/study-and-execution-models.md)

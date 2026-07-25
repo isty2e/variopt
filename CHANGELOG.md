@@ -152,6 +152,14 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- `JoblibEvaluator` now supports the explicit
+  `problem_transport="worker_session"` mode for synchronous runs. The opt-in
+  mode serializes one problem snapshot per run scope and reuses a single
+  decoded generation in each loky worker, while the default `per_request` mode
+  preserves existing transport semantics. `cloudpickle>=3.1.0` is now a direct
+  runtime dependency for this cold-path snapshot transport, and the Joblib
+  runtime floor is now `1.5.0` so worker replacement uses the supported loky
+  idle-timeout contract.
 - Added `CSALocalRouteCutoffSchedule`, an opt-in CSA cutoff schedule that keeps
   fixed exponential annealing as its backbone while bounding decay speed from
   the current local share of full-bank transition routes. Fixed cutoff
