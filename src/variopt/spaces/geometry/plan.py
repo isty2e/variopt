@@ -422,7 +422,7 @@ def compile_builtin_geometry_plan(
     compiled_geometry = _compile_candidate_geometry(space, builder)
     if compiled_geometry is None or builder.leaf_count == 0:
         return None
-    return BuiltinStructuredGeometryPlan[BoundaryT, CandidateT](
+    return BuiltinStructuredGeometryPlan(
         space=candidate_space,
         plan_identity=StructuredGeometryPlanIdentity(),
         leaf_count=builder.leaf_count,
