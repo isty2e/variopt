@@ -3,18 +3,24 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic
+from typing import Generic, Protocol
 
 from typing_extensions import TypeVar, override
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from .artifacts import (
+    EvaluationAttemptBatch,
+    EvaluationRequest,
     Observation,
     Proposal,
     ProposalEvaluationSpec,
 )
-from .execution import EvaluationBudget, ExecutionResources
+from .execution import (
+    EvaluationBudget,
+    ExecutionResources,
+    NestedParallelismPolicy,
+)
 from .problem import Problem
 from .randomness import RandomStateSnapshot
 from .spaces import LeafPath
@@ -27,6 +33,11 @@ QueryEvaluationPayloadT = TypeVar(
 )
 KernelQueryT = TypeVar("KernelQueryT")
 KernelReportT = TypeVar("KernelReportT")
+RequestLocalPayloadT = TypeVar("RequestLocalPayloadT")
+RequestLocalPayloadT_co = TypeVar(
+    "RequestLocalPayloadT_co",
+    covariant=True,
+)
 
 
 class ProposalKernelHint(ABC):
@@ -188,6 +199,174 @@ class Kernel(ABC, Generic[KernelQueryT, KernelReportT]):
         KernelReportT
             Canonical report for the completed episode.
         """
+
+
+class RequestLocalEvaluationRunner(
+    Protocol[CandidateT, RequestLocalPayloadT_co],
+):
+    """Worker-local bounded objective runner for one request-local episode."""
+
+    @property
+    def remaining_evaluations(self) -> int:
+        """Return objective calls still available to the current episode."""
+        ...
+
+    @property
+    def consumed_evaluations(self) -> int:
+        """Return objective calls consumed by the current episode."""
+        ...
+
+    def evaluate(
+        self,
+        request: EvaluationRequest[CandidateT],
+    ) -> EvaluationAttemptBatch[CandidateT, RequestLocalPayloadT_co]:
+        """Evaluate one canonical request within the episode's hard limit."""
+        ...
+
+
+class RequestLocalEpisodeKernel(
+    Kernel[
+        ProposalBatchQuery[BoundaryT, CandidateT, RequestLocalPayloadT],
+        EvaluationAttemptBatch[CandidateT, RequestLocalPayloadT],
+    ],
+    Generic[BoundaryT, CandidateT, RequestLocalPayloadT],
+):
+    """Nominal capability for a serial episode scoped to one request.
+
+    Notes
+    -----
+    Implementations must be referentially transparent with respect to kernel
+    configuration. Randomness must come from the episode's authoritative
+    snapshot rather than mutable kernel-owned state.
+    """
+
+    @abstractmethod
+    def preferred_request_local_evaluation_limit(
+        self,
+        *,
+        problem: Problem[BoundaryT, CandidateT, RequestLocalPayloadT],
+        request: EvaluationRequest[CandidateT],
+        proposal_kernel_hint: ProposalKernelHint | None,
+    ) -> int:
+        """Return the finite preferred objective-call limit for one request.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, RequestLocalPayloadT]
+            Problem that owns candidate and evaluation semantics.
+        request : EvaluationRequest[CandidateT]
+            Canonical top-level request for the episode.
+        proposal_kernel_hint : ProposalKernelHint | None
+            Optional family-specific request-local hint.
+
+        Returns
+        -------
+        int
+            Positive finite objective-call limit preferred by this kernel.
+        """
+
+    @abstractmethod
+    def run_request_local_episode(
+        self,
+        *,
+        problem: Problem[BoundaryT, CandidateT, RequestLocalPayloadT],
+        episode: "RequestLocalEpisode[BoundaryT, CandidateT, RequestLocalPayloadT]",
+        runner: RequestLocalEvaluationRunner[CandidateT, RequestLocalPayloadT],
+    ) -> EvaluationAttemptBatch[CandidateT, RequestLocalPayloadT]:
+        """Run one request-local episode through a bounded worker runner.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, RequestLocalPayloadT]
+            Worker-local problem instance.
+        episode : RequestLocalEpisode[BoundaryT, CandidateT, RequestLocalPayloadT]
+            Immutable work item for the request.
+        runner : RequestLocalEvaluationRunner[CandidateT, RequestLocalPayloadT]
+            Worker-local objective runner bounded by ``episode.evaluation_limit``.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, RequestLocalPayloadT]
+            Exactly one top-level attempt for the completed episode.
+        """
+
+
+@dataclass(frozen=True, slots=True)
+class RequestLocalEpisode(
+    FrozenGenericSlotsCompat,
+    Generic[BoundaryT, CandidateT, RequestLocalPayloadT],
+):
+    """Immutable work item for one evaluator-owned kernel episode.
+
+    Parameters
+    ----------
+    request_index : int
+        Non-negative batch-local request slot.
+    request : EvaluationRequest[CandidateT]
+        Canonical top-level request.
+    kernel : RequestLocalEpisodeKernel[BoundaryT, CandidateT, RequestLocalPayloadT]
+        Explicitly eligible request-local kernel configuration.
+    proposal_kernel_hint : ProposalKernelHint | None
+        Optional family-specific request-local hint.
+    random_state_snapshot : RandomStateSnapshot | None
+        Authoritative random-state snapshot for the episode.
+    evaluation_limit : int
+        Positive hard objective-call limit.
+    execution_resources : ExecutionResources
+        Worker-local execution ownership metadata.
+    """
+
+    request_index: int
+    request: EvaluationRequest[CandidateT]
+    kernel: RequestLocalEpisodeKernel[BoundaryT, CandidateT, RequestLocalPayloadT]
+    proposal_kernel_hint: ProposalKernelHint | None
+    random_state_snapshot: RandomStateSnapshot | None
+    evaluation_limit: int
+    execution_resources: ExecutionResources
+
+    def __post_init__(self) -> None:
+        """Validate canonical request-local episode fields."""
+        if type(self.request_index) is not int:
+            msg = "request_index must be an exact integer"
+            raise TypeError(msg)
+        if self.request_index < 0:
+            msg = "request_index must be non-negative"
+            raise ValueError(msg)
+        if type(self.request) is not EvaluationRequest:
+            msg = "request must be an EvaluationRequest"
+            raise TypeError(msg)
+        if self.random_state_snapshot is not None and (
+            type(self.random_state_snapshot) is not RandomStateSnapshot
+        ):
+            msg = "random_state_snapshot must be a RandomStateSnapshot when provided"
+            raise TypeError(msg)
+        if type(self.evaluation_limit) is not int:
+            msg = "evaluation_limit must be an exact integer"
+            raise TypeError(msg)
+        if self.evaluation_limit <= 0:
+            msg = "evaluation_limit must be positive"
+            raise ValueError(msg)
+        if type(self.execution_resources) is not ExecutionResources:
+            msg = "execution_resources must be ExecutionResources"
+            raise TypeError(msg)
+        if self.execution_resources.parallel_owner != "evaluator":
+            msg = "request-local episode execution must be evaluator-owned"
+            raise ValueError(msg)
+        if (
+            self.execution_resources.nested_parallelism_policy
+            is not NestedParallelismPolicy.FORBID
+        ):
+            msg = "request-local episodes must forbid nested parallelism"
+            raise ValueError(msg)
+        if (
+            isinstance(self.proposal_kernel_hint, ProposalLocalSearchContext)
+            and self.proposal_kernel_hint.random_state_snapshot is not None
+        ):
+            msg = (
+                "request-local episode random state must be owned only by "
+                "random_state_snapshot"
+            )
+            raise ValueError(msg)
 
 
 class DirectKernel(Kernel[KernelQueryT, KernelReportT]):

@@ -10,6 +10,7 @@ from ...artifacts import (
     EvaluationRequest,
     materialize_success_records,
 )
+from ...artifacts.alignment import validate_aligned_attempts
 from ...evaluators.async_evaluator.artifacts import (
     BatchExecutionFailed,
     CompletionGroup,
@@ -28,7 +29,6 @@ from ..common import (
     StudyRecordT,
     finalize_ordered_attempts,
     store_completion_group,
-    validate_aligned_attempts,
 )
 from .artifacts import (
     StudyExactAsyncSessionLifecycle,

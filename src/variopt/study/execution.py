@@ -23,6 +23,7 @@ from ..artifacts import (
     Trace,
     materialize_success_records,
 )
+from ..artifacts.alignment import validate_aligned_attempts
 from ..evaluators.sequential import SequentialEvaluator
 from ..execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -54,7 +55,6 @@ from .common import (
     build_evaluation_requests,
     open_attempt_run_scope,
     supports_attempt_batches,
-    validate_aligned_attempts,
 )
 from .exact_async.orchestration import evaluate_batch_exact_async
 from .validation import validate_execution_request

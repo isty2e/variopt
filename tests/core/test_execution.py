@@ -35,6 +35,31 @@ def test_evaluation_reservation_forfeits_all_reserved_capacity() -> None:
     assert reservation.is_finalized is True
 
 
+def test_overlapping_evaluation_reservations_settle_independently() -> None:
+    budget = EvaluationBudget(10)
+    first_reservation = EvaluationReservationBatch(budget=budget, limits=(4,))
+    second_reservation = EvaluationReservationBatch(budget=budget, limits=(3,))
+
+    assert budget.remaining == 3
+    assert second_reservation.settle((2,)) == 2
+    assert first_reservation.settle((1,)) == 1
+
+    assert budget.remaining == 7
+
+
+def test_evaluation_reservation_copies_mutable_limit_input() -> None:
+    budget = EvaluationBudget(10)
+    limits = [2, 3]
+
+    reservation = EvaluationReservationBatch(budget=budget, limits=limits)
+    limits[:] = [9]
+
+    assert reservation.limits == (2, 3)
+    assert reservation.reserved_evaluation_count == 5
+    assert reservation.settle((1, 1)) == 2
+    assert budget.remaining == 8
+
+
 @pytest.mark.parametrize(
     ("limits", "exception_type"),
     [

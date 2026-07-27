@@ -30,6 +30,7 @@ from variopt.artifacts import (
     ObservationPayload,
     ProposalEvaluationSpec,
 )
+from variopt.artifacts.alignment import validate_aligned_attempts
 from variopt.execution import (
     ExecutionResources,
     NestedParallelismPolicy,
@@ -48,7 +49,7 @@ from variopt.spaces import (
     SpaceBoundaryValue,
 )
 from variopt.spaces.projections import ContinuousStructuredSpaceCodec
-from variopt.study.common import build_evaluation_requests, validate_aligned_attempts
+from variopt.study.common import build_evaluation_requests
 
 BoundaryRunnerT = TypeVar("BoundaryRunnerT")
 CandidateRunnerT = TypeVar("CandidateRunnerT")

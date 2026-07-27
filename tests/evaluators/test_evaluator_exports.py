@@ -4,6 +4,7 @@ import importlib
 import sys
 from typing import cast
 
+import variopt.evaluators as evaluator_facade
 from variopt.evaluators import AsyncJoblibEvaluator, JoblibEvaluator
 from variopt.evaluators.joblib import (
     AsyncJoblibEvaluator as AsyncJoblibEvaluatorPackage,
@@ -33,3 +34,14 @@ class EvaluatorExportTests:
         assert "MpiExecutorFactory" not in module.__dict__
         assert cast(object, module.MpiEvaluator) is MpiEvaluatorSubmodule
         assert cast(object, module.MpiExecutorFactory) is MpiExecutorFactorySubmodule
+
+    def test_evaluator_facade_omits_request_local_execution_internals(self) -> None:
+        internal_names = (
+            "BoundedRequestLocalEvaluationRunner",
+            "RequestLocalEpisodeEvaluator",
+            "execute_request_local_episode",
+            "ordered_request_local_episodes",
+        )
+
+        assert all(name not in evaluator_facade.__all__ for name in internal_names)
+        assert all(not hasattr(evaluator_facade, name) for name in internal_names)

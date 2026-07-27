@@ -95,17 +95,23 @@ class RootFacadeExportTests:
 
     def test_root_facade_omits_family_specific_helper_contracts(self) -> None:
         removed_names = (
+            "BoundedRequestLocalEvaluationRunner",
             "CandidateSampler",
             "DefaultEvaluationAttemptMaterializer",
             "EvaluationAttempt",
             "EvaluationAttemptMaterializer",
             "EvaluationRecord",
+            "EvaluationReservationBatch",
             "EvaluationSuccess",
             "InteractionEvaluationRecord",
             "ObjectiveVectorPayload",
             "ObservationPayload",
             "RandomSeed",
             "RequestAlignedEvaluationRecord",
+            "RequestLocalEpisode",
+            "RequestLocalEpisodeEvaluator",
+            "RequestLocalEpisodeKernel",
+            "RequestLocalEvaluationRunner",
             "SearchMethod",
             "SpaceBoundaryValue",
             "SpaceCandidateValue",
@@ -113,6 +119,7 @@ class RootFacadeExportTests:
             "materialize_attempt_batch_records",
             "materialize_success_record",
             "materialize_success_records",
+            "validate_aligned_attempts",
         )
 
         assert all(name not in variopt.__all__ for name in removed_names)
