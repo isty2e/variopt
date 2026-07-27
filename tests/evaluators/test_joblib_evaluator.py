@@ -2537,14 +2537,15 @@ class AsyncJoblibEvaluatorTests:
             n_jobs=2,
         )
         handle = evaluator.submit_batch(problem, requests)
+        active_batch = evaluator.active_batch_for(handle)
 
         try:
-            active_batch = evaluator.active_batch_for(handle)
             assert active_batch.result_queue.maxsize == 5
+            assert active_batch.abort_attempt is not None
         finally:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                evaluator.cancel(handle)
+            evaluator.cancel(handle)
+            active_batch.result_worker.join(timeout=5.0)
+        assert not active_batch.result_worker.is_alive()
 
     def test_attempt_result_queue_is_bounded_by_worker_count(self) -> None:
         problem = _legacy_observation_problem(SlowSquareObjective())
@@ -2559,14 +2560,15 @@ class AsyncJoblibEvaluatorTests:
             n_jobs=2,
         )
         handle = evaluator.submit_attempt_batch(problem, requests)
+        active_batch = evaluator.active_attempt_batch_for(handle)
 
         try:
-            active_batch = evaluator.active_attempt_batch_for(handle)
             assert active_batch.result_queue.maxsize == 5
+            assert active_batch.abort_attempt is not None
         finally:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                evaluator.cancel_attempt_batch(handle)
+            evaluator.cancel_attempt_batch(handle)
+            active_batch.result_worker.join(timeout=5.0)
+        assert not active_batch.result_worker.is_alive()
 
     def test_cancel_unblocks_full_result_queue_worker(self) -> None:
         problem = _legacy_observation_problem(SquareObjective())
