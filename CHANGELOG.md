@@ -155,6 +155,15 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- Synchronous `Study.run(...)` and `Study.optimize(...)` can now dispatch
+  explicitly eligible SciPy and structured local-search kernels as bounded
+  request-local episodes through `SequentialEvaluator` and `JoblibEvaluator`.
+  Hard evaluation capacity is partitioned fairly across the batch, worker
+  completion order does not affect assimilation, and unsupported kernels,
+  evaluators, execution models, or unbounded episodes retain coordinator
+  execution. `ScipyMinimizeKernel.max_evaluations` is the explicit
+  objective-call cap that enables this dispatch; `max_iterations` remains a
+  separate SciPy algorithm-step setting.
 - `JoblibEvaluator` now supports the explicit
   `problem_transport="worker_session"` mode for synchronous runs. The opt-in
   mode serializes one problem snapshot per run scope and reuses a single
