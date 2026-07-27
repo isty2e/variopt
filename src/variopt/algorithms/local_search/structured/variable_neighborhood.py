@@ -183,7 +183,7 @@ class StructuredVariableNeighborhoodKernel(
         runtime: PreparedStructuredLocalSearchRuntime[BoundaryT, StructuredCandidateT],
         proposal_index: int,
         proposal: Proposal[StructuredCandidateT],
-        random_state: np.random.RandomState,
+        random_state: np.random.RandomState | None,
         reserved_count: int,
     ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
         """Run one variable-neighborhood local-search episode for one proposal."""
@@ -389,7 +389,7 @@ class StructuredVariableNeighborhoodKernel(
                     "random-state snapshot"
                 )
                 raise ValueError(msg)
-            random_state = np.random.RandomState(0)
+            random_state = None
         else:
             random_state = random_state_snapshot.materialize()
         return self._optimize_proposal(

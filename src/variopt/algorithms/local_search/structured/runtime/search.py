@@ -306,7 +306,7 @@ def run_structured_variable_neighborhood_stage_once(
     current_score: float,
     leaf_schedule: tuple[tuple[LeafPath, DiscreteLeafSpace], ...],
     proposal_evaluation_spec: ProposalEvaluationSpec | None,
-    random_state: np.random.RandomState,
+    random_state: np.random.RandomState | None,
     reserved_count: int = 0,
 ) -> StructuredVariableNeighborhoodStageAttempt[StructuredCandidateT]:
     """Execute one configured variable-neighborhood stage.
@@ -325,8 +325,9 @@ def run_structured_variable_neighborhood_stage_once(
         Ordered editable leaves exposed to the stage.
     proposal_evaluation_spec : ProposalEvaluationSpec | None
         Optional proposal metadata forwarded to evaluation.
-    random_state : np.random.RandomState
-        Random state used by sampled neighborhood stages.
+    random_state : np.random.RandomState | None
+        Random state required by sampled neighborhood stages. Deterministic
+        stages do not own or consume an RNG stream.
     reserved_count : int, default=0
         Evaluation units reserved for later proposals in the same top-level
         batch.
@@ -371,6 +372,9 @@ def run_structured_variable_neighborhood_stage_once(
     if stage.kind == "sampled_leafwise_first_improvement":
         if stage.max_neighbors_per_step is None:
             msg = "sampled stage must define max_neighbors_per_step"
+            raise ValueError(msg)
+        if random_state is None:
+            msg = "sampled stage requires a random state"
             raise ValueError(msg)
 
         sampled_neighborhood = sample_structured_discrete_neighborhood(
