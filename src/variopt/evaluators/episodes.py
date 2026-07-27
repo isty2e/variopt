@@ -2,7 +2,15 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Generic, NoReturn, Protocol, SupportsIndex, runtime_checkable
+from typing import (
+    Generic,
+    NoReturn,
+    Protocol,
+    SupportsIndex,
+    TypeAlias,
+    cast,
+    runtime_checkable,
+)
 
 from typing_extensions import TypeVar
 
@@ -16,6 +24,10 @@ from ..problem import Problem
 BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT")
 PayloadT = TypeVar("PayloadT")
+RequestLocalEpisodeAttemptResult: TypeAlias = tuple[
+    int,
+    EvaluationAttemptBatch[CandidateT, PayloadT],
+]
 
 
 @runtime_checkable
@@ -168,6 +180,76 @@ def ordered_request_local_episodes(
             raise ValueError(msg)
 
     return ordered_episodes
+
+
+def ordered_request_local_episode_attempts(
+    results: Sequence[object],
+    *,
+    request_count: int,
+) -> EvaluationAttemptBatch[CandidateT, PayloadT]:
+    """Validate indexed worker results and materialize logical request order.
+
+    Parameters
+    ----------
+    results : Sequence[object]
+        Untrusted indexed one-slot attempt batches returned by workers.
+    request_count : int
+        Number of episodes submitted for the logical batch.
+
+    Returns
+    -------
+    EvaluationAttemptBatch[CandidateT, PayloadT]
+        Attempt slots ordered by contiguous request index.
+
+    Raises
+    ------
+    TypeError
+        If a worker returns a non-integer request index or a non-attempt batch.
+    ValueError
+        If result count or request-index alignment is invalid.
+    """
+    if type(request_count) is not int:
+        msg = "request_count must be an exact integer"
+        raise TypeError(msg)
+    if request_count < 0:
+        msg = "request_count must be non-negative"
+        raise ValueError(msg)
+    if len(results) != request_count:
+        msg = "request-local episode results must match the submitted request count"
+        raise ValueError(msg)
+
+    validated_results: list[RequestLocalEpisodeAttemptResult[CandidateT, PayloadT]] = []
+    for result in results:
+        if type(result) is not tuple or len(result) != 2:
+            msg = "request-local episode result must be an indexed attempt pair"
+            raise TypeError(msg)
+        request_index, attempt = result
+        if type(request_index) is not int:
+            msg = "request-local episode result index must be an exact integer"
+            raise TypeError(msg)
+        if type(attempt) is not EvaluationAttemptBatch:
+            msg = "request-local episode result must contain an attempt batch"
+            raise TypeError(msg)
+        # Runtime validation recovers the nominal batch; generic arguments are
+        # erased by the untyped Joblib transport boundary.
+        validated_attempt = cast(
+            EvaluationAttemptBatch[CandidateT, PayloadT],
+            attempt,
+        )
+        validated_results.append((request_index, validated_attempt))
+
+    ordered_results = tuple(
+        sorted(validated_results, key=lambda result: result[0]),
+    )
+    for expected_index, (request_index, _) in enumerate(ordered_results):
+        if request_index != expected_index:
+            msg = "request-local episode results do not align with request indices"
+            raise ValueError(msg)
+
+    return EvaluationAttemptBatch[
+        CandidateT,
+        PayloadT,
+    ].from_single_request_attempts(attempt for _, attempt in ordered_results)
 
 
 def execute_request_local_episode(

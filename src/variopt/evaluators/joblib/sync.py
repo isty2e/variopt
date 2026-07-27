@@ -12,10 +12,16 @@ from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
+from ...kernel import RequestLocalEpisode
 from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
 from ..base import Evaluator
+from ..episodes import (
+    RequestLocalEpisodeAttemptResult,
+    ordered_request_local_episode_attempts,
+    ordered_request_local_episodes,
+)
 from .contracts import (
     BoundaryT,
     JoblibDelayedFactory,
@@ -24,6 +30,7 @@ from .contracts import (
 )
 from .execution import build_execution_resources, validate_joblib_configuration
 from .session import JoblibWorkerSession
+from .worker_context import evaluate_request_local_episode_task
 
 JoblibProblemTransportMode: TypeAlias = Literal["per_request", "worker_session"]
 
@@ -196,6 +203,85 @@ class JoblibEvaluator(
             CandidateT,
             JoblibEvaluationPayloadT,
         ].from_single_request_attempts(attempts)
+
+    def evaluate_request_local_episodes(
+        self,
+        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
+        episodes: Sequence[
+            RequestLocalEpisode[
+                BoundaryT,
+                CandidateT,
+                JoblibEvaluationPayloadT,
+            ]
+        ],
+    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]:
+        """Execute request-local episodes through joblib.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
+            Problem that defines worker-local evaluation semantics.
+        episodes : Sequence[RequestLocalEpisode[BoundaryT, CandidateT, JoblibEvaluationPayloadT]]
+            Request-local work items. Their indices must be unique and
+            contiguous, independently of transport or completion order.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
+            One top-level attempt per episode in logical request order.
+
+        Notes
+        -----
+        The threading backend shares the exact supplied ``Problem`` reference
+        across workers. Its evaluation protocol must therefore be thread-safe.
+        """
+        ordered_episodes = ordered_request_local_episodes(episodes)
+        if len(ordered_episodes) == 0:
+            return EvaluationAttemptBatch[
+                CandidateT,
+                JoblibEvaluationPayloadT,
+            ](attempts=())
+        if self.problem_transport == "worker_session":
+            with JoblibWorkerSession[
+                BoundaryT,
+                CandidateT,
+                JoblibEvaluationPayloadT,
+            ](
+                problem=problem,
+                n_jobs=self.n_jobs,
+                backend=self.backend,
+            ) as session:
+                return session.evaluate_request_local_episodes(
+                    problem, ordered_episodes
+                )
+
+        parallel_factory = cast(
+            JoblibListParallelFactory[
+                RequestLocalEpisodeAttemptResult[
+                    CandidateT,
+                    JoblibEvaluationPayloadT,
+                ]
+            ],
+            joblib.Parallel,
+        )
+        delayed_factory = cast(
+            JoblibDelayedFactory,
+            joblib.delayed,
+        )
+        results = parallel_factory(
+            n_jobs=self.n_jobs,
+            backend=self.backend,
+        )(
+            delayed_factory(evaluate_request_local_episode_task)(
+                problem=problem,
+                episode=episode,
+            )
+            for episode in ordered_episodes
+        )
+        return ordered_request_local_episode_attempts(
+            results,
+            request_count=len(ordered_episodes),
+        )
 
     def _open_attempt_run_scope(
         self,
