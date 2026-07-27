@@ -68,7 +68,7 @@ def decode_problem_envelope(
     # evaluator facade does not eagerly import the serializer.
     import cloudpickle
 
-    decoded: object = cloudpickle.loads(transport)
+    decoded: object = cloudpickle.loads(transport.tobytes())
     if not isinstance(decoded, JoblibProblemEnvelope):
         msg = "worker-session transport did not contain a problem envelope"
         raise TypeError(msg)
