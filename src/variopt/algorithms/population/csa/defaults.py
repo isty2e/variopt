@@ -165,7 +165,6 @@ def derive_csa_defaults(
         Default sampler, diversity metric, and perturbation schedule for the
         permutation space.
     """
-    ...
 
 
 @overload
@@ -189,7 +188,6 @@ def derive_csa_defaults(
         Default sampler, diversity metric, and perturbation schedule for the
         structured space.
     """
-    ...
 
 
 def derive_csa_defaults(

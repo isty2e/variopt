@@ -41,7 +41,7 @@ test = [
   "basedpyright>=1.20.0",
   "pre-commit>=4.0.0",
   "pytest>=8.0.0",
-  "ruff>=0.8.0",
+  "ruff>=0.16.0",
   "tomli>=2.0.0",
 ]
 docs = [
@@ -61,11 +61,7 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = [
-  "E4",
-  "E7",
-  "E9",
-  "F",
+extend-select = [
   "I",
   "UP",
 ]

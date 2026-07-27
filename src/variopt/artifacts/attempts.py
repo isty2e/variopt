@@ -21,21 +21,24 @@ from .records import (
 from .refinement import CandidateRefinement, require_matching_refined_candidate
 from .requests import EvaluationRequest, Proposal
 
-PayloadT = TypeVar("PayloadT", default=ObservationPayload, covariant=True)
+PayloadT_co = TypeVar("PayloadT_co", default=ObservationPayload, covariant=True)
 RecordPayloadT = TypeVar(
     "RecordPayloadT",
     bound=RequestAlignedEvaluationRecord[object],
 )
 ProjectedPayloadT = TypeVar("ProjectedPayloadT")
-MaterializerPayloadT = TypeVar("MaterializerPayloadT", contravariant=True)
-MaterializerRecordT = TypeVar(
-    "MaterializerRecordT",
+MaterializerPayloadT_contra = TypeVar(
+    "MaterializerPayloadT_contra",
+    contravariant=True,
+)
+MaterializerRecordT_co = TypeVar(
+    "MaterializerRecordT_co",
     bound=RequestAlignedEvaluationRecord[object],
     covariant=True,
 )
 ScalarObservationCandidateT = TypeVar("ScalarObservationCandidateT")
-_ScalarObservationViewCandidateT = TypeVar(
-    "_ScalarObservationViewCandidateT",
+_ScalarObservationViewCandidateT_co = TypeVar(
+    "_ScalarObservationViewCandidateT_co",
     covariant=True,
 )
 MaterializableEvaluationPayload: TypeAlias = (
@@ -45,11 +48,11 @@ MaterializableEvaluationPayload: TypeAlias = (
 )
 
 
-class _ScalarObservationView(Protocol[_ScalarObservationViewCandidateT]):
+class _ScalarObservationView(Protocol[_ScalarObservationViewCandidateT_co]):
     """Structural scalar-observation view needed by success normalization."""
 
     @property
-    def request(self) -> EvaluationRequest[_ScalarObservationViewCandidateT]:
+    def request(self) -> EvaluationRequest[_ScalarObservationViewCandidateT_co]:
         """Return the canonical request owned by the observation."""
         ...
 
@@ -101,7 +104,7 @@ _UNVALIDATED_REFINEMENT_CANDIDATE = _UnvalidatedRefinementCandidate()
 ValidatedRefinementCandidate: TypeAlias = CandidateT | _UnvalidatedRefinementCandidate
 EvaluationSuccessPickleState: TypeAlias = tuple[
     EvaluationRequest[CandidateT],
-    PayloadT,
+    PayloadT_co,
     int,
     CandidateRefinement[CandidateT] | None,
     KernelDiagnostics | None,
@@ -339,18 +342,22 @@ class EvaluationFailure(FrozenGenericSlotsCompat, Generic[CandidateT]):
         return self.request.proposal_id
 
 
-setattr(
+type.__setattr__(
     EvaluationExceptionSnapshot,
     "__getstate__",
     EvaluationExceptionSnapshot.__dict__["_pickle_state"],
 )
-setattr(
+type.__setattr__(
     EvaluationExceptionSnapshot,
     "__setstate__",
     EvaluationExceptionSnapshot.__dict__["_restore_pickle_state"],
 )
-setattr(EvaluationFailure, "__getstate__", EvaluationFailure.__dict__["_pickle_state"])
-setattr(
+type.__setattr__(
+    EvaluationFailure,
+    "__getstate__",
+    EvaluationFailure.__dict__["_pickle_state"],
+)
+type.__setattr__(
     EvaluationFailure,
     "__setstate__",
     EvaluationFailure.__dict__["_restore_pickle_state"],
@@ -358,7 +365,7 @@ setattr(
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT]):
+class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT_co]):
     """Successful evaluation attempt for one concrete request.
 
     Parameters
@@ -388,7 +395,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
     """
 
     request: EvaluationRequest[CandidateT]
-    payload: PayloadT
+    payload: PayloadT_co
     evaluation_count: int = 1
     refinement: CandidateRefinement[CandidateT] | None = None
     kernel_diagnostics: KernelDiagnostics | None = None
@@ -434,7 +441,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         self,
         *,
         request: EvaluationRequest[CandidateT],
-        payload: PayloadT,
+        payload: PayloadT_co,
         evaluation_count: int = 1,
         refinement: CandidateRefinement[CandidateT] | None = None,
         kernel_diagnostics: KernelDiagnostics | None = None,
@@ -708,13 +715,10 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         if payload_request.proposal_id != self.request.proposal_id:
             return False
 
-        if (
+        return (
             payload_request.proposal_evaluation_spec
-            != self.request.proposal_evaluation_spec
-        ):
-            return False
-
-        return True
+            == self.request.proposal_evaluation_spec
+        )
 
     def _validate_payload_request_refinement_source(
         self,
@@ -987,7 +991,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
         kernel_diagnostics: KernelDiagnostics | None,
         *,
         candidate_equal: CandidateEquality[CandidateT] | None = None,
-    ) -> "EvaluationSuccess[CandidateT, PayloadT]":
+    ) -> "EvaluationSuccess[CandidateT, PayloadT_co]":
         """Return this success with replacement kernel diagnostics.
 
         Parameters
@@ -1023,7 +1027,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
             ),
         )
 
-    def _pickle_state(self) -> EvaluationSuccessPickleState[CandidateT, PayloadT]:
+    def _pickle_state(self) -> EvaluationSuccessPickleState[CandidateT, PayloadT_co]:
         """Return pickle state without serializing candidate equality callables."""
         return (
             self.request,
@@ -1040,7 +1044,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT])
 
     def _restore_pickle_state(
         self,
-        state: EvaluationSuccessPickleState[CandidateT, PayloadT],
+        state: EvaluationSuccessPickleState[CandidateT, PayloadT_co],
     ) -> None:
         """Restore pickle state emitted by :meth:`_pickle_state`."""
         (
@@ -1137,8 +1141,12 @@ def _require_scalar_observation(observation: object) -> None:
         raise TypeError(msg)
 
 
-setattr(EvaluationSuccess, "__getstate__", EvaluationSuccess.__dict__["_pickle_state"])
-setattr(
+type.__setattr__(
+    EvaluationSuccess,
+    "__getstate__",
+    EvaluationSuccess.__dict__["_pickle_state"],
+)
+type.__setattr__(
     EvaluationSuccess,
     "__setstate__",
     EvaluationSuccess.__dict__["_restore_pickle_state"],
@@ -1146,18 +1154,18 @@ setattr(
 
 
 EvaluationAttempt: TypeAlias = (
-    EvaluationSuccess[CandidateT, PayloadT] | EvaluationFailure[CandidateT]
+    EvaluationSuccess[CandidateT, PayloadT_co] | EvaluationFailure[CandidateT]
 )
 
 
 def _is_evaluation_success(
-    attempt: EvaluationAttempt[CandidateT, PayloadT],
-) -> TypeGuard[EvaluationSuccess[CandidateT, PayloadT]]:
+    attempt: EvaluationAttempt[CandidateT, PayloadT_co],
+) -> TypeGuard[EvaluationSuccess[CandidateT, PayloadT_co]]:
     return type(attempt) is EvaluationSuccess
 
 
 def _is_evaluation_failure(
-    attempt: EvaluationAttempt[CandidateT, PayloadT],
+    attempt: EvaluationAttempt[CandidateT, PayloadT_co],
 ) -> TypeGuard[EvaluationFailure[CandidateT]]:
     return type(attempt) is EvaluationFailure
 
@@ -1320,7 +1328,10 @@ def materialize_success_records(
 
 
 @dataclass(frozen=True, slots=True, init=False)
-class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT]):
+class EvaluationAttemptBatch(
+    FrozenGenericSlotsCompat,
+    Generic[CandidateT, PayloadT_co],
+):
     """Ordered request-slot batch of successful and failed attempts.
 
     Parameters
@@ -1331,14 +1342,14 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         :class:`EvaluationFailure`.
     """
 
-    attempts: tuple[EvaluationAttempt[CandidateT, PayloadT], ...]
+    attempts: tuple[EvaluationAttempt[CandidateT, PayloadT_co], ...]
     _requests_cache: tuple[EvaluationRequest[CandidateT], ...] | None = field(
         init=False,
         repr=False,
         compare=False,
         default=None,
     )
-    _successes_cache: tuple[EvaluationSuccess[CandidateT, PayloadT], ...] | None = (
+    _successes_cache: tuple[EvaluationSuccess[CandidateT, PayloadT_co], ...] | None = (
         field(
             init=False,
             repr=False,
@@ -1364,7 +1375,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         compare=False,
         default=None,
     )
-    _payloads_cache: tuple[PayloadT, ...] | None = field(
+    _payloads_cache: tuple[PayloadT_co, ...] | None = field(
         init=False,
         repr=False,
         compare=False,
@@ -1386,7 +1397,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
     def __init__(
         self,
         *,
-        attempts: Iterable[EvaluationAttempt[CandidateT, PayloadT]],
+        attempts: Iterable[EvaluationAttempt[CandidateT, PayloadT_co]],
     ) -> None:
         """Create one ordered attempt batch.
 
@@ -1420,8 +1431,8 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
     @classmethod
     def from_single_request_attempts(
         cls,
-        attempts: Iterable["EvaluationAttemptBatch[CandidateT, PayloadT]"],
-    ) -> "EvaluationAttemptBatch[CandidateT, PayloadT]":
+        attempts: Iterable["EvaluationAttemptBatch[CandidateT, PayloadT_co]"],
+    ) -> "EvaluationAttemptBatch[CandidateT, PayloadT_co]":
         """Merge one-slot attempt batches into one ordered attempt batch.
 
         Parameters
@@ -1442,7 +1453,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
             If any input batch contains more or fewer than one request slot.
         """
 
-        def merged_attempts() -> Iterator[EvaluationAttempt[CandidateT, PayloadT]]:
+        def merged_attempts() -> Iterator[EvaluationAttempt[CandidateT, PayloadT_co]]:
             for attempt_batch in attempts:
                 if type(attempt_batch) is not EvaluationAttemptBatch:
                     msg = "attempts must contain EvaluationAttemptBatch values"
@@ -1457,8 +1468,8 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
     @classmethod
     def concatenate(
         cls,
-        batches: Sequence["EvaluationAttemptBatch[CandidateT, PayloadT]"],
-    ) -> "EvaluationAttemptBatch[CandidateT, PayloadT]":
+        batches: Sequence["EvaluationAttemptBatch[CandidateT, PayloadT_co]"],
+    ) -> "EvaluationAttemptBatch[CandidateT, PayloadT_co]":
         """Concatenate ordered attempt batches.
 
         Parameters
@@ -1476,7 +1487,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         TypeError
             If ``batches`` contains non-``EvaluationAttemptBatch`` values.
         """
-        attempts: list[EvaluationAttempt[CandidateT, PayloadT]] = []
+        attempts: list[EvaluationAttempt[CandidateT, PayloadT_co]] = []
         for batch in batches:
             if type(batch) is not EvaluationAttemptBatch:
                 msg = "batches must contain EvaluationAttemptBatch values"
@@ -1512,7 +1523,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         return cached_requests
 
     @property
-    def successes(self) -> tuple[EvaluationSuccess[CandidateT, PayloadT], ...]:
+    def successes(self) -> tuple[EvaluationSuccess[CandidateT, PayloadT_co], ...]:
         """Return successful attempts in slot order.
 
         Returns
@@ -1584,7 +1595,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
         return cached_indices
 
     @property
-    def payloads(self) -> tuple[PayloadT, ...]:
+    def payloads(self) -> tuple[PayloadT_co, ...]:
         """Return successful payloads in slot order.
 
         Returns
@@ -1638,7 +1649,7 @@ class EvaluationAttemptBatch(FrozenGenericSlotsCompat, Generic[CandidateT, Paylo
 
     def single_success_or_none(
         self,
-    ) -> EvaluationSuccess[CandidateT, PayloadT] | None:
+    ) -> EvaluationSuccess[CandidateT, PayloadT_co] | None:
         """Return the successful attempt from a one-slot batch.
 
         Returns
@@ -1734,7 +1745,7 @@ def materialize_attempt_batch_records(
 
 
 class EvaluationAttemptMaterializer(
-    Protocol[CandidateT, MaterializerPayloadT, MaterializerRecordT]
+    Protocol[CandidateT, MaterializerPayloadT_contra, MaterializerRecordT_co]
 ):
     """Typed boundary that projects evaluator payload attempts into records.
 
@@ -1747,8 +1758,8 @@ class EvaluationAttemptMaterializer(
 
     def materialize_attempts(
         self,
-        attempts: EvaluationAttemptBatch[CandidateT, MaterializerPayloadT],
-    ) -> EvaluationAttemptBatch[CandidateT, MaterializerRecordT]:
+        attempts: EvaluationAttemptBatch[CandidateT, MaterializerPayloadT_contra],
+    ) -> EvaluationAttemptBatch[CandidateT, MaterializerRecordT_co]:
         """Project one ordered attempt batch into feedback records.
 
         Parameters

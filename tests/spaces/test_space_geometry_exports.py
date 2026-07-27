@@ -1,11 +1,11 @@
 """Tests for structured geometry package facade exports."""
 
-import variopt.spaces.geometry as geometry
 from variopt.spaces import (
     CompiledStructuredGeometryProvider as SpacesCompiledStructuredGeometryProvider,
 )
 from variopt.spaces import StructuredDistanceParts as SpacesStructuredDistanceParts
 from variopt.spaces import StructuredSpaceGeometry as SpacesStructuredSpaceGeometry
+from variopt.spaces import geometry
 from variopt.spaces.geometry import (
     CompiledStructuredGeometryProvider,
     StructuredDistanceParts,

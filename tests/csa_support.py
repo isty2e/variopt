@@ -95,11 +95,11 @@ __all__ = [
     "CSAOptimizerDriver",
     "CSAOptimizerKwargs",
     "CSAOptimizerTestCase",
-    "CSAProfile",
-    "CSAStageState",
     "CSAPerturbationSchedule",
     "CSAPerturbationSpec",
+    "CSAProfile",
     "CSAScoreModel",
+    "CSAStageState",
     "CollapseToZero",
     "DiversityMetric",
     "EncodeBinaryParents",
@@ -432,19 +432,11 @@ def make_optimizer(
             shuffle_children=schedule_config.shuffle_children,
         )
 
-    seed_count = kwargs["seed_count"] if "seed_count" in kwargs else 1
-    initial_new_bank_cut = (
-        kwargs["initial_new_bank_cut"] if "initial_new_bank_cut" in kwargs else 2
-    )
-    random_seed_mode = kwargs["random_seed_mode"] if "random_seed_mode" in kwargs else 0
-    weighted_partner_selection = (
-        kwargs["weighted_partner_selection"]
-        if "weighted_partner_selection" in kwargs
-        else False
-    )
-    max_bank_capacity = (
-        kwargs["max_bank_capacity"] if "max_bank_capacity" in kwargs else None
-    )
+    seed_count = kwargs.get("seed_count", 1)
+    initial_new_bank_cut = kwargs.get("initial_new_bank_cut", 2)
+    random_seed_mode = kwargs.get("random_seed_mode", 0)
+    weighted_partner_selection = kwargs.get("weighted_partner_selection", False)
+    max_bank_capacity = kwargs.get("max_bank_capacity")
     cutoff_schedule = (
         kwargs["cutoff_schedule"] if "cutoff_schedule" in kwargs else schedule()
     )
@@ -456,8 +448,8 @@ def make_optimizer(
     growth_policy = (
         kwargs["growth_policy"] if "growth_policy" in kwargs else CSABankGrowthPolicy()
     )
-    restart_lite = kwargs["restart_lite"] if "restart_lite" in kwargs else True
-    cycle_limit = kwargs["cycle_limit"] if "cycle_limit" in kwargs else 3
+    restart_lite = kwargs.get("restart_lite", True)
+    cycle_limit = kwargs.get("cycle_limit", 3)
     update_policy = (
         kwargs["update_policy"] if "update_policy" in kwargs else CSABankUpdatePolicy()
     )
@@ -469,8 +461,8 @@ def make_optimizer(
         if "proposal_policy" in kwargs
         else CSAProposalPolicy()
     )
-    random_state = kwargs["random_state"] if "random_state" in kwargs else None
-    preset = kwargs["preset"] if "preset" in kwargs else "joung_2018"
+    random_state = kwargs.get("random_state")
+    preset = kwargs.get("preset") or "joung_2018"
 
     profile = CSAProfile(
         perturbation_schedule=canonical_schedule,

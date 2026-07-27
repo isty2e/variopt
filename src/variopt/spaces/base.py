@@ -5,11 +5,11 @@ from typing import Generic
 
 import numpy as np
 
-from ..typevars import CandidateT, InputT
+from ..typevars import CandidateT, InputT_contra
 from .equality import scalar_candidate_equality
 
 
-class SearchSpace(ABC, Generic[InputT, CandidateT]):
+class SearchSpace(ABC, Generic[InputT_contra, CandidateT]):
     """Domain specification for canonical candidates.
 
     Notes
@@ -26,7 +26,7 @@ class SearchSpace(ABC, Generic[InputT, CandidateT]):
     """
 
     @abstractmethod
-    def normalize(self, raw_candidate: InputT) -> CandidateT:
+    def normalize(self, raw_candidate: InputT_contra) -> CandidateT:
         """Normalize boundary input into canonical candidate form.
 
         Parameters

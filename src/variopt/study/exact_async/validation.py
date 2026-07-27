@@ -42,9 +42,11 @@ def validate_resumable_exact_async_request(
     ------
     RuntimeError
         If the run method is already exhausted.
+    TypeError
+        If the study kernel or evaluator does not provide the required
+        exact-async capabilities.
     ValueError
-        If the execution request is incompatible with exact-async resumable
-        orchestration.
+        If the requested batch size or execution model is invalid.
     """
     validate_execution_request(
         study,
@@ -58,7 +60,7 @@ def validate_resumable_exact_async_request(
             "study-level resumable exact_async orchestration currently "
             "requires DirectKernel"
         )
-        raise ValueError(msg)
+        raise TypeError(msg)
 
     if study.run_method.is_exhausted(state):
         msg = "run_method is exhausted"

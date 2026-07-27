@@ -250,7 +250,7 @@ class StudyExactAsyncStepSession(
         self._lifecycle = "failed"
         try:
             self.batch_session.cancel()
-        except Exception as cancel_exception:
+        except Exception as cancel_exception:  # noqa: BLE001 - preserve validation failure
             # Preserve the validation failure as the user-visible cause.
             _ = cancel_exception
 

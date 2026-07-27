@@ -16,7 +16,7 @@ from .artifacts import (
     EvaluationBatchSessionState,
 )
 
-EvaluationT = TypeVar("EvaluationT", covariant=True)
+EvaluationT_co = TypeVar("EvaluationT_co", covariant=True)
 _DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 0.001
 
 
@@ -60,7 +60,7 @@ def normalize_wait_timeout(timeout: object | None) -> float | None:
     return normalized_timeout
 
 
-class EvaluationBatchSession(ABC, Generic[EvaluationT]):
+class EvaluationBatchSession(ABC, Generic[EvaluationT_co]):
     """Lifecycle contract for one submitted logical evaluation batch.
 
     Notes
@@ -82,7 +82,7 @@ class EvaluationBatchSession(ABC, Generic[EvaluationT]):
         """
 
     @abstractmethod
-    def poll(self) -> Sequence[CompletionGroup[EvaluationT]]:
+    def poll(self) -> Sequence[CompletionGroup[EvaluationT_co]]:
         """Return immediately with newly completed ordered groups.
 
         Returns
@@ -97,7 +97,7 @@ class EvaluationBatchSession(ABC, Generic[EvaluationT]):
         self,
         *,
         timeout: float | None = None,
-    ) -> Sequence[CompletionGroup[EvaluationT]]:
+    ) -> Sequence[CompletionGroup[EvaluationT_co]]:
         """Block until at least one completion group is available.
 
         Parameters
@@ -143,9 +143,9 @@ class EvaluationBatchSession(ABC, Generic[EvaluationT]):
 
 
 class PendingAwareBatchSession(
-    EvaluationBatchSession[EvaluationT],
+    EvaluationBatchSession[EvaluationT_co],
     ABC,
-    Generic[EvaluationT],
+    Generic[EvaluationT_co],
 ):
     """Optional batch-session capability that exposes pending-aware state.
 
@@ -167,9 +167,9 @@ class PendingAwareBatchSession(
 
 
 class ResumableBatchSession(
-    EvaluationBatchSession[EvaluationT],
+    EvaluationBatchSession[EvaluationT_co],
     ABC,
-    Generic[EvaluationT],
+    Generic[EvaluationT_co],
 ):
     """Optional batch-session capability that can suspend and later resume.
 

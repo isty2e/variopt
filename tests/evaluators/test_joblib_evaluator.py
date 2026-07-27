@@ -1961,7 +1961,7 @@ class AsyncJoblibEvaluatorTests:
         def wait_for_batch() -> None:
             try:
                 capture.completion_groups = evaluator.wait(handle, timeout=5.0)
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(target=wait_for_batch, name="stale-cancel-waiter")
@@ -2013,7 +2013,7 @@ class AsyncJoblibEvaluatorTests:
         def wait_for_batch() -> None:
             try:
                 capture.completion_groups = evaluator.wait(handle, timeout=None)
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(target=wait_for_batch, name="empty-cancel-waiter")
@@ -2070,7 +2070,7 @@ class AsyncJoblibEvaluatorTests:
         def wait_for_batch() -> None:
             try:
                 capture.completion_groups = evaluator.wait(handle, timeout=5.0)
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(target=wait_for_batch, name="stale-completion-waiter")
@@ -2131,7 +2131,7 @@ class AsyncJoblibEvaluatorTests:
         def wait_for_batch() -> None:
             try:
                 capture.completion_groups = evaluator.wait(handle, timeout=5.0)
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(target=wait_for_batch, name="stale-generation-waiter")
@@ -2206,7 +2206,7 @@ class AsyncJoblibEvaluatorTests:
                     handle,
                     timeout=5.0,
                 )
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(target=wait_for_attempt_batch, name="stale-suspend-waiter")
@@ -2263,7 +2263,7 @@ class AsyncJoblibEvaluatorTests:
                     handle,
                     timeout=None,
                 )
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(
@@ -2323,7 +2323,7 @@ class AsyncJoblibEvaluatorTests:
                     handle,
                     timeout=5.0,
                 )
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(target=wait_for_attempt_batch, name="stale-failure-waiter")
@@ -2412,7 +2412,7 @@ class AsyncJoblibEvaluatorTests:
                     handle,
                     timeout=5.0,
                 )
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         waiter = Thread(
@@ -2689,7 +2689,7 @@ class AsyncJoblibEvaluatorTests:
         def suspend_batch() -> None:
             try:
                 capture.resume_handle = evaluator.suspend_batch(handle)
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         suspender = Thread(target=suspend_batch, name="cancel-during-suspend")
@@ -2747,7 +2747,7 @@ class AsyncJoblibEvaluatorTests:
         def suspend_attempt_batch() -> None:
             try:
                 capture.resume_handle = evaluator.suspend_attempt_batch(handle)
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 capture.exception = exception
 
         suspender = Thread(
@@ -3031,7 +3031,7 @@ class AsyncJoblibEvaluatorTests:
         def resume_once() -> None:
             try:
                 resume_results.put(evaluator.resume_attempt_session(resume_handle))
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 resume_results.put(exception)
 
         worker = Thread(target=resume_once, name="attempt-resume-cancel-test")
@@ -3078,7 +3078,7 @@ class AsyncJoblibEvaluatorTests:
         def resume_once() -> None:
             try:
                 resume_results.put(evaluator.resume_attempt_session(resume_handle))
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 resume_results.put(exception)
 
         worker = Thread(target=resume_once, name="attempt-resume-claim-test")
@@ -3093,7 +3093,9 @@ class AsyncJoblibEvaluatorTests:
         assert not worker.is_alive()
         result = resume_results.get(timeout=5.0)
         if isinstance(result, BaseException):
-            raise AssertionError("first resume should complete") from result
+            raise AssertionError(  # noqa: TRY004 - unexpected thread outcome
+                "first resume should complete"
+            ) from result
 
         resumed_session = cast(
             EvaluationBatchSession[EvaluationAttemptBatch[int, Observation[int]]],
@@ -3240,7 +3242,7 @@ class AsyncJoblibEvaluatorTests:
         def resume_once() -> None:
             try:
                 resume_results.put(evaluator.resume_session(resume_handle))
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 resume_results.put(exception)
 
         worker = Thread(target=resume_once, name="resume-cancel-test")
@@ -3284,7 +3286,7 @@ class AsyncJoblibEvaluatorTests:
         def resume_once() -> None:
             try:
                 resume_results.put(evaluator.resume_session(resume_handle))
-            except BaseException as exception:
+            except BaseException as exception:  # noqa: BLE001 - capture thread outcome
                 resume_results.put(exception)
 
         worker = Thread(target=resume_once, name="resume-claim-test")
@@ -3299,7 +3301,9 @@ class AsyncJoblibEvaluatorTests:
         assert not worker.is_alive()
         result = resume_results.get(timeout=5.0)
         if isinstance(result, BaseException):
-            raise AssertionError("first resume should complete") from result
+            raise AssertionError(  # noqa: TRY004 - unexpected thread outcome
+                "first resume should complete"
+            ) from result
 
         resumed_session = cast(
             EvaluationBatchSession[

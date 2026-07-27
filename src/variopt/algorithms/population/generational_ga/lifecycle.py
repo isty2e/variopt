@@ -29,7 +29,10 @@ from .state import (
     GenerationalGAVariant,
 )
 
-ValidatedCandidateT = TypeVar("ValidatedCandidateT", contravariant=True)
+ValidatedCandidateT_contra = TypeVar(
+    "ValidatedCandidateT_contra",
+    contravariant=True,
+)
 
 GENERATIONAL_GA_EXECUTION_MODELS = frozenset(
     {
@@ -40,10 +43,10 @@ GENERATIONAL_GA_EXECUTION_MODELS = frozenset(
 )
 
 
-class GenerationalGACandidateValidator(Protocol[ValidatedCandidateT]):
+class GenerationalGACandidateValidator(Protocol[ValidatedCandidateT_contra]):
     """Minimal candidate-validation contract required by GA lifecycle code."""
 
-    def validate(self, candidate: ValidatedCandidateT) -> None:
+    def validate(self, candidate: ValidatedCandidateT_contra) -> None:
         """Validate one canonical candidate."""
         ...
 

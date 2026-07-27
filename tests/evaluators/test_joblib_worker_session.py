@@ -329,20 +329,22 @@ class JoblibWorkerSessionTests:
         first_problem = make_problem(OffsetObjective(10.0))
         second_problem = make_problem(OffsetObjective(100.0))
 
-        with evaluator._open_attempt_run_scope(first_problem) as first_session:
-            with evaluator._open_attempt_run_scope(second_problem) as second_session:
-                first_before = first_session.evaluate_attempts(
-                    first_problem,
-                    make_requests(1, 2, 3, 4),
-                )
-                second = second_session.evaluate_attempts(
-                    second_problem,
-                    make_requests(1, 2, 3, 4),
-                )
-                first_after = first_session.evaluate_attempts(
-                    first_problem,
-                    make_requests(5, 6, 7, 8),
-                )
+        with (
+            evaluator._open_attempt_run_scope(first_problem) as first_session,
+            evaluator._open_attempt_run_scope(second_problem) as second_session,
+        ):
+            first_before = first_session.evaluate_attempts(
+                first_problem,
+                make_requests(1, 2, 3, 4),
+            )
+            second = second_session.evaluate_attempts(
+                second_problem,
+                make_requests(1, 2, 3, 4),
+            )
+            first_after = first_session.evaluate_attempts(
+                first_problem,
+                make_requests(5, 6, 7, 8),
+            )
 
         assert successful_values(first_before) == (11.0, 12.0, 13.0, 14.0)
         assert successful_values(second) == (101.0, 102.0, 103.0, 104.0)
@@ -464,10 +466,9 @@ class JoblibWorkerSessionTests:
             n_jobs=2,
         )
 
-        with pytest.raises(RuntimeError, match="sentinel"):
-            with session:
-                assert len(tuple(tmp_path.iterdir())) == 1
-                raise RuntimeError("sentinel")
+        with pytest.raises(RuntimeError, match="sentinel"), session:
+            assert len(tuple(tmp_path.iterdir())) == 1
+            raise RuntimeError("sentinel")
 
         assert tuple(tmp_path.iterdir()) == ()
 
@@ -534,9 +535,8 @@ class JoblibWorkerSessionTests:
             n_jobs=1,
             backend="loky",
         )
-        with session:
-            with pytest.raises(ValueError, match="bound Problem"):
-                _ = session.evaluate_attempts(second_problem, make_requests(1))
+        with session, pytest.raises(ValueError, match="bound Problem"):
+            _ = session.evaluate_attempts(second_problem, make_requests(1))
 
         with pytest.raises(RuntimeError, match="not active"):
             _ = session.evaluate_attempts(first_problem, make_requests(1))

@@ -328,7 +328,7 @@ def materialize_generation(
         }
         family_keys = tuple(
             sorted(
-                set((*mutation_weights_by_key.keys(), *family_stats_by_key.keys())),
+                {*mutation_weights_by_key.keys(), *family_stats_by_key.keys()},
             )
         )
         return tuple(

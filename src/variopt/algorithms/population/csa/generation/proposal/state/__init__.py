@@ -30,8 +30,8 @@ __all__ = [
     "PlannedProposalAttribution",
     "PlannedProposalProvenance",
     "ProposalAttribution",
-    "ProposalProvenance",
     "ProposalFamilyStat",
     "ProposalLeafStat",
     "ProposalNumericSubspaceCovarianceStat",
+    "ProposalProvenance",
 ]

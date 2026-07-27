@@ -23,7 +23,7 @@ def _normalize_leaf_association_source(value: str) -> CSAProposalLeafAssociation
     raise ValueError(msg)
 
 
-def _normalize_survival_efficiency_share(value: int | float) -> float:
+def _normalize_survival_efficiency_share(value: float) -> float:
     if isinstance(value, bool):
         msg = "survival_efficiency_share must be numeric"
         raise TypeError(msg)

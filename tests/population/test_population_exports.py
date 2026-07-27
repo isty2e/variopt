@@ -92,7 +92,9 @@ class PopulationFacadeExportTests:
     """Lock the canonical population-family facade surface."""
 
     def test_population_facade_reexports_population_family_entry_points(self) -> None:
-        assert tuple(population_algorithms.__all__) == EXPECTED_POPULATION_ALL
+        assert frozenset(population_algorithms.__all__) == frozenset(
+            EXPECTED_POPULATION_ALL
+        )
         assert population_algorithms.CSAOptimizer is csa_algorithms.CSAOptimizer
         assert population_algorithms.CSAProfile is csa_algorithms.CSAProfile
         assert population_algorithms.DEProfile is de_algorithms.DEProfile
@@ -168,7 +170,9 @@ class PopulationFacadeExportTests:
         assert all(not hasattr(population_algorithms, name) for name in internal_names)
 
     def test_root_algorithms_facade_remains_convenience_reexport(self) -> None:
-        assert tuple(root_algorithms.__all__) == EXPECTED_ROOT_ALGORITHMS_ALL
+        assert frozenset(root_algorithms.__all__) == frozenset(
+            EXPECTED_ROOT_ALGORITHMS_ALL
+        )
         assert root_algorithms.DEProfile is population_algorithms.DEProfile
         assert (
             root_algorithms.DifferentialEvolutionOptimizer
@@ -207,7 +211,7 @@ class CSAFacadeExportTests:
     """Lock the advanced CSA policy facade surface."""
 
     def test_csa_facade_reexports_cutoff_contracts(self) -> None:
-        assert tuple(csa_algorithms.__all__) == EXPECTED_CSA_ALL
+        assert frozenset(csa_algorithms.__all__) == frozenset(EXPECTED_CSA_ALL)
         assert csa_algorithms.CSACutoffObservation is csa_cutoff.CSACutoffObservation
         assert csa_algorithms.CSACutoffSchedule is csa_cutoff.CSACutoffSchedule
         assert (

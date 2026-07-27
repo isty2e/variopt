@@ -47,7 +47,7 @@ def collect_base_import_failures() -> tuple[ImportFailure, ...]:
     for module_name in BASE_INSTALL_MODULES:
         try:
             _ = importlib.import_module(module_name)
-        except Exception as exception:  # pragma: no cover - exercised in smoke use
+        except Exception as exception:  # noqa: BLE001 - collect import failures
             failures.append(
                 ImportFailure(
                     target=module_name,
@@ -59,7 +59,7 @@ def collect_base_import_failures() -> tuple[ImportFailure, ...]:
         try:
             module = importlib.import_module(module_name)
             _ = cast(object, getattr(module, symbol_name))
-        except Exception as exception:  # pragma: no cover - exercised in smoke use
+        except Exception as exception:  # noqa: BLE001 - collect import failures
             failures.append(
                 ImportFailure(
                     target=f"{module_name}.{symbol_name}",

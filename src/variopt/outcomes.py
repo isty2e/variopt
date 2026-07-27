@@ -269,7 +269,7 @@ class EvaluationOutcome(FrozenGenericSlotsCompat, Generic[CandidateT, OutcomeRec
 
     def __post_init__(
         self,
-        candidate_equal: CandidateEquality[CandidateT] | None = None,
+        candidate_equal: CandidateEquality[CandidateT] | None,
     ) -> None:
         """Validate outcome accounting metadata after dataclass construction."""
         effective_candidate_equal = candidate_equal
@@ -345,8 +345,8 @@ def evaluation_outcome_setstate(
             )
 
 
-setattr(EvaluationOutcome, "__getstate__", evaluation_outcome_getstate)
-setattr(EvaluationOutcome, "__setstate__", evaluation_outcome_setstate)
+type.__setattr__(EvaluationOutcome, "__getstate__", evaluation_outcome_getstate)
+type.__setattr__(EvaluationOutcome, "__setstate__", evaluation_outcome_setstate)
 
 del evaluation_outcome_getstate
 del evaluation_outcome_setstate

@@ -10,6 +10,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- Exact-async and stale-async study entry points now raise `TypeError`, rather
+  than `ValueError`, when configured with a kernel that does not satisfy their
+  required `DirectKernel` contract.
 - CSA cutoff schedule construction now rejects non-finite numeric settings and
   boolean values supplied where numeric counts or magnitudes are required, and
   direct reduction rejects malformed runtime cutoff pairs. Accepted numeric

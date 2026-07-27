@@ -647,10 +647,7 @@ def trace_value_for_records(
     best_batch_value: float | None = None
     best_batch_score: float | None = None
     for record in records:
-        if isinstance(record, ObservationPayload):
-            score = record.score
-            value = record.value
-        elif isinstance(record, Observation):
+        if isinstance(record, (ObservationPayload, Observation)):
             score = record.score
             value = record.value
         else:

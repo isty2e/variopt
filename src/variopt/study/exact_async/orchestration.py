@@ -155,7 +155,7 @@ def open_exact_async_step_session(
     if not isinstance(batch_session, ResumableBatchSession):
         try:
             batch_session.cancel()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - preserve the contract failure
             # Cleanup is best-effort; preserve the validation failure below.
             pass
         msg = "resumable async evaluator returned a non-resumable batch session"
@@ -206,7 +206,7 @@ def resume_exact_async_step_session(
 
     Raises
     ------
-    ValueError
+    TypeError
         If the study is not using :class:`DirectKernel`.
     """
     require_resumable_async_evaluator(study)
@@ -215,7 +215,7 @@ def resume_exact_async_step_session(
             "study-level resumable exact_async orchestration currently "
             "requires DirectKernel"
         )
-        raise ValueError(msg)
+        raise TypeError(msg)
 
     if not supports_resumable_attempt_batch_sessions(study.evaluator):
         msg = (

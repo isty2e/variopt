@@ -761,7 +761,7 @@ class StudyExactAsyncTests:
         )
 
         with pytest.raises(
-            ValueError,
+            TypeError,
             match="study-level resumable exact_async orchestration currently requires DirectKernel",
         ):
             _ = study.open_exact_async_step_session(

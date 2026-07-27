@@ -516,7 +516,6 @@ def normalize_random_state(random_state: None = None) -> np.random.RandomState:
     numpy.random.RandomState
         Fresh local random-state instance.
     """
-    ...
 
 
 @overload
@@ -533,7 +532,6 @@ def normalize_random_state(random_state: int) -> np.random.RandomState:
     numpy.random.RandomState
         Deterministically initialized local random-state instance.
     """
-    ...
 
 
 def normalize_random_state(random_state: RandomSeed = None) -> np.random.RandomState:

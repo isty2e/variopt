@@ -146,4 +146,4 @@ class RootFacadeExportTests:
 
         for import_statement in removed_imports:
             with pytest.raises(ImportError):
-                exec(import_statement, {})
+                exec(import_statement, {})  # noqa: S102 - exercise import statements

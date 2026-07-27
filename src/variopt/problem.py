@@ -32,7 +32,7 @@ InteractionProblemRecordT = TypeVar("InteractionProblemRecordT")
 
 @dataclass(frozen=True, slots=True)
 class _ProtocolObjectiveCompatibilityView(
-    FrozenGenericSlotsCompat, Generic[CandidateT], Objective[CandidateT]
+    FrozenGenericSlotsCompat, Objective[CandidateT], Generic[CandidateT]
 ):
     """Scalar objective view derived from an observation protocol.
 
@@ -72,8 +72,8 @@ class _ProtocolObjectiveCompatibilityView(
 @dataclass(frozen=True, slots=True)
 class _ObservationProtocolEvaluationProtocolAdapter(
     FrozenGenericSlotsCompat,
-    Generic[CandidateT],
     EvaluationProtocol[CandidateT, ObservationPayload],
+    Generic[CandidateT],
 ):
     """Direction-free evaluation view over a scalar observation protocol.
 

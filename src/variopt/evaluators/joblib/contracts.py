@@ -22,7 +22,7 @@ JoblibEvaluationPayloadT = DefaultTypeVar(
     default=ObservationPayload,
 )
 ListResultT = TypeVar("ListResultT")
-YieldResultT = TypeVar("YieldResultT", covariant=True)
+YieldResultT_co = TypeVar("YieldResultT_co", covariant=True)
 
 
 class JoblibDelayedFactory(Protocol):
@@ -69,7 +69,7 @@ class JoblibListParallelRunner(Protocol, Generic[ListResultT]):
         ...
 
 
-class JoblibGeneratorParallelRunner(Protocol, Generic[YieldResultT]):
+class JoblibGeneratorParallelRunner(Protocol, Generic[YieldResultT_co]):
     """Typed view of generator-returning ``joblib.Parallel`` calls.
 
     Notes
@@ -81,7 +81,7 @@ class JoblibGeneratorParallelRunner(Protocol, Generic[YieldResultT]):
     def __call__(
         self,
         tasks: Iterable[object],
-    ) -> Generator[YieldResultT, None, None]:
+    ) -> Generator[YieldResultT_co, None, None]:
         """Execute one task iterable and stream results."""
         ...
 
@@ -106,7 +106,7 @@ class JoblibListParallelFactory(Protocol, Generic[ListResultT]):
         ...
 
 
-class JoblibGeneratorParallelFactory(Protocol, Generic[YieldResultT]):
+class JoblibGeneratorParallelFactory(Protocol, Generic[YieldResultT_co]):
     """Typed view of generator-returning ``joblib.Parallel`` construction.
 
     Notes
@@ -121,7 +121,7 @@ class JoblibGeneratorParallelFactory(Protocol, Generic[YieldResultT]):
         n_jobs: int,
         backend: Literal["loky", "threading"],
         return_as: Literal["generator_unordered"],
-    ) -> JoblibGeneratorParallelRunner[YieldResultT]:
+    ) -> JoblibGeneratorParallelRunner[YieldResultT_co]:
         """Construct one unordered generator joblib runner."""
         ...
 

@@ -198,7 +198,7 @@ class JoblibWorkerSession(
         self._entered = True
         parallel_config_factory = cast(
             JoblibParallelConfigurationFactory,
-            getattr(joblib, "parallel_config"),
+            joblib.parallel_config,
         )
         if self._worker_idle_timeout is not None:
             parallel_configuration = parallel_config_factory(
@@ -212,7 +212,7 @@ class JoblibWorkerSession(
             _ = resource_stack.enter_context(parallel_configuration)
             effective_jobs = cast(
                 JoblibEffectiveJobs,
-                getattr(joblib, "effective_n_jobs"),
+                joblib.effective_n_jobs,
             )(self._n_jobs)
             if effective_jobs <= 1:
                 resource_stack.close()
@@ -229,7 +229,7 @@ class JoblibWorkerSession(
 
             parallel_factory = cast(
                 JoblibListParallelFactory[object],
-                getattr(joblib, "Parallel"),
+                joblib.Parallel,
             )
             self._parallel_runner = resource_stack.enter_context(
                 parallel_factory(n_jobs=self._n_jobs)
@@ -295,7 +295,7 @@ class JoblibWorkerSession(
 
         delayed_factory = cast(
             JoblibDelayedFactory,
-            getattr(joblib, "delayed"),
+            joblib.delayed,
         )
         transport = self._transport
         if transport is None:
@@ -345,7 +345,7 @@ class JoblibWorkerSession(
         else:
             delayed_factory = cast(
                 JoblibDelayedFactory,
-                getattr(joblib, "delayed"),
+                joblib.delayed,
             )
             transport = self._transport
             if transport is None:

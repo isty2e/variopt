@@ -121,7 +121,7 @@ class ProblemContractsTests:
         )
 
         with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(problem, "name", "other")
+            problem.__setattr__("name", "other")
 
     def test_problem_equality_uses_composite_space_value_equality(self) -> None:
         objective = TupleLengthObjective()

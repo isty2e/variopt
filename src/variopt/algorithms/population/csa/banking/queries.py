@@ -15,10 +15,10 @@ from .....spaces.types import SpaceCandidateValue
 from .....typevars import CandidateT
 from .update.policy import CSANicheQualityPolicy
 
-EntryCandidateT = TypeVar("EntryCandidateT", covariant=True)
+EntryCandidateT_co = TypeVar("EntryCandidateT_co", covariant=True)
 
 
-class CandidateEntry(Protocol[EntryCandidateT]):
+class CandidateEntry(Protocol[EntryCandidateT_co]):
     """Minimal entry view needed by bank update queries.
 
     Notes
@@ -28,7 +28,7 @@ class CandidateEntry(Protocol[EntryCandidateT]):
     """
 
     @property
-    def candidate(self) -> EntryCandidateT:
+    def candidate(self) -> EntryCandidateT_co:
         """Return the candidate stored by the entry.
 
         Returns
@@ -830,9 +830,7 @@ def best_niche_scores(
             if distance_workspace.distance(left_index, right_index) < distance_cutoff:
                 left_score = base_scores[left_index]
                 right_score = base_scores[right_index]
-                if right_score < best_scores[left_index]:
-                    best_scores[left_index] = right_score
-                if left_score < best_scores[right_index]:
-                    best_scores[right_index] = left_score
+                best_scores[left_index] = min(best_scores[left_index], right_score)
+                best_scores[right_index] = min(best_scores[right_index], left_score)
 
     return tuple(best_scores)

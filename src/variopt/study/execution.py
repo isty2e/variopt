@@ -393,7 +393,7 @@ def _optimize_direct_scalar_sequential(
                     evaluation_budget.consume()
                 try:
                     value = objective.evaluate(candidate)
-                except Exception as exception:
+                except Exception as exception:  # noqa: BLE001 - capture objective failures
                     batch_attempt_slots.append(
                         EvaluationFailure[CandidateT].from_exception(
                             request=request,
@@ -424,7 +424,7 @@ def _optimize_direct_scalar_sequential(
             )
         except EvaluationBudgetExhausted:
             raise
-        except Exception as exception:
+        except Exception as exception:  # noqa: BLE001 - wrap execution failures
             run_history.raise_run_execution_failed(
                 cause=exception,
                 evaluation_count=_current_evaluation_count(
@@ -446,7 +446,7 @@ def _optimize_direct_scalar_sequential(
         run_history.append_step(step)
         try:
             next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
-        except Exception as exception:
+        except Exception as exception:  # noqa: BLE001 - wrap run-method failures
             run_history.raise_run_execution_failed(
                 cause=exception,
                 state=next_state,
@@ -915,7 +915,7 @@ def run(
                         safe_snapshot.state,
                     )
                 raise
-            except Exception as exception:
+            except Exception as exception:  # noqa: BLE001 - wrap execution failures
                 run_history.raise_run_execution_failed(
                     cause=exception,
                     evaluation_count=_current_evaluation_count(
@@ -940,7 +940,7 @@ def run(
                     step_feedback.post_ask_state,
                     step_feedback.attempts,
                 )
-            except Exception as exception:
+            except Exception as exception:  # noqa: BLE001 - wrap run-method failures
                 run_history.raise_run_execution_failed(
                     cause=exception,
                     state=step_feedback.post_ask_state,

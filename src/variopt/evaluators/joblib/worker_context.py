@@ -120,7 +120,7 @@ class JoblibWorkerProblemRegistry:
             problem = self._problem
             if not isinstance(problem, Problem):
                 msg = "worker-session problem registry is not initialized"
-                raise RuntimeError(msg)
+                raise RuntimeError(msg)  # noqa: TRY004 - invalid worker state
             return cast(
                 Problem[object, CandidateT, JoblibEvaluationPayloadT],
                 problem,

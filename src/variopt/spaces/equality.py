@@ -6,19 +6,19 @@ from typing_extensions import TypeVar
 
 from ..typevars import CandidateT
 
-CandidateEqualityCandidateT = TypeVar(
-    "CandidateEqualityCandidateT",
+CandidateEqualityCandidateT_contra = TypeVar(
+    "CandidateEqualityCandidateT_contra",
     contravariant=True,
 )
 
 
-class CandidateEquality(Protocol[CandidateEqualityCandidateT]):
+class CandidateEquality(Protocol[CandidateEqualityCandidateT_contra]):
     """Callable contract for search-space-owned candidate equality."""
 
     def __call__(
         self,
-        left_candidate: CandidateEqualityCandidateT,
-        right_candidate: CandidateEqualityCandidateT,
+        left_candidate: CandidateEqualityCandidateT_contra,
+        right_candidate: CandidateEqualityCandidateT_contra,
     ) -> bool:
         """Return whether two candidates are equal under the space contract."""
         ...

@@ -118,11 +118,11 @@ class JoblibEvaluator(
             JoblibListParallelFactory[
                 EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]
             ],
-            getattr(joblib, "Parallel"),
+            joblib.Parallel,
         )
         delayed_factory = cast(
             JoblibDelayedFactory,
-            getattr(joblib, "delayed"),
+            joblib.delayed,
         )
         outcomes = parallel_factory(
             n_jobs=self.n_jobs,
@@ -176,11 +176,11 @@ class JoblibEvaluator(
             JoblibListParallelFactory[
                 EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             ],
-            getattr(joblib, "Parallel"),
+            joblib.Parallel,
         )
         delayed_factory = cast(
             JoblibDelayedFactory,
-            getattr(joblib, "delayed"),
+            joblib.delayed,
         )
         attempts = parallel_factory(
             n_jobs=self.n_jobs,
