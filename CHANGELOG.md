@@ -235,6 +235,11 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Fixed
 
+- Checkpoint-safe direct scalar `Study.optimize(...)` runs now retain the direct
+  execution path while preserving generic rollback, failure projection, and
+  budget-accounting semantics. Exact `DirectKernel` runs no longer compute
+  unobservable proposal kernel hints, and scalar normalization failures are
+  recorded through the same attempt boundary as generic sequential execution.
 - CSA diversity-aware seed selection now applies its average-distance
   eligibility threshold to every remaining candidate and remains defined for
   large finite distances. Weighted partner-selection documentation now

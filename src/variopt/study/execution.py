@@ -510,6 +510,7 @@ def _optimize_direct_scalar_sequential(
     execution_model: ExecutionModel,
     count_evaluation_cost: bool,
     initial_state: RunMethodStateT | None,
+    stop_at_checkpoint_boundary: bool,
 ) -> tuple[RunResult[CandidateT], RunMethodStateT]:
     if max_evaluations < 0:
         msg = "max_evaluations must be non-negative"
@@ -539,6 +540,10 @@ def _optimize_direct_scalar_sequential(
         if initial_state is None
         else initial_state
     )
+    safe_snapshot: CheckpointSafeRunSnapshot[RunMethodStateT] | None = None
+    unsafe_since_safe_snapshot = False
+    if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
+        safe_snapshot = run_history.checkpoint_snapshot(state)
 
     while _current_remaining_budget(
         evaluation_budget=evaluation_budget,
@@ -562,18 +567,6 @@ def _optimize_direct_scalar_sequential(
                 msg = "run_method returned more proposals than requested"
                 raise ValueError(msg)
 
-            # DirectKernel ignores hint payloads, but the generic path still
-            # validates alignment when it builds ProposalBatchQuery.
-            proposal_kernel_hints = study.run_method.proposal_kernel_hints(
-                next_state,
-                proposals,
-            )
-            if proposal_kernel_hints is not None and (
-                len(proposal_kernel_hints) != len(proposals)
-            ):
-                msg = "proposal_kernel_hints must align one-to-one with proposals"
-                raise ValueError(msg)
-
             proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
                 next_state,
                 proposals,
@@ -588,6 +581,8 @@ def _optimize_direct_scalar_sequential(
                 EvaluationSuccess[CandidateT, Observation[CandidateT]]
                 | EvaluationFailure[CandidateT]
             ] = []
+            if evaluation_budget is not None:
+                evaluation_budget.consume(len(proposals))
             for index, proposal in enumerate(proposals):
                 candidate = proposal.candidate
                 study.problem.space.validate(candidate)
@@ -600,10 +595,14 @@ def _optimize_direct_scalar_sequential(
                     proposal=proposal,
                     proposal_evaluation_spec=proposal_evaluation_spec,
                 )
-                if evaluation_budget is not None:
-                    evaluation_budget.consume()
                 try:
                     value = objective.evaluate(candidate)
+                    observation = Observation.from_objective_value(
+                        request=request,
+                        candidate=candidate,
+                        value=value,
+                        direction=study.problem.direction,
+                    )
                 except Exception as exception:  # noqa: BLE001 - capture objective failures
                     batch_attempt_slots.append(
                         EvaluationFailure[CandidateT].from_exception(
@@ -613,12 +612,6 @@ def _optimize_direct_scalar_sequential(
                     )
                     continue
 
-                observation = Observation.from_objective_value(
-                    request=request,
-                    candidate=candidate,
-                    value=value,
-                    direction=study.problem.direction,
-                )
                 batch_attempt_slots.append(
                     EvaluationSuccess[CandidateT, Observation[CandidateT]](
                         request=request,
@@ -634,6 +627,18 @@ def _optimize_direct_scalar_sequential(
                 attempts=tuple(batch_attempt_slots),
             )
         except EvaluationBudgetExhausted:
+            if stop_at_checkpoint_boundary and safe_snapshot is not None:
+                checkpoint_report = run_history.checkpoint_report(
+                    safe_snapshot,
+                    candidate_equal=study.problem.space.candidates_equal,
+                )
+                return (
+                    materialize_scalar_run_result(
+                        checkpoint_report,
+                        candidate_equal=study.problem.space.candidates_equal,
+                    ),
+                    safe_snapshot.state,
+                )
             raise
         except Exception as exception:  # noqa: BLE001 - wrap execution failures
             run_history.raise_run_execution_failed(
@@ -644,7 +649,7 @@ def _optimize_direct_scalar_sequential(
                     record_budget_remaining=record_budget_remaining,
                 ),
                 state=state,
-                safe_snapshot=None,
+                safe_snapshot=safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             )
         step = StudyAssimilatedStep[
@@ -661,13 +666,41 @@ def _optimize_direct_scalar_sequential(
             run_history.raise_run_execution_failed(
                 cause=exception,
                 state=next_state,
-                safe_snapshot=None,
+                safe_snapshot=safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             )
         state = next_run_state
         observations.extend(step.records)
         if evaluation_budget is None:
             record_budget_remaining -= batch_attempts.attempt_count
+        if stop_at_checkpoint_boundary:
+            if study.run_method.is_checkpoint_safe_state(state):
+                safe_snapshot = run_history.checkpoint_snapshot(state)
+                if unsafe_since_safe_snapshot:
+                    break
+                unsafe_since_safe_snapshot = False
+            else:
+                unsafe_since_safe_snapshot = True
+
+    if stop_at_checkpoint_boundary and not study.run_method.is_checkpoint_safe_state(
+        state
+    ):
+        if safe_snapshot is None:
+            msg = (
+                "run did not reach a checkpoint-safe state within the evaluation budget"
+            )
+            raise RuntimeError(msg)
+        checkpoint_report = run_history.checkpoint_report(
+            safe_snapshot,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
+        return (
+            materialize_scalar_run_result(
+                checkpoint_report,
+                candidate_equal=study.problem.space.candidates_equal,
+            ),
+            safe_snapshot.state,
+        )
 
     return (
         RunResult[CandidateT].from_observations(
@@ -1320,7 +1353,7 @@ def optimize(
     TypeError
         If the study does not emit scalar :class:`Observation` records.
     """
-    if not stop_at_checkpoint_boundary and _supports_direct_scalar_sequential_path(
+    if _supports_direct_scalar_sequential_path(
         study,
         execution_model=execution_model,
     ):
@@ -1331,6 +1364,7 @@ def optimize(
             execution_model=execution_model,
             count_evaluation_cost=count_evaluation_cost,
             initial_state=initial_state,
+            stop_at_checkpoint_boundary=stop_at_checkpoint_boundary,
         )
 
     run_report, state = run(
