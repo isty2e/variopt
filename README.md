@@ -80,6 +80,11 @@ For MPI-backed batch execution, install the optional mpi extra
 (`pip install "variopt[mpi]"`) and use
 [`MpiEvaluator`](docs/reference/api/evaluators.md).
 
+Synchronous `SequentialEvaluator` and `JoblibEvaluator` can also execute
+eligible bounded local-search episodes per proposal. See
+[Evaluator-Owned Local-Search Episodes](docs/guides/request-local-episodes.md)
+for dispatch, hard-budget, failure, reproducibility, and performance guidance.
+
 ## Documentation
 
 The full documentation is organized as:
@@ -104,6 +109,7 @@ The full documentation is organized as:
 | Pick an optimizer family | [Choose an Optimizer](docs/guides/choose-an-optimizer.md) |
 | CSA preset and profile customization | [Customize an Optimizer Profile](docs/guides/customize-optimizer-profile.md) |
 | Local-search kernel guidance | [Local Optimization Methods](docs/guides/local-optimization-methods.md) |
+| Parallel bounded local search | [Evaluator-Owned Local-Search Episodes](docs/guides/request-local-episodes.md) |
 | Candidate refinement provenance | [Candidate Refinement](docs/concepts/candidate-refinement.md) |
 | Non-scalar / multi-objective patterns | [Canonical Usage Patterns](docs/guides/canonical-usage-patterns.md) |
 | Public API reference | [API Surface](docs/reference/api.md) |

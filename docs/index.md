@@ -46,6 +46,7 @@ print(result.best_observation.candidate.as_dict())  # {'x': ..., 'y': ...}
 | End-to-end walkthrough | [First Optimization Run](tutorials/first-optimization.md) |
 | Structured spaces tutorial | [Structured Spaces](tutorials/structured-spaces.md) |
 | Multi-objective / non-scalar problems | [Canonical Usage Patterns](guides/canonical-usage-patterns.md) |
+| Parallel bounded local search | [Evaluator-Owned Local-Search Episodes](guides/request-local-episodes.md) |
 | Public API reference | [Reference](reference/index.md) |
 
 ## What's Included

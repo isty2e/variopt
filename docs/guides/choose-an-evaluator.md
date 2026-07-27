@@ -41,6 +41,23 @@ labels.
   recommendation, because the built-in population optimizers do not advertise
   `stale_async`
 
+## Evaluator-Owned Local-Search Episodes
+
+`SequentialEvaluator` and synchronous `JoblibEvaluator` can own complete
+bounded local-search episodes. This differs from ordinary batch evaluation:
+one worker runs the serial inner objective calls for one proposal and returns
+one ordered top-level attempt.
+
+Use `JoblibEvaluator` for this path when a batch contains multiple independent
+episodes and each episode is expensive enough to amortize scheduling or process
+transport. Use `SequentialEvaluator` while validating semantics or when work is
+too cheap. MPI does not currently own these episodes, and the study-level
+exact-async and stale-async paths require `DirectKernel`.
+
+See [Evaluator-Owned Local-Search Episodes](request-local-episodes.md) for
+configuration examples, eligibility and fallback rules, hard-budget accounting,
+failure behavior, reproducibility, and measured performance guidance.
+
 ## Reusing a Problem in Joblib Workers
 
 `JoblibEvaluator` sends the problem with each batch by default. If the problem

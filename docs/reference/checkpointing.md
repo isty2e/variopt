@@ -131,6 +131,12 @@ The checkpoint intentionally does not capture:
 - trace or telemetry reducer state
 - derived caches that can be recomputed from authoritative state
 
+Evaluator-owned request-local local-search episodes fall under the live-worker
+and in-flight-batch exclusions above. Resuming creates fresh evaluator runtime
+state and derives later proposal-local random streams from the restored
+optimizer state. See
+[Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+
 When a CSA checkpoint is restored, the optimizer state resumes with no
 accumulated CSA trace reducer state. This does not affect exact optimization
 continuation: tracing is diagnostic, while the checkpoint stores the

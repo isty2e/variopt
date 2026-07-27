@@ -20,6 +20,11 @@ Local-search components do not own long-lived search memory across the whole
 run. They are the bounded episode layer that a run method or higher-level
 workflow can invoke explicitly.
 
+Kernel ownership and execution placement are distinct. The kernel defines the
+episode, while synchronous study orchestration may place explicitly eligible
+bounded episodes inside `SequentialEvaluator` or `JoblibEvaluator`. Optimizer
+state and assimilation remain coordinator-owned in either case.
+
 Kernels return `EvaluationAttemptBatch` values. Successful
 `EvaluationSuccess` attempts may carry `CandidateRefinement` provenance when
 the kernel changes a candidate before evaluation. A successful kernel episode
@@ -31,6 +36,9 @@ Acceptance into an optimizer archive is still decided later by the run method.
 
 For the current detailed method note, see
 [local-optimization-methods.md](../guides/local-optimization-methods.md).
+
+For execution placement, budgeting, failure, and reproducibility guarantees,
+see [Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
 
 For the execution provenance vocabulary, see
 [Candidate Refinement](candidate-refinement.md).

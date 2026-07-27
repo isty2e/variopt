@@ -23,6 +23,13 @@ Execution models answer:
 
 That is why `exact_async` and `stale_async` are not mere evaluator options.
 
+Request-local local-search episode placement is another independent axis. In
+`sequential` and `sync_batch`, a capable evaluator may execute one bounded
+kernel episode per proposal while `Study` still preserves the execution
+model's assimilation law. This placement is not available in the current
+study-level exact-async or stale-async paths, which require `DirectKernel`.
+See [Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+
 ## What The Built-In Surface Supports Today
 
 - `sequential`
