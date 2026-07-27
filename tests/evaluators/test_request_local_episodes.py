@@ -4,11 +4,16 @@ import pickle
 from _thread import LockType
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from threading import Lock
+from os import _exit, getpid
+from pathlib import Path
+from threading import Barrier, Lock, current_thread
+from time import sleep
+from typing import Literal
 
 import pytest
 from typing_extensions import override
 
+import variopt.evaluators.joblib.sync as joblib_sync
 from variopt import IntegerSpace, Objective, Problem
 from variopt.artifacts import (
     CandidateRefinement,
@@ -19,11 +24,12 @@ from variopt.artifacts import (
     ObservationPayload,
     Proposal,
 )
-from variopt.evaluators import SequentialEvaluator
+from variopt.evaluators import JoblibEvaluator, SequentialEvaluator
 from variopt.evaluators.episodes import (
     BoundedRequestLocalEvaluationRunner,
     RequestLocalEpisodeEvaluator,
     execute_request_local_episode,
+    ordered_request_local_episode_attempts,
 )
 from variopt.execution import (
     EvaluationBudgetExhausted,
@@ -71,6 +77,75 @@ class InterruptingObjective(Objective[int]):
     def evaluate(self, candidate: int) -> float:
         _ = candidate
         raise KeyboardInterrupt
+
+
+class ProcessIdObjective(Objective[int]):
+    """Objective that identifies the process executing the request."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        _ = candidate
+        return float(getpid())
+
+
+class DelayedEpisodeObjective(Objective[int]):
+    """Objective that makes lower candidates finish later."""
+
+    def __init__(self) -> None:
+        self.completion_order: list[int] = []
+        self.lock = Lock()
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        if candidate == 1:
+            sleep(0.05)
+        with self.lock:
+            self.completion_order.append(candidate)
+        return float(candidate * candidate)
+
+
+class ThreadRecordingObjective(Objective[int]):
+    """Thread-safe objective that records coordinator-visible worker calls."""
+
+    def __init__(self, barrier: Barrier | None = None) -> None:
+        self.barrier = barrier
+        self.calling_thread_names: list[str] = []
+        self.lock = Lock()
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        barrier = self.barrier
+        if barrier is not None:
+            _ = barrier.wait(timeout=5.0)
+        with self.lock:
+            self.calling_thread_names.append(current_thread().name)
+        return float(candidate * candidate)
+
+
+class LockedObjective(Objective[int]):
+    """Objective carrying a nonserializable synchronization primitive."""
+
+    def __init__(self) -> None:
+        self.lock = Lock()
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        with self.lock:
+            return float(candidate * candidate)
+
+
+class TerminatingObjective(Objective[int]):
+    """Objective that terminates only its isolated worker process."""
+
+    def __init__(self, marker_path: Path) -> None:
+        self.marker_path = marker_path
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        _ = candidate
+        with self.marker_path.open("a", encoding="utf-8") as marker:
+            _ = marker.write("attempt\n")
+        _exit(17)
 
 
 def identity_candidate(candidate: int) -> int:
@@ -653,3 +728,369 @@ def test_sequential_evaluator_exposes_request_local_episode_capability() -> None
     evaluator = SequentialEvaluator[int, int]()
 
     assert isinstance(evaluator, RequestLocalEpisodeEvaluator)
+
+
+class JoblibRequestLocalEpisodeTests:
+    """Tests for synchronous Joblib request-local episode execution."""
+
+    @pytest.mark.parametrize("problem_transport", ("per_request", "worker_session"))
+    def test_loky_executes_episode_across_process_boundary(
+        self,
+        problem_transport: Literal["per_request", "worker_session"],
+    ) -> None:
+        problem = make_problem(ProcessIdObjective())
+        evaluator = JoblibEvaluator[int, int, ObservationPayload](
+            backend="loky",
+            n_jobs=2,
+            problem_transport=problem_transport,
+        )
+
+        attempts = evaluator.evaluate_request_local_episodes(
+            problem,
+            (make_episode(),),
+        )
+
+        success = attempts.single_success_or_none()
+        assert success is not None
+        assert success.payload.value != float(getpid())
+
+    @pytest.mark.parametrize("problem_transport", ("per_request", "worker_session"))
+    def test_threading_shares_exact_problem_state(
+        self,
+        problem_transport: Literal["per_request", "worker_session"],
+    ) -> None:
+        objective = ThreadRecordingObjective()
+        problem = make_problem(objective)
+        evaluator = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=2,
+            problem_transport=problem_transport,
+        )
+
+        attempts = evaluator.evaluate_request_local_episodes(
+            problem,
+            (
+                make_episode(request_index=1, candidate=2),
+                make_episode(request_index=0, candidate=1),
+            ),
+        )
+
+        assert attempts.evaluation_count == 2
+        assert len(objective.calling_thread_names) == 2
+        assert all(
+            thread_name != current_thread().name
+            for thread_name in objective.calling_thread_names
+        )
+
+    def test_threading_executes_independent_episodes_concurrently(self) -> None:
+        objective = ThreadRecordingObjective(barrier=Barrier(2))
+        problem = make_problem(objective)
+        evaluator = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=2,
+        )
+
+        attempts = evaluator.evaluate_request_local_episodes(
+            problem,
+            (
+                make_episode(request_index=0, candidate=1),
+                make_episode(request_index=1, candidate=2),
+            ),
+        )
+
+        assert attempts.evaluation_count == 2
+        assert len(set(objective.calling_thread_names)) == 2
+
+    def test_reorders_results_by_explicit_request_index(self) -> None:
+        objective = DelayedEpisodeObjective()
+        problem = make_problem(objective)
+        evaluator = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=2,
+        )
+
+        attempts = evaluator.evaluate_request_local_episodes(
+            problem,
+            (
+                make_episode(request_index=1, candidate=2),
+                make_episode(request_index=0, candidate=1),
+            ),
+        )
+
+        assert tuple(request.candidate for request in attempts.requests) == (1, 2)
+        assert tuple(success.payload.value for success in attempts.successes) == (
+            1.0,
+            4.0,
+        )
+        assert objective.completion_order == [2, 1]
+
+    def test_request_indices_disambiguate_equal_joblib_requests(self) -> None:
+        first_episode = replace(
+            make_episode(request_index=0, candidate=1),
+            request=EvaluationRequest(
+                proposal=Proposal(candidate=1, proposal_id="duplicate"),
+            ),
+            kernel=ConfiguredEpisodeKernel(
+                candidates=(2,),
+                preferred_limit=1,
+            ),
+        )
+        second_episode = replace(
+            make_episode(request_index=1, candidate=1),
+            request=EvaluationRequest(
+                proposal=Proposal(candidate=1, proposal_id="duplicate"),
+            ),
+            kernel=ConfiguredEpisodeKernel(
+                candidates=(3,),
+                preferred_limit=1,
+            ),
+        )
+
+        attempts = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=2,
+        ).evaluate_request_local_episodes(
+            make_problem(),
+            (second_episode, first_episode),
+        )
+
+        assert tuple(request.candidate for request in attempts.requests) == (2, 3)
+        assert tuple(request.proposal_id for request in attempts.requests) == (
+            "duplicate",
+            "duplicate",
+        )
+
+    @pytest.mark.parametrize(
+        "request_indices",
+        (
+            (0, 0),
+            (0, 2),
+            (1,),
+        ),
+    )
+    def test_rejects_invalid_indices_before_joblib_dispatch(
+        self,
+        request_indices: tuple[int, ...],
+    ) -> None:
+        objective = CountingObjective()
+        episodes = tuple(
+            make_episode(request_index=request_index)
+            for request_index in request_indices
+        )
+
+        with pytest.raises(ValueError, match="unique and contiguous"):
+            _ = JoblibEvaluator[int, int, ObservationPayload](
+                backend="threading",
+                n_jobs=2,
+            ).evaluate_request_local_episodes(
+                make_problem(objective),
+                episodes,
+            )
+
+        assert objective.call_count == 0
+
+    @pytest.mark.parametrize("problem_transport", ("per_request", "worker_session"))
+    def test_single_job_executes_inline_without_serializing_problem(
+        self,
+        problem_transport: Literal["per_request", "worker_session"],
+    ) -> None:
+        attempts = JoblibEvaluator[int, int, ObservationPayload](
+            backend="loky",
+            n_jobs=1,
+            problem_transport=problem_transport,
+        ).evaluate_request_local_episodes(
+            make_problem(LockedObjective()),
+            (make_episode(),),
+        )
+
+        assert attempts.evaluation_count == 1
+
+    def test_unequal_episode_limits_bound_reported_cost(self) -> None:
+        episodes = (
+            make_episode(
+                request_index=0,
+                kernel=ConfiguredEpisodeKernel(
+                    candidates=(1, 2),
+                    preferred_limit=2,
+                ),
+                evaluation_limit=2,
+            ),
+            make_episode(
+                request_index=1,
+                candidate=3,
+                evaluation_limit=1,
+            ),
+            make_episode(
+                request_index=2,
+                kernel=ConfiguredEpisodeKernel(
+                    candidates=(4, 5, 6),
+                    preferred_limit=3,
+                ),
+                evaluation_limit=3,
+            ),
+        )
+
+        attempts = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=3,
+        ).evaluate_request_local_episodes(
+            make_problem(),
+            episodes,
+        )
+
+        assert attempts.evaluation_count == 6
+        assert tuple(attempt.evaluation_count for attempt in attempts.attempts) == (
+            2,
+            1,
+            3,
+        )
+        assert attempts.evaluation_count == sum(
+            episode.evaluation_limit for episode in episodes
+        )
+
+    def test_preserves_recorded_failure_after_partial_cost(self) -> None:
+        episode = make_episode(
+            candidate=4,
+            kernel=ConfiguredEpisodeKernel(
+                candidates=(1, 4),
+                preferred_limit=2,
+            ),
+            evaluation_limit=2,
+        )
+
+        attempts = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=2,
+        ).evaluate_request_local_episodes(
+            make_problem(),
+            (episode,),
+        )
+
+        assert attempts.failure_indices == (0,)
+        assert attempts.evaluation_count == 2
+
+    def test_kernel_exception_escapes_after_partial_cost(self) -> None:
+        objective = CountingObjective()
+        episode = make_episode(
+            kernel=ConfiguredEpisodeKernel(
+                candidates=(1, 2),
+                preferred_limit=2,
+                raise_after_evaluation_count=1,
+            ),
+            evaluation_limit=2,
+        )
+
+        with pytest.raises(RuntimeError, match="episode failed"):
+            _ = JoblibEvaluator[int, int, ObservationPayload](
+                backend="threading",
+                n_jobs=2,
+            ).evaluate_request_local_episodes(
+                make_problem(objective),
+                (episode,),
+            )
+
+        assert objective.call_count == 1
+
+    @pytest.mark.parametrize("problem_transport", ("per_request", "worker_session"))
+    def test_loky_rejects_nonserializable_problem_before_execution(
+        self,
+        problem_transport: Literal["per_request", "worker_session"],
+    ) -> None:
+        expected_error = (
+            pickle.PicklingError if problem_transport == "per_request" else TypeError
+        )
+        with pytest.raises(expected_error) as captured_exception:
+            _ = JoblibEvaluator[int, int, ObservationPayload](
+                backend="loky",
+                n_jobs=2,
+                problem_transport=problem_transport,
+            ).evaluate_request_local_episodes(
+                make_problem(LockedObjective()),
+                (make_episode(),),
+            )
+        if problem_transport == "per_request":
+            assert "cannot pickle" in str(captured_exception.value.__cause__)
+        else:
+            assert "cannot pickle" in str(captured_exception.value)
+
+    def test_loky_propagates_worker_termination_without_retry(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        marker_path = tmp_path / "worker-attempts.txt"
+        with pytest.raises(Exception) as captured_exception:
+            _ = JoblibEvaluator[int, int, ObservationPayload](
+                backend="loky",
+                n_jobs=2,
+            ).evaluate_request_local_episodes(
+                make_problem(TerminatingObjective(marker_path)),
+                (make_episode(),),
+            )
+
+        assert type(captured_exception.value).__name__ == "TerminatedWorkerError"
+        assert marker_path.read_text(encoding="utf-8") == "attempt\n"
+
+    def test_rejects_misaligned_worker_result(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original_task = joblib_sync.evaluate_request_local_episode_task
+
+        def misaligned_task(
+            *,
+            problem: Problem[int, int, ObservationPayload],
+            episode: RequestLocalEpisode[int, int, ObservationPayload],
+        ) -> tuple[int, EvaluationAttemptBatch[int, ObservationPayload]]:
+            _, attempt = original_task(problem=problem, episode=episode)
+            return episode.request_index + 1, attempt
+
+        monkeypatch.setattr(
+            joblib_sync,
+            "evaluate_request_local_episode_task",
+            misaligned_task,
+        )
+
+        with pytest.raises(ValueError, match="do not align"):
+            _ = JoblibEvaluator[int, int, ObservationPayload](
+                backend="threading",
+                n_jobs=2,
+            ).evaluate_request_local_episodes(
+                make_problem(),
+                (make_episode(),),
+            )
+
+    def test_rejects_malformed_one_slot_attempt(self) -> None:
+        with pytest.raises(ValueError, match="exactly one request"):
+            _ = ordered_request_local_episode_attempts(
+                ((0, EvaluationAttemptBatch[int, ObservationPayload](attempts=())),),
+                request_count=1,
+            )
+
+    @pytest.mark.parametrize(
+        "malformed_result",
+        (
+            (),
+            (0,),
+            (0, "not-an-attempt"),
+            (True, EvaluationAttemptBatch[int, ObservationPayload](attempts=())),
+        ),
+    )
+    def test_rejects_malformed_worker_result_envelope(
+        self,
+        malformed_result: object,
+    ) -> None:
+        with pytest.raises(TypeError):
+            _ = ordered_request_local_episode_attempts(
+                (malformed_result,),
+                request_count=1,
+            )
+
+    def test_supports_empty_batch_and_structural_capability(self) -> None:
+        evaluator = JoblibEvaluator[int, int, ObservationPayload](
+            backend="threading",
+            n_jobs=2,
+        )
+
+        attempts = evaluator.evaluate_request_local_episodes(make_problem(), ())
+
+        assert attempts.attempt_count == 0
+        assert isinstance(evaluator, RequestLocalEpisodeEvaluator)
