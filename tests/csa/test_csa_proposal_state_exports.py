@@ -31,7 +31,7 @@ class CSAProposalStateExportTests:
         assert ProposalFamilyStat is ProposalFamilyStatDirect
 
     def test_facade_export_set_is_exact(self) -> None:
-        assert proposal_state_facade.__all__ == [
+        assert frozenset(proposal_state_facade.__all__) == {
             "AdaptiveProposalGeneratorKind",
             "CSAProposalState",
             "NonAdaptiveProposalAttribution",
@@ -42,11 +42,11 @@ class CSAProposalStateExportTests:
             "PlannedProposalAttribution",
             "PlannedProposalProvenance",
             "ProposalAttribution",
-            "ProposalProvenance",
             "ProposalFamilyStat",
             "ProposalLeafStat",
             "ProposalNumericSubspaceCovarianceStat",
-        ]
+            "ProposalProvenance",
+        }
 
     def test_semantic_submodules_are_importable(self) -> None:
         state = CSAProposalStateDirect.from_policy(CSAProposalPolicy())

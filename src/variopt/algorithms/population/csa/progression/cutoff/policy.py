@@ -19,7 +19,7 @@ _MINIMUM_REDUCTION_EXPONENT = log(_MINIMUM_REDUCTION_SPEED)
 _MAXIMUM_REDUCTION_EXPONENT = log(_MAXIMUM_REDUCTION_SPEED)
 
 
-def _normalize_finite_float(value: float | int, *, field_name: str) -> float:
+def _normalize_finite_float(value: float, *, field_name: str) -> float:
     if type(value) is bool or not isinstance(value, Real):
         msg = f"{field_name} must be numeric"
         raise TypeError(msg)
@@ -237,8 +237,7 @@ class CSACutoffSchedule:
                     average_distance / self.minimum_distance_divisor
                 )
 
-        if minimum_distance_cutoff > distance_cutoff:
-            distance_cutoff = minimum_distance_cutoff
+        distance_cutoff = max(distance_cutoff, minimum_distance_cutoff)
 
         return float(distance_cutoff), float(minimum_distance_cutoff)
 

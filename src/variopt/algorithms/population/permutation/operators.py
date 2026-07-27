@@ -238,7 +238,7 @@ def order_crossover(
         if child[index] is None:
             child[index] = partner_values[partner_index]
             partner_index += 1
-    for index in range(0, start_index):
+    for index in range(start_index):
         if child[index] is None:
             child[index] = partner_values[partner_index]
             partner_index += 1

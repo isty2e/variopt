@@ -1,6 +1,7 @@
 """Shared helpers for study orchestration."""
 
 from collections.abc import Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Generic, Protocol, TypeAlias, TypeGuard, runtime_checkable
 
@@ -137,6 +138,23 @@ class AttemptBatchEvaluator(Protocol[BoundaryT, CandidateT, StudyPayloadT]):
 
 
 @runtime_checkable
+class RunScopedAttemptBatchEvaluator(
+    AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT],
+    Protocol[BoundaryT, CandidateT, StudyPayloadT],
+):
+    """Synchronous evaluator that can bind one problem for a run scope."""
+
+    def _open_attempt_run_scope(
+        self,
+        problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
+    ) -> AbstractContextManager[
+        AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+    ]:
+        """Open one run-owned attempt evaluator bound to ``problem``."""
+        ...
+
+
+@runtime_checkable
 class AttemptBatchSessionEvaluator(Protocol[BoundaryT, CandidateT, StudyPayloadT]):
     """Async evaluator capability that streams payload attempts by slot."""
 
@@ -190,6 +208,19 @@ def supports_attempt_batches(
 ) -> TypeGuard[AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT]]:
     """Return whether ``evaluator`` exposes dense attempt-batch evaluation."""
     return isinstance(evaluator, AttemptBatchEvaluator)
+
+
+def open_attempt_run_scope(
+    evaluator: StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT],
+    problem: Problem[BoundaryT, CandidateT, StudyPayloadT],
+) -> AbstractContextManager[
+    AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+    | StudyEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+]:
+    """Open an evaluator-owned run scope when the capability is available."""
+    if isinstance(evaluator, RunScopedAttemptBatchEvaluator):
+        return evaluator._open_attempt_run_scope(problem)
+    return nullcontext(evaluator)
 
 
 def supports_attempt_batch_sessions(
@@ -616,10 +647,7 @@ def trace_value_for_records(
     best_batch_value: float | None = None
     best_batch_score: float | None = None
     for record in records:
-        if isinstance(record, ObservationPayload):
-            score = record.score
-            value = record.value
-        elif isinstance(record, Observation):
+        if isinstance(record, (ObservationPayload, Observation)):
             score = record.score
             value = record.value
         else:

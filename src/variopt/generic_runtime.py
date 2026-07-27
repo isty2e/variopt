@@ -79,8 +79,8 @@ def create_frozen_generic_slots_pickle_installer(
         run when a custom ``__init__`` cannot rely on dataclasses to populate
         inherited runtime generic metadata.
         """
-        setattr(cls, "__getstate__", getstate)
-        setattr(cls, "__setstate__", setstate)
+        type.__setattr__(cls, "__getstate__", getstate)
+        type.__setattr__(cls, "__setstate__", setstate)
 
     return install_frozen_generic_slots_pickle
 

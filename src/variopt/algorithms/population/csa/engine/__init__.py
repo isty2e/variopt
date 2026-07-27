@@ -17,8 +17,8 @@ from .tell import apply_tell
 __all__ = [
     "CSAAskPlan",
     "CSABankingState",
-    "CSAMaterializedGeneration",
     "CSAEngineState",
+    "CSAMaterializedGeneration",
     "CSAPendingProposals",
     "CSAScoringState",
     "apply_pending_boundary_action",

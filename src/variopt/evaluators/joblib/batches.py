@@ -22,10 +22,10 @@ from ..async_evaluator.artifacts import (
 from ..async_evaluator.sessions import PendingAwareBatchSession, ResumableBatchSession
 from .contracts import BoundaryT, JoblibEvaluationPayloadT
 
-SessionEvaluationT = TypeVar("SessionEvaluationT", covariant=True)
+SessionEvaluationT_co = TypeVar("SessionEvaluationT_co", covariant=True)
 
 
-class AsyncJoblibBatchSessionEvaluator(Protocol[SessionEvaluationT]):
+class AsyncJoblibBatchSessionEvaluator(Protocol[SessionEvaluationT_co]):
     """Minimal evaluator surface required by one resumable joblib batch session.
 
     Notes
@@ -38,7 +38,7 @@ class AsyncJoblibBatchSessionEvaluator(Protocol[SessionEvaluationT]):
     def poll(
         self,
         handle: EvaluationBatchHandle,
-    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
+    ) -> tuple[CompletionGroup[SessionEvaluationT_co], ...]:
         """Poll one submitted batch handle without blocking.
 
         Parameters
@@ -59,7 +59,7 @@ class AsyncJoblibBatchSessionEvaluator(Protocol[SessionEvaluationT]):
         handle: EvaluationBatchHandle,
         *,
         timeout: float | None = None,
-    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
+    ) -> tuple[CompletionGroup[SessionEvaluationT_co], ...]:
         """Wait for at least one submitted-batch completion group.
 
         Parameters
@@ -133,7 +133,7 @@ class AsyncJoblibRequestInput(Generic[CandidateT]):
 
 
 @dataclass(frozen=True, slots=True)
-class AsyncJoblibCompletedResult(Generic[SessionEvaluationT]):
+class AsyncJoblibCompletedResult(Generic[SessionEvaluationT_co]):
     """One completed result emitted by a joblib result-drain worker.
 
     Parameters
@@ -149,7 +149,7 @@ class AsyncJoblibCompletedResult(Generic[SessionEvaluationT]):
     """
 
     index: int
-    outcome: SessionEvaluationT
+    outcome: SessionEvaluationT_co
     attempt_generation: int = 0
 
 
@@ -178,7 +178,7 @@ class AsyncJoblibExhaustedResult:
 
 @dataclass(slots=True)
 class ActiveAsyncJoblibBatch(
-    Generic[BoundaryT, CandidateT, SessionEvaluationT, JoblibEvaluationPayloadT]
+    Generic[BoundaryT, CandidateT, SessionEvaluationT_co, JoblibEvaluationPayloadT]
 ):
     """In-flight async joblib batch state.
 
@@ -213,9 +213,9 @@ class ActiveAsyncJoblibBatch(
     problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT]
     request_inputs: tuple[AsyncJoblibRequestInput[CandidateT], ...]
     execution_resources: ExecutionResources
-    result_generator: Generator[tuple[int, SessionEvaluationT], None, None]
+    result_generator: Generator[tuple[int, SessionEvaluationT_co], None, None]
     result_queue: Queue[
-        AsyncJoblibCompletedResult[SessionEvaluationT]
+        AsyncJoblibCompletedResult[SessionEvaluationT_co]
         | AsyncJoblibFailedResult
         | AsyncJoblibExhaustedResult
     ]
@@ -256,9 +256,9 @@ class SuspendedAsyncJoblibBatch(
 
 @dataclass(slots=True)
 class ResumablePendingAwareAsyncJoblibBatchSession(
-    PendingAwareBatchSession[SessionEvaluationT],
-    ResumableBatchSession[SessionEvaluationT],
-    Generic[SessionEvaluationT],
+    PendingAwareBatchSession[SessionEvaluationT_co],
+    ResumableBatchSession[SessionEvaluationT_co],
+    Generic[SessionEvaluationT_co],
 ):
     """Pending-aware and resumable session for one async joblib logical batch.
 
@@ -274,7 +274,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
         Current logical batch lifecycle.
     """
 
-    evaluator: AsyncJoblibBatchSessionEvaluator[SessionEvaluationT]
+    evaluator: AsyncJoblibBatchSessionEvaluator[SessionEvaluationT_co]
     _handle: EvaluationBatchHandle
     _completed_count: int = 0
     _lifecycle: Literal[
@@ -300,7 +300,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
     @override
     def poll(
         self,
-    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
+    ) -> tuple[CompletionGroup[SessionEvaluationT_co], ...]:
         """Poll newly completed evaluation slots for this logical batch.
 
         Returns
@@ -333,7 +333,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
         self,
         *,
         timeout: float | None = None,
-    ) -> tuple[CompletionGroup[SessionEvaluationT], ...]:
+    ) -> tuple[CompletionGroup[SessionEvaluationT_co], ...]:
         """Wait for newly completed evaluation slots for this logical batch.
 
         Parameters
@@ -389,7 +389,7 @@ class ResumablePendingAwareAsyncJoblibBatchSession(
 
     def _record_completion_groups(
         self,
-        completion_groups: tuple[CompletionGroup[SessionEvaluationT], ...],
+        completion_groups: tuple[CompletionGroup[SessionEvaluationT_co], ...],
     ) -> None:
         """Update lifecycle state after newly observed completion groups."""
         self._completed_count += sum(

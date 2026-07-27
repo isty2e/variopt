@@ -1601,9 +1601,11 @@ class StructuredIteratedLocalSearchKernelTests:
             evaluated_candidates: list[tuple[int, ...]] = []
             _ = kernel.run(
                 query,
-                lambda query: record_and_evaluate_query_directly(
-                    query,
-                    evaluated_candidates,
+                lambda query, evaluated_candidates=evaluated_candidates: (
+                    record_and_evaluate_query_directly(
+                        query,
+                        evaluated_candidates,
+                    )
                 ),
             )
             evaluated_candidate_runs.append(tuple(evaluated_candidates))

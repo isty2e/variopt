@@ -31,8 +31,5 @@ class EvaluatorExportTests:
 
         assert "MpiEvaluator" not in module.__dict__
         assert "MpiExecutorFactory" not in module.__dict__
-        assert cast(object, getattr(module, "MpiEvaluator")) is MpiEvaluatorSubmodule
-        assert (
-            cast(object, getattr(module, "MpiExecutorFactory"))
-            is MpiExecutorFactorySubmodule
-        )
+        assert cast(object, module.MpiEvaluator) is MpiEvaluatorSubmodule
+        assert cast(object, module.MpiExecutorFactory) is MpiExecutorFactorySubmodule

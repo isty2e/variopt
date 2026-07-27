@@ -23,11 +23,11 @@ from ..typevars import CandidateT
 from .base import Evaluator
 
 BoundaryT = TypeVar("BoundaryT")
-CandidateExecutorT = TypeVar("CandidateExecutorT", covariant=True)
-MpiFutureResultT = TypeVar("MpiFutureResultT", covariant=True)
+CandidateExecutorT_co = TypeVar("CandidateExecutorT_co", covariant=True)
+MpiFutureResultT_co = TypeVar("MpiFutureResultT_co", covariant=True)
 MpiSubmitResultT = TypeVar("MpiSubmitResultT")
-MpiExecutorRecordT = TypeVar(
-    "MpiExecutorRecordT",
+MpiExecutorRecordT_co = TypeVar(
+    "MpiExecutorRecordT_co",
     bound=RequestAlignedEvaluationRecord,
     covariant=True,
 )
@@ -41,7 +41,7 @@ MpiEvaluationPayloadT = DefaultTypeVar(
 )
 
 
-class MpiFuture(Protocol, Generic[MpiFutureResultT]):
+class MpiFuture(Protocol, Generic[MpiFutureResultT_co]):
     """Typed view of one MPI-backed future.
 
     Notes
@@ -52,7 +52,7 @@ class MpiFuture(Protocol, Generic[MpiFutureResultT]):
 
     def result(
         self,
-    ) -> tuple[int, MpiFutureResultT]:
+    ) -> tuple[int, MpiFutureResultT_co]:
         """Return one completed result or raise the worker failure.
 
         Returns
@@ -63,7 +63,10 @@ class MpiFuture(Protocol, Generic[MpiFutureResultT]):
         ...
 
 
-class MpiExecutor(Protocol, Generic[CandidateExecutorT, MpiExecutorRecordT]):
+class MpiExecutor(
+    Protocol,
+    Generic[CandidateExecutorT_co, MpiExecutorRecordT_co],
+):
     """Typed view of one MPI executor.
 
     Notes
@@ -111,7 +114,10 @@ class MpiExecutor(Protocol, Generic[CandidateExecutorT, MpiExecutorRecordT]):
         ...
 
 
-class MpiExecutorFactory(Protocol, Generic[CandidateExecutorT, MpiExecutorRecordT]):
+class MpiExecutorFactory(
+    Protocol,
+    Generic[CandidateExecutorT_co, MpiExecutorRecordT_co],
+):
     """Factory for creating one MPI executor instance.
 
     Notes
@@ -124,7 +130,7 @@ class MpiExecutorFactory(Protocol, Generic[CandidateExecutorT, MpiExecutorRecord
         self,
         *,
         max_workers: int | None = None,
-    ) -> MpiExecutor[CandidateExecutorT, MpiExecutorRecordT]:
+    ) -> MpiExecutor[CandidateExecutorT_co, MpiExecutorRecordT_co]:
         """Create an executor configured for one evaluator batch.
 
         Parameters
@@ -257,7 +263,7 @@ class MpiEvaluator(
 
         executor_class = cast(
             Callable[..., MpiExecutor[CandidateT, RequestAlignedEvaluationRecord]],
-            getattr(mpi4py_futures, "MPIPoolExecutor"),
+            mpi4py_futures.MPIPoolExecutor,
         )
         return executor_class(max_workers=self.max_workers)
 

@@ -22,8 +22,8 @@ from ..common import (
 )
 
 AssimilationCandidateT = TypeVar("AssimilationCandidateT")
-AssimilatorRecordT = TypeVar(
-    "AssimilatorRecordT",
+AssimilatorRecordT_contra = TypeVar(
+    "AssimilatorRecordT_contra",
     bound=RequestAlignedEvaluationRecord[object],
     contravariant=True,
 )
@@ -31,8 +31,8 @@ OwnerRunMethodRecordT = TypeVar(
     "OwnerRunMethodRecordT",
     bound=RequestAlignedEvaluationRecord[object],
 )
-OwnerPayloadT = TypeVar(
-    "OwnerPayloadT",
+OwnerPayloadT_contra = TypeVar(
+    "OwnerPayloadT_contra",
     bound=StudyEvaluationPayload,
     contravariant=True,
 )
@@ -40,7 +40,7 @@ BoundaryT = TypeVar("BoundaryT")
 
 
 class AttemptBatchAssimilator(
-    Protocol[RunMethodStateT, AssimilatorRecordT],
+    Protocol[RunMethodStateT, AssimilatorRecordT_contra],
 ):
     """Capability that advances run-method state from materialized attempts."""
 
@@ -49,7 +49,7 @@ class AttemptBatchAssimilator(
         state: RunMethodStateT,
         attempts: EvaluationAttemptBatch[
             AssimilationCandidateT,
-            AssimilatorRecordT,
+            AssimilatorRecordT_contra,
         ],
     ) -> RunMethodStateT:
         """Assimilate one dense request-aligned attempt batch."""
@@ -60,7 +60,7 @@ class StudyRunMethodOwner(
     Protocol[
         CandidateT,
         RunMethodStateT,
-        OwnerPayloadT,
+        OwnerPayloadT_contra,
         OwnerRunMethodRecordT,
     ],
 ):
@@ -84,7 +84,7 @@ class StudyRunMethodOwner(
         self,
     ) -> EvaluationAttemptMaterializer[
         CandidateT,
-        OwnerPayloadT,
+        OwnerPayloadT_contra,
         OwnerRunMethodRecordT,
     ]:
         """Return the payload-to-record materializer for feedback attempts."""

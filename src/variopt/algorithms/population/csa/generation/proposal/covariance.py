@@ -32,7 +32,7 @@ class _FloatMatrixEigh(Protocol):
 
 def _eigh_float_matrix(matrix: FloatMatrix) -> tuple[FloatVector, FloatMatrix]:
     """Return eigenvalues and eigenvectors for one float covariance matrix."""
-    eigh_float_matrix = cast(_FloatMatrixEigh, getattr(np.linalg, "eigh"))
+    eigh_float_matrix = cast(_FloatMatrixEigh, np.linalg.eigh)
     raw_eigenvalues, raw_eigenvectors = eigh_float_matrix(matrix)
     return (
         np.asarray(raw_eigenvalues, dtype=np.float64),
@@ -42,7 +42,7 @@ def _eigh_float_matrix(matrix: FloatMatrix) -> tuple[FloatVector, FloatMatrix]:
 
 def _transpose_float_matrix(matrix: FloatMatrix) -> FloatMatrix:
     """Return the transpose of one float matrix."""
-    return cast(FloatMatrix, getattr(matrix, "T"))
+    return cast(FloatMatrix, matrix.T)
 
 
 def build_numeric_subspace_attribution(

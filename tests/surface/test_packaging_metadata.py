@@ -26,7 +26,7 @@ def _load_toml(text: str) -> dict[str, object]:
         toml_module = importlib.import_module("tomllib")
     except ModuleNotFoundError:
         toml_module = importlib.import_module("tomli")
-    loads = cast(Callable[[str], object], getattr(toml_module, "loads"))
+    loads = cast(Callable[[str], object], toml_module.loads)
     parsed = loads(text)
     if not isinstance(parsed, dict):
         msg = "TOML parser returned a non-mapping document"
@@ -60,7 +60,8 @@ class PackagingMetadataTests:
 
         dependencies = set(pyproject_data["project"]["dependencies"])
 
-        assert "joblib>=1.4.0" in dependencies
+        assert "cloudpickle>=3.1.0" in dependencies
+        assert "joblib>=1.5.0" in dependencies
         assert "numpy>=1.23.5" in dependencies
         assert "scipy>=1.10.0" in dependencies
         assert "typing_extensions>=4.12.0" in dependencies
@@ -95,7 +96,7 @@ class PackagingMetadataTests:
         assert "basedpyright>=1.20.0" in optional_dependencies["test"]
         assert "pre-commit>=4.0.0" in optional_dependencies["test"]
         assert "pytest>=8.0.0" in optional_dependencies["test"]
-        assert "ruff>=0.8.0" in optional_dependencies["test"]
+        assert "ruff>=0.16.0" in optional_dependencies["test"]
         assert "tomli>=2.0.0" in optional_dependencies["test"]
 
     def test_wheel_only_packages_variopt_runtime(self) -> None:

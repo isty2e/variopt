@@ -44,7 +44,7 @@ def import_module_or_failure(module_name: str) -> ModuleType | SmokeFailure:
     """Import one module or return a structured smoke failure."""
     try:
         return import_module(module_name)
-    except Exception as exception:
+    except Exception as exception:  # noqa: BLE001 - report arbitrary import failures
         return SmokeFailure(
             target=module_name,
             detail=f"{type(exception).__name__}: {exception}",
@@ -185,7 +185,7 @@ def configure_mpi4py_smoke_runtime() -> SmokeFailure | None:
             target="mpi4py.rc",
             detail="runtime configuration is unavailable",
         )
-    setattr(rc, "finalize", False)
+    rc.__setattr__("finalize", False)
     return None
 
 

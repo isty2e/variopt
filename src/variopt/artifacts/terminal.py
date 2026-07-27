@@ -940,12 +940,15 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             msg = "best_success must be set when successes are present"
             raise ValueError(msg)
 
-        if self.best_success is not None and not any(
-            success is self.best_success for success in normalized_successes
+        if (
+            self.best_success is not None
+            and not any(
+                success is self.best_success for success in normalized_successes
+            )
+            and self.best_success not in normalized_successes
         ):
-            if self.best_success not in normalized_successes:
-                msg = "best_success must come from successes"
-                raise ValueError(msg)
+            msg = "best_success must come from successes"
+            raise ValueError(msg)
 
         if self.best_success is not None and any(
             success.payload.score < self.best_success.payload.score
@@ -1295,11 +1298,7 @@ class NondominatedRunSurface(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 normalized_successes,
                 candidate_equal=candidate_equal,
             )
-        elif records is not None:
-            normalized_nondominated_successes = collect_nondominated_successes(
-                normalized_successes
-            )
-        elif refinements is not None and successes is not None:
+        elif records is not None or refinements is not None and successes is not None:
             normalized_nondominated_successes = collect_nondominated_successes(
                 normalized_successes
             )
@@ -1683,12 +1682,20 @@ def terminal_surface_setstate(
         self.__post_init__(None)
 
 
-setattr(RunReport, "__getstate__", run_report_getstate)
-setattr(RunReport, "__setstate__", terminal_surface_setstate)
-setattr(RunResult, "__getstate__", run_result_getstate)
-setattr(RunResult, "__setstate__", terminal_surface_setstate)
-setattr(NondominatedRunSurface, "__getstate__", nondominated_run_surface_getstate)
-setattr(NondominatedRunSurface, "__setstate__", terminal_surface_setstate)
+type.__setattr__(RunReport, "__getstate__", run_report_getstate)
+type.__setattr__(RunReport, "__setstate__", terminal_surface_setstate)
+type.__setattr__(RunResult, "__getstate__", run_result_getstate)
+type.__setattr__(RunResult, "__setstate__", terminal_surface_setstate)
+type.__setattr__(
+    NondominatedRunSurface,
+    "__getstate__",
+    nondominated_run_surface_getstate,
+)
+type.__setattr__(
+    NondominatedRunSurface,
+    "__setstate__",
+    terminal_surface_setstate,
+)
 
 del run_report_getstate
 del run_result_getstate

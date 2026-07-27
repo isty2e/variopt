@@ -81,7 +81,7 @@ class StructuredIteratedLocalSearchKernel(
 
     max_steps: int = 8
     max_kicks: int = 2
-    kick_policy: StructuredKickPolicy = StructuredKickPolicy()
+    kick_policy: StructuredKickPolicy = field(default_factory=StructuredKickPolicy)
     random_state: RandomSeed = 0
     _random_state_snapshot: RandomStateSnapshot = field(
         init=False,

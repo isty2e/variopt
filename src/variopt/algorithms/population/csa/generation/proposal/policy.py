@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import isfinite
 
 
-def _normalize_finite_number(value: int | float, *, field_name: str) -> float:
+def _normalize_finite_number(value: float, *, field_name: str) -> float:
     if isinstance(value, bool):
         msg = f"{field_name} must be numeric"
         raise TypeError(msg)

@@ -17,8 +17,8 @@ __all__ = [
     "StructuredHillClimbKernel",
     "StructuredIteratedLocalSearchKernel",
     "StructuredKickPolicy",
-    "StructuredStochasticNeighborhoodKernel",
     "StructuredScheduledLocalSearchKernel",
+    "StructuredStochasticNeighborhoodKernel",
     "StructuredVariableNeighborhoodKernel",
     "StructuredVariableNeighborhoodStage",
 ]

@@ -11,10 +11,10 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .artifacts import CompletionGroup, EvaluationBatchHandle
 from .sessions import EvaluationBatchSession
 
-EvaluationT = TypeVar("EvaluationT", covariant=True)
+EvaluationT_co = TypeVar("EvaluationT_co", covariant=True)
 
 
-class AsyncBatchHooks(Protocol[EvaluationT]):
+class AsyncBatchHooks(Protocol[EvaluationT_co]):
     """Minimal evaluator hook surface needed by one evaluator-backed session.
 
     Notes
@@ -26,7 +26,7 @@ class AsyncBatchHooks(Protocol[EvaluationT]):
     def poll(
         self,
         handle: EvaluationBatchHandle,
-    ) -> Sequence[CompletionGroup[EvaluationT]]:
+    ) -> Sequence[CompletionGroup[EvaluationT_co]]:
         """Poll one submitted batch handle for newly completed groups.
 
         Parameters
@@ -55,8 +55,8 @@ class AsyncBatchHooks(Protocol[EvaluationT]):
 @dataclass(frozen=True, slots=True)
 class EvaluatorBackedBatchSession(
     FrozenGenericSlotsCompat,
-    EvaluationBatchSession[EvaluationT],
-    Generic[EvaluationT],
+    EvaluationBatchSession[EvaluationT_co],
+    Generic[EvaluationT_co],
 ):
     """Session wrapper that delegates lifecycle hooks back to one evaluator.
 
@@ -68,7 +68,7 @@ class EvaluatorBackedBatchSession(
         Immutable handle for the open evaluation batch.
     """
 
-    evaluator: AsyncBatchHooks[EvaluationT]
+    evaluator: AsyncBatchHooks[EvaluationT_co]
     _handle: EvaluationBatchHandle
 
     @property
@@ -78,7 +78,7 @@ class EvaluatorBackedBatchSession(
         return self._handle
 
     @override
-    def poll(self) -> tuple[CompletionGroup[EvaluationT], ...]:
+    def poll(self) -> tuple[CompletionGroup[EvaluationT_co], ...]:
         """Delegate batch polling back to the wrapped evaluator.
 
         Returns

@@ -1510,7 +1510,7 @@ class StudyStaleAsyncTests:
         )
 
         with pytest.raises(
-            ValueError,
+            TypeError,
             match="stale_async execution model currently requires DirectKernel",
         ):
             _ = study.run(

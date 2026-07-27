@@ -13,15 +13,15 @@ from variopt.generic_runtime import (
 from ..typevars import CandidateT
 
 ObservationCandidateT = TypeVar("ObservationCandidateT")
-ProposalCandidateT = TypeVar("ProposalCandidateT", covariant=True)
-EvaluationRequestCandidateT = TypeVar(
-    "EvaluationRequestCandidateT",
+ProposalCandidateT_co = TypeVar("ProposalCandidateT_co", covariant=True)
+EvaluationRequestCandidateT_co = TypeVar(
+    "EvaluationRequestCandidateT_co",
     covariant=True,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class Proposal(FrozenGenericSlotsCompat, Generic[ProposalCandidateT]):
+class Proposal(FrozenGenericSlotsCompat, Generic[ProposalCandidateT_co]):
     """Immutable proposal over a canonical candidate.
 
     Parameters
@@ -33,7 +33,7 @@ class Proposal(FrozenGenericSlotsCompat, Generic[ProposalCandidateT]):
         bookkeeping.
     """
 
-    candidate: ProposalCandidateT
+    candidate: ProposalCandidateT_co
     proposal_id: str | None = None
 
     def __post_init__(self) -> None:
@@ -61,7 +61,10 @@ class ProposalEvaluationSpec(ABC):
 
 
 @dataclass(frozen=True, slots=True)
-class EvaluationRequest(FrozenGenericSlotsCompat, Generic[EvaluationRequestCandidateT]):
+class EvaluationRequest(
+    FrozenGenericSlotsCompat,
+    Generic[EvaluationRequestCandidateT_co],
+):
     """Canonical execution request.
 
     Parameters
@@ -72,11 +75,11 @@ class EvaluationRequest(FrozenGenericSlotsCompat, Generic[EvaluationRequestCandi
         Optional request-local metadata attached to the proposal.
     """
 
-    proposal: Proposal[EvaluationRequestCandidateT]
+    proposal: Proposal[EvaluationRequestCandidateT_co]
     proposal_evaluation_spec: ProposalEvaluationSpec | None = None
 
     @property
-    def candidate(self) -> EvaluationRequestCandidateT:
+    def candidate(self) -> EvaluationRequestCandidateT_co:
         """Return the canonical candidate owned by this request.
 
         Returns

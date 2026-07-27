@@ -41,6 +41,87 @@ labels.
   recommendation, because the built-in population optimizers do not advertise
   `stale_async`
 
+## Reusing a Problem in Joblib Workers
+
+`JoblibEvaluator` sends the problem with each batch by default. If the problem
+contains a large, immutable evaluation context and objective calls are much
+smaller, opt into one snapshot per synchronous run:
+
+```python
+from variopt.evaluators import JoblibEvaluator
+
+evaluator = JoblibEvaluator(
+    n_jobs=4,
+    backend="loky",
+    problem_transport="worker_session",
+)
+```
+
+This mode binds the exact `Problem` instance for one `Study.run(...)`,
+`Study.optimize(...)`, or `Study.step(...)` scope. A custom kernel cannot
+substitute another problem inside that scope. The default `per_request` mode
+continues to accept the problem supplied with each evaluator call.
+
+Each loky process decodes an independent problem instance and retains at most
+one current generation. A worker may replace that generation when concurrent
+runs share the process pool, or reconstruct it after worker replacement.
+Therefore observable evaluation behavior must be derived from the request and
+the immutable snapshot. Process-local memoization is suitable; mutable random
+streams, counters, wall-clock-dependent state, and cross-worker coordination
+are not restart-equivalent unless their observable results are request-derived.
+
+Threading backends and effective single-worker execution use direct shared
+references and do not create the snapshot transport. Checkpoints never contain
+the worker session: resuming a run creates a new generation from the
+coordinator-owned problem. Concurrent sessions remain isolated but frequent
+generation switching can reduce cache reuse.
+
+The snapshot is serialized with `cloudpickle` into an owner-only temporary
+directory and exposed to workers as a read-only NumPy memory map. It is trusted
+same-process-family data, not a portable or long-term file format. Normal and
+exceptional scope closure removes the transport; abrupt coordinator termination
+can leave an artifact in the operating system temporary directory for ordinary
+temporary-file cleanup to reclaim.
+
+### When reuse pays off
+
+Do not select `worker_session` from problem size alone. The number of evaluator
+calls, requests per call, worker count, objective cost, and Joblib's own batching
+all affect whether the one-time snapshot setup is recovered.
+
+For one synthetic reference measurement on Apple arm64 with Python 3.13,
+Joblib 1.5.3, two loky workers, and seven repetitions, a cheap objective
+carrying an 8 MiB immutable context produced these median wall times for 64
+evaluations:
+
+| Requests per evaluator call | Evaluator calls | `per_request` | `worker_session` |
+| ---: | ---: | ---: | ---: |
+| 1 | 64 | 0.940 s | 1.018 s |
+| 4 | 16 | 0.414 s | 0.289 s |
+| 16 | 4 | 0.291 s | 0.065 s |
+
+The same 32-evaluation, four-request-per-call workload took 0.115 s versus
+0.123 s with a 1 KiB context, 0.120 s versus 0.126 s with a 1 MiB context, and
+0.226 s versus 0.129 s with an 8 MiB context. These measurements show both
+directions: setup overhead can make session reuse slower for small contexts or
+single-request calls, while a large repeated context can make it substantially
+faster.
+
+The transport oracle for 64 evaluations in 16 calls reduced coordinator
+serialization of the 8 MiB context from 64 serializations, approximately
+512 MiB in aggregate, to one 8 MiB snapshot. A representative process-memory
+profile also reduced the observed worker-process peak from about 451 MiB to
+170 MiB. Treat those values as workload-specific evidence, not portable
+capacity guarantees.
+
+Prefer the default `per_request` mode for small contexts, short runs, or
+single-request calls. Measure `worker_session` with the real problem and batch
+shape when static serialization or worker memory is material. Keep the session
+open across the full synchronous run when possible: repeatedly opening
+one-call sessions pays setup repeatedly and preserves less of the benefit.
+There is intentionally no automatic size threshold because the measured
+crossover changed with the evaluator-call shape.
+
 ## Related Reading
 
 - [Concepts / Study and Execution Models](../concepts/study-and-execution-models.md)

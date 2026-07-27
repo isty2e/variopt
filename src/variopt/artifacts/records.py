@@ -19,8 +19,8 @@ from .requests import (
 )
 
 EvaluationRecordCandidateT = TypeVar("EvaluationRecordCandidateT")
-RequestAlignedEvaluationRecordCandidateT = TypeVar(
-    "RequestAlignedEvaluationRecordCandidateT",
+RequestAlignedEvaluationRecordCandidateT_co = TypeVar(
+    "RequestAlignedEvaluationRecordCandidateT_co",
     default=object,
     covariant=True,
 )
@@ -273,7 +273,7 @@ class ObjectiveVectorPayload(FrozenGenericSlotsCompat):
 
 @runtime_checkable
 class RequestAlignedEvaluationRecord(
-    Protocol[RequestAlignedEvaluationRecordCandidateT]
+    Protocol[RequestAlignedEvaluationRecordCandidateT_co]
 ):
     """Minimal request-aligned evaluation record contract.
 
@@ -290,12 +290,12 @@ class RequestAlignedEvaluationRecord(
     @property
     def request(
         self,
-    ) -> EvaluationRequest[RequestAlignedEvaluationRecordCandidateT]:
+    ) -> EvaluationRequest[RequestAlignedEvaluationRecordCandidateT_co]:
         """Return the canonical request that produced the record."""
         ...
 
     @property
-    def candidate(self) -> RequestAlignedEvaluationRecordCandidateT:
+    def candidate(self) -> RequestAlignedEvaluationRecordCandidateT_co:
         """Return the candidate evaluated for the request."""
         ...
 

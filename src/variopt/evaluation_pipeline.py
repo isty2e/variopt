@@ -282,7 +282,7 @@ def evaluate_request_attempt(
     problem.space.validate(candidate)
     try:
         payload = problem.evaluation_protocol.evaluate_request(request)
-    except Exception as exception:
+    except Exception as exception:  # noqa: BLE001 - capture user evaluation failures
         return PayloadEvaluationAttemptBatch(
             attempts=(
                 EvaluationFailure[CandidateT].from_exception(

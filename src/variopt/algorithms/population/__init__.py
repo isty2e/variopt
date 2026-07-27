@@ -26,18 +26,18 @@ from .species_ga import (
 )
 
 __all__ = [
-    "ClearingGAProfile",
-    "ClearingGeneticAlgorithmOptimizer",
     "CSAOptimizer",
     "CSAProfile",
+    "ClearingGAProfile",
+    "ClearingGeneticAlgorithmOptimizer",
     "DEProfile",
     "DifferentialEvolutionOptimizer",
     "GAProfile",
-    "GeneticAlgorithmOptimizer",
     "GenerationalGAMemberBuffer",
     "GenerationalGAOptimizerState",
     "GenerationalGAPopulationMember",
     "GenerationalGAVariant",
+    "GeneticAlgorithmOptimizer",
     "InversionMutation",
     "OrderCrossover",
     "RestrictedTournamentGAProfile",

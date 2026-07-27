@@ -20,8 +20,8 @@ from .types import SpaceBoundaryValue, SpaceCandidateValue, SpaceScalarValue
 
 __all__ = [
     "ArraySpace",
-    "CategoricalSpace",
     "CandidateEquality",
+    "CategoricalSpace",
     "CompiledStructuredGeometryProvider",
     "ContinuousStructuredSpaceCodec",
     "HomogeneousNumericSubspaceDescriptor",
@@ -37,8 +37,8 @@ __all__ = [
     "SpaceScalarValue",
     "StructuredDistanceParts",
     "StructuredLeafSpace",
-    "StructuredSpaceGeometry",
     "StructuredSearchSpace",
+    "StructuredSpaceGeometry",
     "TupleSpace",
     "compile_homogeneous_numeric_subspace",
 ]

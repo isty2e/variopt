@@ -7,7 +7,7 @@ from typing_extensions import TypeVar
 
 from variopt.generic_runtime import FrozenGenericSlotsCompat
 
-EvaluationT = TypeVar("EvaluationT", covariant=True)
+EvaluationT_co = TypeVar("EvaluationT_co", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +43,7 @@ class EvaluationBatchHandle:
 
 
 @dataclass(frozen=True, slots=True)
-class CompletionGroup(FrozenGenericSlotsCompat, Generic[EvaluationT]):
+class CompletionGroup(FrozenGenericSlotsCompat, Generic[EvaluationT_co]):
     """Ordered completion slice for one logical batch.
 
     Parameters
@@ -55,7 +55,7 @@ class CompletionGroup(FrozenGenericSlotsCompat, Generic[EvaluationT]):
     """
 
     start_index: int
-    outcomes: tuple[EvaluationT, ...]
+    outcomes: tuple[EvaluationT_co, ...]
 
     def __post_init__(self) -> None:
         """Validate completion-group payloads.
@@ -198,8 +198,8 @@ class EvaluationBatchResumeHandle:
 
 
 def store_completion_group(
-    ordered_outcomes: list[EvaluationT | None],
-    completion_group: CompletionGroup[EvaluationT],
+    ordered_outcomes: list[EvaluationT_co | None],
+    completion_group: CompletionGroup[EvaluationT_co],
     *,
     request_count: int,
 ) -> int:

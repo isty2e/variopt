@@ -152,7 +152,7 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
         object.__setattr__(self, "high", high)
 
     @override
-    def normalize(self, raw_candidate: float | int) -> float:
+    def normalize(self, raw_candidate: float) -> float:
         """Normalize a scalar boundary value into canonical float form.
 
         Parameters
@@ -591,7 +591,7 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
             value = exp(clamped_coordinate)
         else:
             value = clamped_coordinate
-        rounded_value = int(round(value))
+        rounded_value = round(value)
         return min(self.high, max(self.low, rounded_value))
 
     @override

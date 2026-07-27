@@ -181,7 +181,7 @@ def _cancel_active_stale_async_sessions(
     for active_session in active_sessions:
         try:
             active_session.cancel()
-        except Exception:
+        except Exception:  # noqa: BLE001, S112 - continue best-effort cleanup
             # Cancellation is best-effort; do not let one backend cleanup failure
             # leak later sessions or mask the original run failure.
             continue
@@ -295,7 +295,7 @@ def _validate_stale_async_run_request(
     )
     if not isinstance(study.kernel, DirectKernel):
         msg = "stale_async execution model currently requires DirectKernel"
-        raise ValueError(msg)
+        raise TypeError(msg)
 
 
 def _open_stale_async_batch_session_for_study(
@@ -321,7 +321,7 @@ def _open_stale_async_batch_session_for_study(
 
     if not isinstance(study.kernel, DirectKernel):
         msg = "stale_async execution model currently requires DirectKernel"
-        raise ValueError(msg)
+        raise TypeError(msg)
 
     require_async_evaluator(study)
     return open_stale_async_batch_session(
@@ -531,7 +531,7 @@ def run_stale_async(
                 safe_snapshot.state,
             )
         raise
-    except Exception as exception:
+    except Exception as exception:  # noqa: BLE001 - wrap stale-async failures
         _cancel_active_stale_async_sessions(active_sessions)
         current_evaluation_count = (
             max_evaluations - record_budget_remaining

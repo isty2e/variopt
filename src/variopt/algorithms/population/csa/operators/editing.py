@@ -231,9 +231,9 @@ def mutate_leaf_value(
 def differential_leaf_value(
     *,
     space: RealSpace | IntegerSpace,
-    base_value: float | int,
-    differential_value_a: float | int,
-    differential_value_b: float | int,
+    base_value: float,
+    differential_value_a: float,
+    differential_value_b: float,
     mutation_factor: float,
 ) -> float | int:
     """Return a DE donor leaf value.
@@ -279,7 +279,7 @@ def differential_leaf_value(
     donor_value = float(base_value) + mutation_factor * (
         float(differential_value_a) - float(differential_value_b)
     )
-    rounded_value = int(round(donor_value))
+    rounded_value = round(donor_value)
     return min(space.high, max(space.low, rounded_value))
 
 

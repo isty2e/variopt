@@ -332,7 +332,7 @@ class SearchSpaceTests:
             6,
             max(
                 2,
-                int(round(exp(np.random.RandomState(11).uniform(log(2.0), log(6.0))))),
+                round(exp(np.random.RandomState(11).uniform(log(2.0), log(6.0)))),
             ),
         )
 
@@ -468,8 +468,9 @@ class SearchSpaceTests:
             """TupleSpace subclass used to check base equality does not overreach."""
 
         space = DerivedTupleSpace(IntegerSpace(0, 5))
+        same_space = space
 
-        assert space == space
+        assert space == same_space
         assert space != DerivedTupleSpace(IntegerSpace(0, 5))
         assert space != TupleSpace(IntegerSpace(0, 5))
         assert hash(space) == hash(space)
@@ -587,8 +588,9 @@ class SearchSpaceTests:
             """RecordSpace subclass used to check base equality does not overreach."""
 
         space = DerivedRecordSpace(level=IntegerSpace(0, 5))
+        same_space = space
 
-        assert space == space
+        assert space == same_space
         assert space != DerivedRecordSpace(level=IntegerSpace(0, 5))
         assert space != RecordSpace(level=IntegerSpace(0, 5))
         assert hash(space) == hash(space)

@@ -1,5 +1,6 @@
 """Generic study step and run orchestration."""
 
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Generic, Protocol, TypeGuard
 
@@ -45,11 +46,13 @@ from .assimilation import (
     materialize_feedback_attempts,
 )
 from .common import (
+    AttemptBatchEvaluator,
     CheckpointSafeRunSnapshot,
     StudyEvaluator,
     StudyPayloadT,
     StudyRecordT,
     build_evaluation_requests,
+    open_attempt_run_scope,
     supports_attempt_batches,
     validate_aligned_attempts,
 )
@@ -390,7 +393,7 @@ def _optimize_direct_scalar_sequential(
                     evaluation_budget.consume()
                 try:
                     value = objective.evaluate(candidate)
-                except Exception as exception:
+                except Exception as exception:  # noqa: BLE001 - capture objective failures
                     batch_attempt_slots.append(
                         EvaluationFailure[CandidateT].from_exception(
                             request=request,
@@ -421,7 +424,7 @@ def _optimize_direct_scalar_sequential(
             )
         except EvaluationBudgetExhausted:
             raise
-        except Exception as exception:
+        except Exception as exception:  # noqa: BLE001 - wrap execution failures
             run_history.raise_run_execution_failed(
                 cause=exception,
                 evaluation_count=_current_evaluation_count(
@@ -443,7 +446,7 @@ def _optimize_direct_scalar_sequential(
         run_history.append_step(step)
         try:
             next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
-        except Exception as exception:
+        except Exception as exception:  # noqa: BLE001 - wrap run-method failures
             run_history.raise_run_execution_failed(
                 cause=exception,
                 state=next_state,
@@ -472,25 +475,23 @@ def _optimize_direct_scalar_sequential(
 
 
 def evaluate_attempts_sync(
-    study: StudyExecutionOwner[
-        BoundaryT,
-        CandidateT,
-        RunMethodStateT,
-        StudyPayloadT,
-        StudyRecordT,
-    ],
     query: ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
     *,
+    attempt_evaluator: AttemptBatchEvaluator[
+        BoundaryT,
+        CandidateT,
+        StudyPayloadT,
+    ],
     requests: tuple[EvaluationRequest[CandidateT], ...] | None = None,
 ) -> EvaluationAttemptBatch[CandidateT, StudyPayloadT]:
     """Execute one synchronous request batch into a dense attempt batch.
 
     Parameters
     ----------
-    study : StudyExecutionOwner[BoundaryT, CandidateT, RunMethodStateT, StudyPayloadT, StudyRecordT]
-        Study-like owner exposing the problem, evaluator, and kernel.
     query : ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT]
         Proposal batch and evaluation metadata to execute.
+    attempt_evaluator : AttemptBatchEvaluator[BoundaryT, CandidateT, StudyPayloadT]
+        Active synchronous evaluator for this execution scope.
     requests : tuple[EvaluationRequest[CandidateT], ...] | None, default=None
         Optional prebuilt request batch aligned with ``query``.
 
@@ -510,11 +511,7 @@ def evaluate_attempts_sync(
     if query.evaluation_budget is not None:
         query.evaluation_budget.consume(len(resolved_requests))
 
-    if not supports_attempt_batches(study.evaluator):
-        msg = "sync execution models require evaluator.evaluate_attempts"
-        raise TypeError(msg)
-
-    return study.evaluator.evaluate_attempts(
+    return attempt_evaluator.evaluate_attempts(
         query.problem,
         resolved_requests,
     )
@@ -532,6 +529,11 @@ def _evaluate_step_feedback(
     batch_size: int,
     *,
     execution_model: ExecutionModel,
+    attempt_evaluator: StudyEvaluator[
+        BoundaryT,
+        CandidateT,
+        StudyPayloadT,
+    ],
     evaluation_budget: EvaluationBudget | None = None,
 ) -> _StudyStepFeedback[CandidateT, RunMethodStateT, StudyRecordT]:
     """Evaluate and materialize one step before run-method assimilation."""
@@ -563,7 +565,7 @@ def _evaluate_step_feedback(
     top_level_query = ProposalBatchQuery(
         problem=study.problem,
         proposals=proposals,
-        execution_resources=study.evaluator.execution_resources(),
+        execution_resources=attempt_evaluator.execution_resources(),
         proposal_evaluation_specs=proposal_evaluation_specs,
         proposal_kernel_hints=proposal_kernel_hints,
         evaluation_budget=evaluation_budget,
@@ -602,7 +604,7 @@ def _evaluate_step_feedback(
             if query.evaluation_budget is not None:
                 query.evaluation_budget.consume(len(query_requests))
             attempts = evaluate_batch_exact_async(
-                study.evaluator,
+                attempt_evaluator,
                 query.problem,
                 query_requests,
             )
@@ -613,6 +615,9 @@ def _evaluate_step_feedback(
             )
             return attempts
     else:
+        if not supports_attempt_batches(attempt_evaluator):
+            msg = "sync execution models require evaluator.evaluate_attempts"
+            raise TypeError(msg)
 
         def batch_executor(
             query: ProposalBatchQuery[
@@ -624,8 +629,8 @@ def _evaluate_step_feedback(
             query = _query_with_evaluation_budget(query, evaluation_budget)
             query_requests = requests_for_query(query)
             attempts = evaluate_attempts_sync(
-                study,
                 query,
+                attempt_evaluator=attempt_evaluator,
                 requests=query_requests,
             )
             validate_aligned_attempts(
@@ -707,13 +712,18 @@ def evaluate_step(
     RuntimeError
         If the run method is exhausted or returns no proposals.
     """
-    step_feedback = _evaluate_step_feedback(
-        study,
-        state,
-        batch_size,
-        execution_model=execution_model,
-        evaluation_budget=evaluation_budget,
-    )
+    with open_attempt_run_scope(
+        study.evaluator,
+        study.problem,
+    ) as attempt_evaluator:
+        step_feedback = _evaluate_step_feedback(
+            study,
+            state,
+            batch_size,
+            execution_model=execution_model,
+            attempt_evaluator=attempt_evaluator,
+            evaluation_budget=evaluation_budget,
+        )
     next_state = study.run_method.tell_attempts(
         step_feedback.post_ask_state,
         step_feedback.attempts,
@@ -867,77 +877,88 @@ def run(
     if stop_at_checkpoint_boundary and study.run_method.is_checkpoint_safe_state(state):
         safe_snapshot = run_history.checkpoint_snapshot(state)
 
-    while _current_remaining_budget(
+    has_evaluation_work = _current_remaining_budget(
         evaluation_budget=evaluation_budget,
         record_budget_remaining=record_budget_remaining,
-    ) > 0 and not study.run_method.is_exhausted(state):
-        remaining = _current_remaining_budget(
+    ) > 0 and not study.run_method.is_exhausted(state)
+    attempt_scope = (
+        open_attempt_run_scope(study.evaluator, study.problem)
+        if has_evaluation_work
+        else nullcontext(study.evaluator)
+    )
+    with attempt_scope as attempt_evaluator:
+        while _current_remaining_budget(
             evaluation_budget=evaluation_budget,
             record_budget_remaining=record_budget_remaining,
-        )
-        current_batch_size = min(batch_size, remaining)
-        try:
-            step_feedback = _evaluate_step_feedback(
-                study,
-                state,
-                batch_size=current_batch_size,
-                execution_model=execution_model,
+        ) > 0 and not study.run_method.is_exhausted(state):
+            remaining = _current_remaining_budget(
                 evaluation_budget=evaluation_budget,
+                record_budget_remaining=record_budget_remaining,
             )
-        except EvaluationBudgetExhausted:
-            if stop_at_checkpoint_boundary and safe_snapshot is not None:
-                return (
-                    run_history.checkpoint_report(
-                        safe_snapshot,
-                        candidate_equal=study.problem.space.candidates_equal,
-                    ),
-                    safe_snapshot.state,
-                )
-            raise
-        except Exception as exception:
-            run_history.raise_run_execution_failed(
-                cause=exception,
-                evaluation_count=_current_evaluation_count(
-                    max_evaluations=max_evaluations,
+            current_batch_size = min(batch_size, remaining)
+            try:
+                step_feedback = _evaluate_step_feedback(
+                    study,
+                    state,
+                    batch_size=current_batch_size,
+                    execution_model=execution_model,
+                    attempt_evaluator=attempt_evaluator,
                     evaluation_budget=evaluation_budget,
-                    record_budget_remaining=record_budget_remaining,
-                ),
-                state=state,
-                safe_snapshot=safe_snapshot,
-                candidate_equal=study.problem.space.candidates_equal,
-            )
-        step = StudyAssimilatedStep[
-            CandidateT,
-            StudyRecordT,
-        ].from_attempts(
-            step_feedback.attempts,
-            evaluation_count=step_feedback.evaluation_count,
-        )
-        run_history.append_step(step)
-        try:
-            next_state = study.run_method.tell_attempts(
-                step_feedback.post_ask_state,
+                )
+            except EvaluationBudgetExhausted:
+                if stop_at_checkpoint_boundary and safe_snapshot is not None:
+                    return (
+                        run_history.checkpoint_report(
+                            safe_snapshot,
+                            candidate_equal=study.problem.space.candidates_equal,
+                        ),
+                        safe_snapshot.state,
+                    )
+                raise
+            except Exception as exception:  # noqa: BLE001 - wrap execution failures
+                run_history.raise_run_execution_failed(
+                    cause=exception,
+                    evaluation_count=_current_evaluation_count(
+                        max_evaluations=max_evaluations,
+                        evaluation_budget=evaluation_budget,
+                        record_budget_remaining=record_budget_remaining,
+                    ),
+                    state=state,
+                    safe_snapshot=safe_snapshot,
+                    candidate_equal=study.problem.space.candidates_equal,
+                )
+            step = StudyAssimilatedStep[
+                CandidateT,
+                StudyRecordT,
+            ].from_attempts(
                 step_feedback.attempts,
+                evaluation_count=step_feedback.evaluation_count,
             )
-        except Exception as exception:
-            run_history.raise_run_execution_failed(
-                cause=exception,
-                state=step_feedback.post_ask_state,
-                safe_snapshot=safe_snapshot,
-                candidate_equal=study.problem.space.candidates_equal,
-            )
-        state = next_state
-        if evaluation_budget is None:
-            remaining -= step_feedback.attempts.attempt_count
-            record_budget_remaining = remaining
-        if stop_at_checkpoint_boundary:
-            if study.run_method.is_checkpoint_safe_state(state):
-                safe_snapshot = run_history.checkpoint_snapshot(state)
-                if unsafe_since_safe_snapshot:
-                    break
-                unsafe_since_safe_snapshot = False
-            else:
-                unsafe_since_safe_snapshot = True
+            run_history.append_step(step)
+            try:
+                next_state = study.run_method.tell_attempts(
+                    step_feedback.post_ask_state,
+                    step_feedback.attempts,
+                )
+            except Exception as exception:  # noqa: BLE001 - wrap run-method failures
+                run_history.raise_run_execution_failed(
+                    cause=exception,
+                    state=step_feedback.post_ask_state,
+                    safe_snapshot=safe_snapshot,
+                    candidate_equal=study.problem.space.candidates_equal,
+                )
+            state = next_state
+            if evaluation_budget is None:
+                remaining -= step_feedback.attempts.attempt_count
+                record_budget_remaining = remaining
+            if stop_at_checkpoint_boundary:
+                if study.run_method.is_checkpoint_safe_state(state):
+                    safe_snapshot = run_history.checkpoint_snapshot(state)
+                    if unsafe_since_safe_snapshot:
+                        break
+                    unsafe_since_safe_snapshot = False
+                else:
+                    unsafe_since_safe_snapshot = True
 
     if stop_at_checkpoint_boundary and not study.run_method.is_checkpoint_safe_state(
         state

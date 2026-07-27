@@ -300,7 +300,7 @@ def _drain_async_joblib_results(
         _ = put_result_event(
             AsyncJoblibExhaustedResult(attempt_generation=attempt_generation),
         )
-    except BaseException as exception:
+    except BaseException as exception:  # noqa: BLE001 - preserve worker termination
         _ = put_result_event(
             AsyncJoblibFailedResult(
                 exception=exception,
@@ -564,11 +564,11 @@ class AsyncJoblibEvaluator(
             JoblibListParallelFactory[
                 EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]
             ],
-            getattr(joblib, "Parallel"),
+            joblib.Parallel,
         )
         delayed_factory = cast(
             JoblibDelayedFactory,
-            getattr(joblib, "delayed"),
+            joblib.delayed,
         )
         attempts = parallel_factory(
             n_jobs=self.n_jobs,
@@ -783,11 +783,11 @@ class AsyncJoblibEvaluator(
         _ = execution_resources
         parallel_factory = cast(
             JoblibGeneratorParallelFactory[tuple[int, JoblibEvaluationResultT]],
-            getattr(joblib, "Parallel"),
+            joblib.Parallel,
         )
         delayed_factory = cast(
             JoblibDelayedFactory,
-            getattr(joblib, "delayed"),
+            joblib.delayed,
         )
         parallel_runner = parallel_factory(
             n_jobs=self.n_jobs,
@@ -1052,7 +1052,7 @@ class AsyncJoblibEvaluator(
         if active_batch.abort_attempt is not None:
             try:
                 active_batch.abort_attempt()
-            except Exception as exception:
+            except Exception as exception:  # noqa: BLE001 - preserve cleanup failures
                 abort_failure = exception
 
         close_failure: Exception | None = None
@@ -1062,7 +1062,7 @@ class AsyncJoblibEvaluator(
             if callable(close_method):
                 try:
                     _ = close_method()
-                except Exception as exception:
+                except Exception as exception:  # noqa: BLE001 - preserve cleanup failures
                     close_failure = exception
             else:
                 close_method_missing = True

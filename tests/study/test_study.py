@@ -985,15 +985,7 @@ class StudyTests:
             space=IntegerSpace(low=0, high=10),
             objective=SquareObjective(),
         )
-        optimizer = BatchQueueOptimizer(
-            proposal_batches=[(Proposal(candidate=3, proposal_id="p-1"),)],
-        )
         evaluator = SequentialEvaluator[int, int]()
-        study: ScalarBatchStudy = Study(
-            problem=problem,
-            run_method=optimizer,
-            evaluator=evaluator,
-        )
         proposals = (Proposal(candidate=3, proposal_id="p-1"),)
         requests = build_evaluation_requests(
             proposals,
@@ -1005,7 +997,11 @@ class StudyTests:
             execution_resources=evaluator.execution_resources(),
         )
 
-        attempts = evaluate_attempts_sync(study, query, requests=requests)
+        attempts = evaluate_attempts_sync(
+            query,
+            attempt_evaluator=evaluator,
+            requests=requests,
+        )
         success = attempts.successes[0]
 
         assert success.request is requests[0]

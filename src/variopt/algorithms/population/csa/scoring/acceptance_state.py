@@ -165,8 +165,7 @@ class CSAAcceptanceState:
         else:
             next_temperature *= self.policy.reduction_factor
 
-        if next_temperature < self.policy.minimum_temperature:
-            next_temperature = self.policy.minimum_temperature
+        next_temperature = max(next_temperature, self.policy.minimum_temperature)
 
         return type(self)(
             policy=self.policy,
