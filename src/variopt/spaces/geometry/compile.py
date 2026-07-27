@@ -8,7 +8,7 @@ from ..composites.tuple_space import TupleSpace
 from ..permutation import PermutationSpace
 from ..scalar import CategoricalSpace, IntegerSpace, RealSpace
 from ..structured import LeafPath, StructuredLeafSpace, StructuredSearchSpace
-from ..types import SpaceBoundaryValue, SpaceCandidateValue, SpaceScalarValue
+from ..types import SpaceBoundaryValue, SpaceCandidateValue
 from .composites import (
     ArraySpaceGeometry,
     BinaryArraySpaceGeometry,
@@ -24,42 +24,16 @@ from .leaf import is_categorical_leaf_space
 from .parts import StructuredDistanceParts
 from .permutation import PermutationSpaceGeometry
 from .scalar import CategoricalSpaceGeometry, IntegerSpaceGeometry, RealSpaceGeometry
+from .taxonomy import BuiltinGeometrySpace, is_builtin_geometry_space
 
 BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
-BuiltinGeometrySpace: TypeAlias = (
-    RealSpace
-    | IntegerSpace
-    | CategoricalSpace[SpaceScalarValue]
-    | PermutationSpace
-    | TupleSpace
-    | RecordSpace
-    | ArraySpace[SpaceBoundaryValue, SpaceCandidateValue]
-)
 _ArrayGeometrySpace: TypeAlias = ArraySpace[SpaceBoundaryValue, SpaceCandidateValue]
 
 
 def _is_array_geometry_space(space: object) -> TypeGuard[_ArrayGeometrySpace]:
     """Return whether ``space`` is an array geometry owner."""
     return isinstance(space, ArraySpace)
-
-
-def _is_builtin_geometry_space(
-    space: object,
-) -> TypeGuard[BuiltinGeometrySpace]:
-    """Return whether one space belongs to the built-in geometry family."""
-    return isinstance(
-        space,
-        (
-            RealSpace,
-            IntegerSpace,
-            CategoricalSpace,
-            PermutationSpace,
-            TupleSpace,
-            RecordSpace,
-            ArraySpace,
-        ),
-    )
 
 
 def distance_parts(
@@ -276,7 +250,7 @@ def compile_builtin_structured_geometry(
         Compiled built-in geometry, or ``None`` when ``space`` is not part of
         the built-in geometry family.
     """
-    if not _is_builtin_geometry_space(space):
+    if not is_builtin_geometry_space(space):
         return None
     return compile_builtin_child_space_geometry(space)
 
@@ -364,7 +338,7 @@ def compile_builtin_child_space_geometry(
         child_geometries = collect_child_geometries(
             tuple(
                 compile_builtin_child_space_geometry(child_space)
-                if _is_builtin_geometry_space(child_space)
+                if is_builtin_geometry_space(child_space)
                 else None
                 for child_space in space.child_spaces
             ),
@@ -383,7 +357,7 @@ def compile_builtin_child_space_geometry(
                     name,
                     (
                         compile_builtin_child_space_geometry(child_space)
-                        if _is_builtin_geometry_space(child_space)
+                        if is_builtin_geometry_space(child_space)
                         else None
                     ),
                 )
@@ -416,7 +390,7 @@ def compile_builtin_child_space_geometry(
             element_space=element_space,
         )
 
-    if not _is_builtin_geometry_space(element_space):
+    if not is_builtin_geometry_space(element_space):
         return None
 
     element_geometry = compile_builtin_child_space_geometry(element_space)
