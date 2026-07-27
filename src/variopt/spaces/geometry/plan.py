@@ -193,7 +193,7 @@ class _ZeroDistanceKernel:
 
 
 @dataclass(frozen=True, slots=True)
-class _LinearRealDistanceKernel:
+class _RealCoordinateDistanceKernel:
     start: int
     stop: int
     coordinate_span: float
@@ -228,27 +228,6 @@ class _LinearIntegerDistanceKernel:
         for index in range(self.start, self.stop):
             leaf_distance = (
                 abs(float(left.integer_values[index] - right.integer_values[index]))
-                / self.coordinate_span
-            )
-            squared_distance += leaf_distance * leaf_distance
-        return squared_distance
-
-
-@dataclass(frozen=True, slots=True)
-class _LogCoordinateDistanceKernel:
-    start: int
-    stop: int
-    coordinate_span: float
-
-    def squared_distance(
-        self,
-        left: EncodedStructuredCandidate,
-        right: EncodedStructuredCandidate,
-    ) -> float:
-        squared_distance = 0.0
-        for index in range(self.start, self.stop):
-            leaf_distance = (
-                abs(left.real_values[index] - right.real_values[index])
                 / self.coordinate_span
             )
             squared_distance += leaf_distance * leaf_distance
@@ -531,7 +510,7 @@ def _compile_real_geometry(
                 count,
                 sequence=sequence,
             ),
-            kernel=_LogCoordinateDistanceKernel(
+            kernel=_RealCoordinateDistanceKernel(
                 start=start,
                 stop=stop,
                 coordinate_span=log(space.high) - log(space.low),
@@ -539,7 +518,7 @@ def _compile_real_geometry(
         )
     return _CompiledCandidateGeometry(
         encoder=encoder,
-        kernel=_LinearRealDistanceKernel(
+        kernel=_RealCoordinateDistanceKernel(
             start=start,
             stop=stop,
             coordinate_span=space.high - space.low,
@@ -582,7 +561,7 @@ def _compile_integer_geometry(
                 count,
                 sequence=sequence,
             ),
-            kernel=_LogCoordinateDistanceKernel(
+            kernel=_RealCoordinateDistanceKernel(
                 start=start,
                 stop=stop,
                 coordinate_span=log(float(space.high)) - log(float(space.low)),
