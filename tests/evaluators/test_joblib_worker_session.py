@@ -452,6 +452,25 @@ class JoblibWorkerSessionTests:
 
         assert tuple(tmp_path.iterdir()) == ()
 
+    def test_exceptional_scope_exit_removes_snapshot_transport(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        session = JoblibWorkerSession(
+            problem=make_problem(OffsetObjective(0.0)),
+            backend="loky",
+            n_jobs=2,
+        )
+
+        with pytest.raises(RuntimeError, match="sentinel"):
+            with session:
+                assert len(tuple(tmp_path.iterdir())) == 1
+                raise RuntimeError("sentinel")
+
+        assert tuple(tmp_path.iterdir()) == ()
+
     @pytest.mark.parametrize(
         ("backend", "n_jobs"),
         (("threading", 2), ("loky", 1)),
