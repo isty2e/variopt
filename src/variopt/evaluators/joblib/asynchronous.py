@@ -826,7 +826,7 @@ class AsyncJoblibEvaluator(
         EvaluationOutcome[CandidateT, RequestAlignedEvaluationRecord]
     ]:
         """Start one attempt while preserving subclass ``_start_attempt`` hooks."""
-        if type(self) is AsyncJoblibEvaluator:
+        if type(self)._start_attempt is AsyncJoblibEvaluator._start_attempt:
             return self._start_controlled_joblib_attempt(
                 problem=problem,
                 request_inputs=request_inputs,
