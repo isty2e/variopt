@@ -24,6 +24,7 @@ from ..artifacts import (
     materialize_success_records,
 )
 from ..artifacts.alignment import validate_aligned_attempts
+from ..evaluators.episodes import RequestLocalEpisodeEvaluator
 from ..evaluators.sequential import SequentialEvaluator
 from ..execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
@@ -32,13 +33,23 @@ from ..execution import (
     SYNC_BATCH_EXECUTION_MODEL,
     EvaluationBudget,
     EvaluationBudgetExhausted,
+    EvaluationReservationBatch,
     ExecutionAssimilationMode,
     ExecutionModel,
 )
-from ..kernel import DirectKernel, Kernel, ProposalBatchQuery
+from ..kernel import (
+    DirectKernel,
+    Kernel,
+    ProposalBatchQuery,
+    ProposalKernelHint,
+    ProposalLocalSearchContext,
+    RequestLocalEpisode,
+    is_explicit_request_local_episode_kernel,
+)
 from ..methods import RunMethod
 from ..objective import Objective, ScalarEvaluationProtocol
 from ..problem import Problem
+from ..randomness import RandomStateSnapshot
 from ..spaces import CandidateEquality
 from ..typevars import CandidateT, RunMethodStateT
 from .assimilation import (
@@ -262,6 +273,206 @@ def _consume_reported_evaluation_cost(
         evaluation_budget.consume(reported_evaluation_count - consumed_by_runner)
         return reported_evaluation_count
     return consumed_by_runner
+
+
+def _max_min_evaluation_limits(
+    preferred_limits: tuple[int, ...],
+    *,
+    available_evaluations: int,
+) -> tuple[int, ...] | None:
+    """Allocate a deterministic starvation-free batch of hard limits."""
+    request_count = len(preferred_limits)
+    if request_count == 0:
+        return ()
+    if available_evaluations < request_count:
+        return None
+    if available_evaluations >= sum(preferred_limits):
+        return preferred_limits
+
+    limits = [1] * request_count
+    remaining = available_evaluations - request_count
+    active_limits = sorted(
+        (preferred_limit, request_index)
+        for request_index, preferred_limit in enumerate(preferred_limits)
+        if preferred_limit > 1
+    )
+    active_start = 0
+    water_level = 1
+    while remaining > 0:
+        next_limit = active_limits[active_start][0]
+        active_count = len(active_limits) - active_start
+        evaluations_to_next_limit = (next_limit - water_level) * active_count
+        if remaining < evaluations_to_next_limit:
+            complete_rounds, remainder = divmod(remaining, active_count)
+            final_level = water_level + complete_rounds
+            active_request_indices = sorted(
+                request_index for _, request_index in active_limits[active_start:]
+            )
+            for request_index in active_request_indices:
+                limits[request_index] = final_level
+            for request_index in active_request_indices[:remainder]:
+                limits[request_index] += 1
+            remaining = 0
+            break
+
+        remaining -= evaluations_to_next_limit
+        water_level = next_limit
+        while (
+            active_start < len(active_limits)
+            and active_limits[active_start][0] == water_level
+        ):
+            _, request_index = active_limits[active_start]
+            limits[request_index] = water_level
+            active_start += 1
+
+        if remaining == 0:
+            for _, request_index in active_limits[active_start:]:
+                limits[request_index] = water_level
+            break
+
+    return tuple(limits)
+
+
+def _lower_request_local_hint(
+    hint: ProposalKernelHint | None,
+) -> tuple[ProposalKernelHint | None, RandomStateSnapshot | None]:
+    """Separate a local-search hint from its authoritative RNG snapshot."""
+    if not isinstance(hint, ProposalLocalSearchContext):
+        return hint, None
+    return (
+        replace(hint, random_state_snapshot=None),
+        hint.random_state_snapshot,
+    )
+
+
+def _rebind_attempt_candidate_equality(
+    attempts: EvaluationAttemptBatch[CandidateT, StudyPayloadT],
+    *,
+    candidate_equal: CandidateEquality[CandidateT],
+) -> EvaluationAttemptBatch[CandidateT, StudyPayloadT]:
+    """Bind coordinator-owned equality after evaluator-owned execution."""
+    if len(attempts.successes) == 0:
+        return attempts
+
+    rebound_attempts = list(attempts.attempts)
+    for success_index, success in zip(
+        attempts.success_indices,
+        attempts.successes,
+        strict=True,
+    ):
+        rebound_attempts[success_index] = success.with_payload(
+            success.payload,
+            candidate_equal=candidate_equal,
+        )
+    return EvaluationAttemptBatch(attempts=rebound_attempts)
+
+
+def _evaluate_request_local_episode_batch(
+    study: StudyExecutionOwner[
+        BoundaryT,
+        CandidateT,
+        RunMethodStateT,
+        StudyPayloadT,
+        StudyRecordT,
+    ],
+    *,
+    execution_model: ExecutionModel,
+    attempt_evaluator: StudyEvaluator[
+        BoundaryT,
+        CandidateT,
+        StudyPayloadT,
+    ],
+    query: ProposalBatchQuery[BoundaryT, CandidateT, StudyPayloadT],
+    requests: tuple[EvaluationRequest[CandidateT], ...],
+    evaluation_budget: EvaluationBudget | None,
+) -> tuple[EvaluationAttemptBatch[CandidateT, StudyPayloadT], int] | None:
+    """Execute one eligible synchronous batch as evaluator-owned episodes."""
+    if execution_model not in {
+        SEQUENTIAL_EXECUTION_MODEL,
+        SYNC_BATCH_EXECUTION_MODEL,
+    }:
+        return None
+    if evaluation_budget is None:
+        return None
+    if not isinstance(attempt_evaluator, RequestLocalEpisodeEvaluator):
+        return None
+
+    kernel = study.kernel
+    if not is_explicit_request_local_episode_kernel(kernel):
+        return None
+
+    hints = query.proposal_kernel_hints
+    preferred_limits: list[int] = []
+    lowered_hints: list[ProposalKernelHint | None] = []
+    random_state_snapshots: list[RandomStateSnapshot | None] = []
+    for request_index, request in enumerate(requests):
+        hint = None if hints is None else hints[request_index]
+        preferred_limit = kernel.preferred_request_local_evaluation_limit(
+            problem=study.problem,
+            request=request,
+            proposal_kernel_hint=hint,
+        )
+        if preferred_limit is None:
+            return None
+        if type(preferred_limit) is not int:
+            msg = "preferred request-local evaluation limits must be exact integers"
+            raise TypeError(msg)
+        if preferred_limit <= 0:
+            msg = "preferred request-local evaluation limits must be positive"
+            raise ValueError(msg)
+
+        lowered_hint, random_state_snapshot = _lower_request_local_hint(hint)
+        preferred_limits.append(preferred_limit)
+        lowered_hints.append(lowered_hint)
+        random_state_snapshots.append(random_state_snapshot)
+
+    limits = _max_min_evaluation_limits(
+        tuple(preferred_limits),
+        available_evaluations=evaluation_budget.remaining,
+    )
+    if limits is None:
+        return None
+
+    reservation = EvaluationReservationBatch(
+        budget=evaluation_budget,
+        limits=limits,
+    )
+    try:
+        episodes = tuple(
+            RequestLocalEpisode(
+                request_index=request_index,
+                request=request,
+                kernel=kernel,
+                proposal_kernel_hint=lowered_hints[request_index],
+                random_state_snapshot=random_state_snapshots[request_index],
+                evaluation_limit=limits[request_index],
+                execution_resources=query.execution_resources,
+            )
+            for request_index, request in enumerate(requests)
+        )
+        attempts = attempt_evaluator.evaluate_request_local_episodes(
+            study.problem,
+            episodes,
+        )
+        validate_aligned_attempts(
+            requests,
+            attempts,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
+        attempts = _rebind_attempt_candidate_equality(
+            attempts,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
+        consumed_counts = tuple(
+            attempt.evaluation_count for attempt in attempts.attempts
+        )
+        consumed_evaluations = reservation.settle(consumed_counts)
+    except Exception:
+        if not reservation.is_finalized:
+            reservation.forfeit()
+        raise
+
+    return attempts, consumed_evaluations
 
 
 def _current_remaining_budget(
@@ -640,22 +851,34 @@ def _evaluate_step_feedback(
             )
             return attempts
 
-    remaining_before = (
-        None if evaluation_budget is None else evaluation_budget.remaining
-    )
-    kernel_attempts = study.kernel.run(top_level_query, batch_executor)
-    requests = requests_for_query(top_level_query)
-    validate_aligned_attempts(
-        requests,
-        kernel_attempts,
-        candidate_equal=study.problem.space.candidates_equal,
-    )
-    reported_evaluation_count = kernel_attempts.evaluation_count
-    step_evaluation_count = _consume_reported_evaluation_cost(
+    request_local_result = _evaluate_request_local_episode_batch(
+        study,
+        execution_model=execution_model,
+        attempt_evaluator=attempt_evaluator,
+        query=top_level_query,
+        requests=top_level_requests,
         evaluation_budget=evaluation_budget,
-        remaining_before=remaining_before,
-        reported_evaluation_count=reported_evaluation_count,
     )
+    if request_local_result is None:
+        remaining_before = (
+            None if evaluation_budget is None else evaluation_budget.remaining
+        )
+        kernel_attempts = study.kernel.run(top_level_query, batch_executor)
+        requests = requests_for_query(top_level_query)
+        validate_aligned_attempts(
+            requests,
+            kernel_attempts,
+            candidate_equal=study.problem.space.candidates_equal,
+        )
+        reported_evaluation_count = kernel_attempts.evaluation_count
+        step_evaluation_count = _consume_reported_evaluation_cost(
+            evaluation_budget=evaluation_budget,
+            remaining_before=remaining_before,
+            reported_evaluation_count=reported_evaluation_count,
+        )
+    else:
+        kernel_attempts, step_evaluation_count = request_local_result
+
     feedback_attempts = materialize_feedback_attempts(
         kernel_attempts,
         study.attempt_materializer,

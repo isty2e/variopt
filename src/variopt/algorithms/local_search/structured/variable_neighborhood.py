@@ -11,6 +11,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ....artifacts import (
     EvaluationAttemptBatch,
+    EvaluationRequest,
     KernelDiagnostics,
     KernelStatus,
     ObservationPayload,
@@ -18,10 +19,14 @@ from ....artifacts import (
     ProposalEvaluationSpec,
 )
 from ....kernel import (
-    Kernel,
     ProposalBatchQuery,
+    ProposalKernelHint,
     ProposalLocalSearchContext,
+    RequestLocalEpisode,
+    RequestLocalEpisodeKernel,
+    RequestLocalEvaluationRunner,
 )
+from ....problem import Problem
 from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import (
@@ -29,6 +34,15 @@ from .neighborhood import (
     DiscreteLeafSpace,
     StructuredCandidateT,
     StructuredVariableNeighborhoodStage,
+)
+from .runtime.episodes import (
+    prepare_structured_request_local_runtime,
+    structured_episode_has_random_state,
+    structured_episode_is_disabled,
+    structured_episode_max_steps,
+    structured_leaf_schedule,
+    structured_local_search_context,
+    structured_stage_evaluation_limit,
 )
 from .runtime.prepared import (
     PreparedStructuredLocalSearchRuntime,
@@ -41,16 +55,10 @@ from .runtime.search import run_structured_variable_neighborhood_stage_once
 @dataclass(frozen=True, slots=True)
 class StructuredVariableNeighborhoodKernel(
     FrozenGenericSlotsCompat,
-    Kernel[
-        ProposalBatchQuery[
-            BoundaryT,
-            StructuredCandidateT,
-            ObservationPayload,
-        ],
-        EvaluationAttemptBatch[
-            StructuredCandidateT,
-            ObservationPayload,
-        ],
+    RequestLocalEpisodeKernel[
+        BoundaryT,
+        StructuredCandidateT,
+        ObservationPayload,
     ],
     Generic[BoundaryT, StructuredCandidateT],
 ):
@@ -307,6 +315,89 @@ class StructuredVariableNeighborhoodKernel(
         return structured_episode_attempt_batch(
             success=success,
             failed_attempts=failed_attempts,
+        )
+
+    @override
+    def preferred_request_local_evaluation_limit(
+        self,
+        *,
+        problem: Problem[BoundaryT, StructuredCandidateT, ObservationPayload],
+        request: EvaluationRequest[StructuredCandidateT],
+        proposal_kernel_hint: ProposalKernelHint | None,
+    ) -> int | None:
+        """Return a finite cap when stochastic stages have an RNG owner."""
+        context = structured_local_search_context(proposal_kernel_hint)
+        if structured_episode_is_disabled(context):
+            return 1
+        has_stochastic_stage = any(
+            stage.kind == "sampled_leafwise_first_improvement" for stage in self.stages
+        )
+        if has_stochastic_stage and not structured_episode_has_random_state(context):
+            return None
+        leaf_schedule = structured_leaf_schedule(
+            problem=problem,
+            request=request,
+            context=context,
+        )
+        max_steps = structured_episode_max_steps(
+            default_max_steps=self.max_steps,
+            context=context,
+        )
+        stage_cycle_limit = sum(
+            structured_stage_evaluation_limit(stage, leaf_schedule)
+            for stage in self.stages
+        )
+        return 1 + (max_steps + 1) * stage_cycle_limit
+
+    @override
+    def run_request_local_episode(
+        self,
+        *,
+        problem: Problem[BoundaryT, StructuredCandidateT, ObservationPayload],
+        episode: RequestLocalEpisode[
+            BoundaryT,
+            StructuredCandidateT,
+            ObservationPayload,
+        ],
+        runner: RequestLocalEvaluationRunner[
+            StructuredCandidateT,
+            ObservationPayload,
+        ],
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
+        """Run one variable-neighborhood episode on its assigned worker."""
+        runtime = prepare_structured_request_local_runtime(
+            problem=problem,
+            episode=episode,
+            runner=runner,
+        )
+        random_state_snapshot = episode.random_state_snapshot
+        if random_state_snapshot is None:
+            context = runtime.proposal_context(proposal_index=0)
+            if context is not None and not context.enabled:
+                return self._evaluate_original_proposal(
+                    runtime=runtime,
+                    proposal=episode.request.proposal,
+                    proposal_evaluation_spec=(episode.request.proposal_evaluation_spec),
+                )
+            has_stochastic_stage = any(
+                stage.kind == "sampled_leafwise_first_improvement"
+                for stage in self.stages
+            )
+            if has_stochastic_stage:
+                msg = (
+                    "stochastic variable-neighborhood episodes require a "
+                    "random-state snapshot"
+                )
+                raise ValueError(msg)
+            random_state = np.random.RandomState(0)
+        else:
+            random_state = random_state_snapshot.materialize()
+        return self._optimize_proposal(
+            runtime=runtime,
+            proposal_index=0,
+            proposal=episode.request.proposal,
+            random_state=random_state,
+            reserved_count=0,
         )
 
     @override

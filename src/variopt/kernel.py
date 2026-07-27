@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Generic, Protocol
+from typing import Generic, Protocol, TypeGuard
 
 from typing_extensions import TypeVar, override
 
@@ -247,8 +247,8 @@ class RequestLocalEpisodeKernel(
         problem: Problem[BoundaryT, CandidateT, RequestLocalPayloadT],
         request: EvaluationRequest[CandidateT],
         proposal_kernel_hint: ProposalKernelHint | None,
-    ) -> int:
-        """Return the finite preferred objective-call limit for one request.
+    ) -> int | None:
+        """Return the preferred objective-call limit for one request.
 
         Parameters
         ----------
@@ -261,8 +261,10 @@ class RequestLocalEpisodeKernel(
 
         Returns
         -------
-        int
-            Positive finite objective-call limit preferred by this kernel.
+        int | None
+            Positive finite objective-call limit preferred by this kernel, or
+            ``None`` when the kernel cannot state a safe finite limit and must
+            retain coordinator execution.
         """
 
     @abstractmethod
@@ -289,6 +291,29 @@ class RequestLocalEpisodeKernel(
         EvaluationAttemptBatch[CandidateT, RequestLocalPayloadT]
             Exactly one top-level attempt for the completed episode.
         """
+
+
+def is_explicit_request_local_episode_kernel(
+    kernel: Kernel[
+        ProposalBatchQuery[BoundaryT, CandidateT, RequestLocalPayloadT],
+        EvaluationAttemptBatch[CandidateT, RequestLocalPayloadT],
+    ],
+) -> TypeGuard[RequestLocalEpisodeKernel[BoundaryT, CandidateT, RequestLocalPayloadT]]:
+    """Return whether ``kernel`` explicitly implements the episode capability.
+
+    A subclass that merely inherits a built-in implementation is deliberately
+    excluded. Such subclasses may override observable ``run`` behavior and
+    must retain coordinator execution until they explicitly implement both
+    request-local methods.
+    """
+    if not isinstance(kernel, RequestLocalEpisodeKernel):
+        return False
+
+    implementation_namespace = type(kernel).__dict__
+    return (
+        "preferred_request_local_evaluation_limit" in implementation_namespace
+        and "run_request_local_episode" in implementation_namespace
+    )
 
 
 @dataclass(frozen=True, slots=True)

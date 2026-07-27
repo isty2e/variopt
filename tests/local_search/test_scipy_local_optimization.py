@@ -31,6 +31,8 @@ from variopt.artifacts import (
     ProposalEvaluationSpec,
 )
 from variopt.artifacts.alignment import validate_aligned_attempts
+from variopt.evaluators import SequentialEvaluator
+from variopt.evaluators.episodes import execute_request_local_episode
 from variopt.execution import (
     ExecutionResources,
     NestedParallelismPolicy,
@@ -39,6 +41,7 @@ from variopt.kernel import (
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
+    RequestLocalEpisode,
 )
 from variopt.spaces import (
     IntegerSpace,
@@ -164,6 +167,169 @@ class ScipyMinimizeKernelTests:
                 owner_backend="sequential",
             ),
         )
+
+    def test_request_local_dispatch_requires_explicit_evaluation_cap(self) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        request = EvaluationRequest(
+            proposal=Proposal(candidate=4.0, proposal_id="p-1"),
+        )
+
+        assert (
+            ScipyMinimizeKernel[
+                float | int,
+                float,
+            ]().preferred_request_local_evaluation_limit(
+                problem=problem,
+                request=request,
+                proposal_kernel_hint=None,
+            )
+            is None
+        )
+        assert (
+            ScipyMinimizeKernel[
+                float | int,
+                float,
+            ](max_evaluations=7).preferred_request_local_evaluation_limit(
+                problem=problem,
+                request=request,
+                proposal_kernel_hint=None,
+            )
+            == 7
+        )
+        assert (
+            ScipyMinimizeKernel[
+                float | int,
+                float,
+            ]().preferred_request_local_evaluation_limit(
+                problem=problem,
+                request=request,
+                proposal_kernel_hint=ProposalLocalSearchContext(enabled=False),
+            )
+            == 1
+        )
+
+    def test_request_local_evaluation_cap_rejects_boolean(self) -> None:
+        with pytest.raises(TypeError, match="max_evaluations must be an exact integer"):
+            _ = ScipyMinimizeKernel[float | int, float](
+                max_evaluations=True,
+            )
+
+    def test_request_local_episode_enforces_objective_call_cap(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](
+            method="L-BFGS-B",
+            max_evaluations=2,
+        )
+        request = EvaluationRequest(
+            proposal=Proposal(candidate=4.0, proposal_id="p-1"),
+        )
+
+        def probing_scipy_minimize(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            del method, coordinate_bounds, tolerance, options
+            _ = objective_in_coordinate_space(initial_coordinates)
+            _ = objective_in_coordinate_space((2.0,))
+            _ = objective_in_coordinate_space((1.5,))
+            raise AssertionError("hard evaluation cap should stop the third probe")
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            probing_scipy_minimize,
+        )
+        resources = SequentialEvaluator[
+            float | int,
+            float,
+        ]().execution_resources()
+        attempts = execute_request_local_episode(
+            problem=problem,
+            episode=RequestLocalEpisode(
+                request_index=0,
+                request=request,
+                kernel=kernel,
+                proposal_kernel_hint=None,
+                random_state_snapshot=None,
+                evaluation_limit=2,
+                execution_resources=resources,
+            ),
+        )
+
+        assert attempts.evaluation_count == 2
+        success = attempts.successes[0]
+        assert success.candidate == 2.0
+        assert success.kernel_diagnostics is not None
+        assert success.kernel_diagnostics.status is KernelStatus.STOPPED
+
+    def test_evaluation_cap_applies_without_a_shared_budget(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        problem = Problem(
+            space=RealSpace(-5.0, 5.0),
+            objective=ShiftedSquareObjective(),
+        )
+        kernel = ScipyMinimizeKernel[float | int, float](
+            max_evaluations=1,
+        )
+        query = self.make_query(problem=problem, candidate=4.0)
+        evaluated_candidates: list[float] = []
+
+        def returning_uncached_coordinate(
+            *,
+            objective_in_coordinate_space: Callable[[Sequence[float]], float],
+            initial_coordinates: tuple[float, ...],
+            method: str,
+            coordinate_bounds: tuple[tuple[float, float], ...],
+            tolerance: float | None,
+            options: dict[str, int],
+        ) -> FakeScipyOptimizeResult:
+            del method, coordinate_bounds, tolerance, options
+            initial_score = objective_in_coordinate_space(initial_coordinates)
+            return FakeScipyOptimizeResult(
+                x=(2.0,),
+                fun=initial_score,
+                nfev=1,
+                success=True,
+                message="uncached final coordinate",
+            )
+
+        def recording_runner(
+            local_query: ProposalBatchQuery[
+                float | int,
+                float,
+                ObservationPayload,
+            ],
+        ) -> EvaluationAttemptBatch[float, ObservationPayload]:
+            evaluated_candidates.append(local_query.proposals[0].candidate)
+            return evaluate_query_directly(local_query)
+
+        monkeypatch.setattr(
+            scipy_kernel_module,
+            "run_scipy_minimize",
+            returning_uncached_coordinate,
+        )
+
+        attempts = kernel.run(query, recording_runner)
+
+        assert evaluated_candidates == [4.0]
+        assert attempts.evaluation_count == 1
+        assert attempts.successes[0].candidate == 4.0
 
     def test_scipy_minimize_result_names_backend_function_value(self) -> None:
         result = ScipyMinimizeResult.from_optimize_result(

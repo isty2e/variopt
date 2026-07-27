@@ -11,6 +11,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ....artifacts import (
     EvaluationAttemptBatch,
+    EvaluationRequest,
     KernelDiagnostics,
     KernelStatus,
     ObservationPayload,
@@ -18,10 +19,14 @@ from ....artifacts import (
     ProposalEvaluationSpec,
 )
 from ....kernel import (
-    Kernel,
     ProposalBatchQuery,
+    ProposalKernelHint,
     ProposalLocalSearchContext,
+    RequestLocalEpisode,
+    RequestLocalEpisodeKernel,
+    RequestLocalEvaluationRunner,
 )
+from ....problem import Problem
 from ....randomness import RandomSeed, RandomStateSnapshot
 from ....spaces import LeafPath
 from .neighborhood import (
@@ -29,6 +34,15 @@ from .neighborhood import (
     DiscreteLeafSpace,
     StructuredCandidateT,
     StructuredKickPolicy,
+)
+from .runtime.episodes import (
+    prepare_structured_request_local_runtime,
+    structured_episode_has_random_state,
+    structured_episode_is_disabled,
+    structured_episode_max_steps,
+    structured_leaf_schedule,
+    structured_local_search_context,
+    structured_single_scan_limit,
 )
 from .runtime.kicks import (
     accepts_strict_improvement,
@@ -45,16 +59,10 @@ from .runtime.search import run_leafwise_local_search_episode
 @dataclass(frozen=True, slots=True)
 class StructuredIteratedLocalSearchKernel(
     FrozenGenericSlotsCompat,
-    Kernel[
-        ProposalBatchQuery[
-            BoundaryT,
-            StructuredCandidateT,
-            ObservationPayload,
-        ],
-        EvaluationAttemptBatch[
-            StructuredCandidateT,
-            ObservationPayload,
-        ],
+    RequestLocalEpisodeKernel[
+        BoundaryT,
+        StructuredCandidateT,
+        ObservationPayload,
     ],
     Generic[BoundaryT, StructuredCandidateT],
 ):
@@ -295,6 +303,73 @@ class StructuredIteratedLocalSearchKernel(
         return structured_episode_attempt_batch(
             success=success,
             failed_attempts=failed_attempts,
+        )
+
+    @override
+    def preferred_request_local_evaluation_limit(
+        self,
+        *,
+        problem: Problem[BoundaryT, StructuredCandidateT, ObservationPayload],
+        request: EvaluationRequest[StructuredCandidateT],
+        proposal_kernel_hint: ProposalKernelHint | None,
+    ) -> int | None:
+        """Return a finite cap when the proposal owns an RNG snapshot."""
+        context = structured_local_search_context(proposal_kernel_hint)
+        if structured_episode_is_disabled(context):
+            return 1
+        if not structured_episode_has_random_state(context):
+            return None
+        leaf_schedule = structured_leaf_schedule(
+            problem=problem,
+            request=request,
+            context=context,
+        )
+        max_steps = structured_episode_max_steps(
+            default_max_steps=self.max_steps,
+            context=context,
+        )
+        scan_limit = structured_single_scan_limit(leaf_schedule)
+        episode_count = self.max_kicks + 1
+        return episode_count + (max_steps + episode_count) * scan_limit
+
+    @override
+    def run_request_local_episode(
+        self,
+        *,
+        problem: Problem[BoundaryT, StructuredCandidateT, ObservationPayload],
+        episode: RequestLocalEpisode[
+            BoundaryT,
+            StructuredCandidateT,
+            ObservationPayload,
+        ],
+        runner: RequestLocalEvaluationRunner[
+            StructuredCandidateT,
+            ObservationPayload,
+        ],
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
+        """Run one iterated episode from its authoritative RNG snapshot."""
+        runtime = prepare_structured_request_local_runtime(
+            problem=problem,
+            episode=episode,
+            runner=runner,
+        )
+        random_state_snapshot = episode.random_state_snapshot
+        if random_state_snapshot is None:
+            context = runtime.proposal_context(proposal_index=0)
+            if context is None or context.enabled:
+                msg = "iterated request-local episodes require a random-state snapshot"
+                raise ValueError(msg)
+            return self._evaluate_original_proposal(
+                runtime=runtime,
+                proposal=episode.request.proposal,
+                proposal_evaluation_spec=(episode.request.proposal_evaluation_spec),
+            )
+        return self._optimize_proposal(
+            runtime=runtime,
+            proposal_index=0,
+            proposal=episode.request.proposal,
+            random_state=random_state_snapshot.materialize(),
+            reserved_count=0,
         )
 
     @override
