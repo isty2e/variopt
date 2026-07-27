@@ -173,6 +173,12 @@ advanced kernels. `ScipyMinimizeMethod` is the literal method set accepted by
 This matters because a single kernel episode can evaluate the objective many
 times.
 
+For `ScipyMinimizeKernel`, `max_iterations` limits SciPy algorithm iterations,
+not objective calls. Set `max_evaluations` when you need an explicit
+per-proposal objective-call cap. That finite cap also makes the kernel eligible
+for evaluator-owned request-local episode dispatch; without it, SciPy local
+search keeps the coordinator execution path.
+
 The kernel path reports that cost through successful attempt
 `evaluation_count` metadata.
 `Study.optimize(...)` then offers two modes:
@@ -227,10 +233,18 @@ workers.
 The current nested-parallelism contract makes the evaluator the outer parallel
 owner. In practice that means:
 
-- `JoblibEvaluator` fans out proposals across workers
+- `JoblibEvaluator` fans out explicitly eligible bounded proposal-local
+  episodes across workers
 - kernels should respect `ExecutionResources` and remain serial when the
   evaluator owns parallelism
 - nested worker spawning should be treated as exceptional, not as the default
+
+Built-in structured local-search kernels derive finite objective-call caps from
+their step and neighborhood bounds. Stochastic structured episodes additionally
+require a proposal-local random-state snapshot so worker scheduling cannot
+change their trajectories. Kernels without a safe finite cap, custom subclasses
+that only inherit an episode implementation, and evaluators without the
+request-local capability use the ordinary coordinator callback path.
 
 Practical rule:
 

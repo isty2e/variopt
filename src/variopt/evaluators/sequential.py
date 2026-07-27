@@ -19,10 +19,12 @@ from ..evaluation_pipeline import (
     evaluate_request_outcome,
 )
 from ..execution import ExecutionResources, NestedParallelismPolicy
+from ..kernel import RequestLocalEpisode
 from ..outcomes import EvaluationOutcome
 from ..problem import Problem
 from ..typevars import CandidateT
 from .base import Evaluator
+from .episodes import execute_request_local_episode, ordered_request_local_episodes
 
 BoundaryT = TypeVar("BoundaryT")
 SequentialEvaluationRecordT = DefaultTypeVar(
@@ -121,4 +123,42 @@ class SequentialEvaluator(
                 request=request,
             )
             for request in requests
+        )
+
+    def evaluate_request_local_episodes(
+        self,
+        problem: Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT],
+        episodes: Sequence[
+            RequestLocalEpisode[
+                BoundaryT,
+                CandidateT,
+                SequentialEvaluationRecordT,
+            ]
+        ],
+    ) -> EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]:
+        """Execute request-local episodes inline in logical request order.
+
+        Parameters
+        ----------
+        problem : Problem[BoundaryT, CandidateT, SequentialEvaluationRecordT]
+            Problem that defines evaluation semantics.
+        episodes : Sequence[RequestLocalEpisode[BoundaryT, CandidateT, SequentialEvaluationRecordT]]
+            Request-local work items. Transport order may differ from logical
+            request order, but indices must be unique and contiguous from zero.
+
+        Returns
+        -------
+        EvaluationAttemptBatch[CandidateT, SequentialEvaluationRecordT]
+            One top-level attempt per episode in request-index order.
+        """
+        ordered_episodes = ordered_request_local_episodes(episodes)
+        return EvaluationAttemptBatch[
+            CandidateT,
+            SequentialEvaluationRecordT,
+        ].from_single_request_attempts(
+            execute_request_local_episode(
+                problem=problem,
+                episode=episode,
+            )
+            for episode in ordered_episodes
         )

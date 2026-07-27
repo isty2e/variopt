@@ -19,13 +19,16 @@ from ....artifacts import (
     Proposal,
     ProposalEvaluationSpec,
 )
-from ....execution import EvaluationBudgetExhausted
+from ....execution import EvaluationBudget, EvaluationBudgetExhausted
 from ....kernel import (
-    Kernel,
     ProposalBatchQuery,
     ProposalKernelHint,
     ProposalLocalSearchContext,
+    RequestLocalEpisode,
+    RequestLocalEpisodeKernel,
+    RequestLocalEvaluationRunner,
 )
+from ....problem import Problem
 from ....spaces import SearchSpace
 from ....spaces.projections import ContinuousStructuredSpaceCodec
 from ....spaces.types import SpaceCandidateValue
@@ -119,16 +122,10 @@ class _ContinuousCodecProvider(Generic[BoundaryT, ContinuousCandidateT]):
 @dataclass(frozen=True, slots=True)
 class ScipyMinimizeKernel(
     FrozenGenericSlotsCompat,
-    Kernel[
-        ProposalBatchQuery[
-            BoundaryT,
-            ContinuousCandidateT,
-            ObservationPayload,
-        ],
-        EvaluationAttemptBatch[
-            ContinuousCandidateT,
-            ObservationPayload,
-        ],
+    RequestLocalEpisodeKernel[
+        BoundaryT,
+        ContinuousCandidateT,
+        ObservationPayload,
     ],
     Generic[BoundaryT, ContinuousCandidateT],
 ):
@@ -144,6 +141,10 @@ class ScipyMinimizeKernel(
     max_iterations : int | None, default=None
         Optional global iteration budget forwarded to SciPy, unless a proposal
         context overrides it.
+    max_evaluations : int | None, default=None
+        Optional hard objective-call cap for each proposal-local episode.
+        Request-local evaluator dispatch requires this explicit cap because
+        SciPy iteration counts do not bound objective calls.
 
     Notes
     -----
@@ -156,6 +157,7 @@ class ScipyMinimizeKernel(
     method: ScipyMinimizeMethod = "L-BFGS-B"
     tolerance: float | None = None
     max_iterations: int | None = None
+    max_evaluations: int | None = None
 
     def __post_init__(self) -> None:
         """Validate SciPy adapter boundary settings.
@@ -177,6 +179,13 @@ class ScipyMinimizeKernel(
         if self.max_iterations is not None and self.max_iterations <= 0:
             msg = "max_iterations must be positive when provided"
             raise ValueError(msg)
+        if self.max_evaluations is not None:
+            if type(self.max_evaluations) is not int:
+                msg = "max_evaluations must be an exact integer when provided"
+                raise TypeError(msg)
+            if self.max_evaluations <= 0:
+                msg = "max_evaluations must be positive when provided"
+                raise ValueError(msg)
 
     def scipy_options(self) -> dict[str, int]:
         """Return SciPy options derived from kernel settings.
@@ -419,7 +428,13 @@ class ScipyMinimizeKernel(
 
         def can_evaluate_local_candidate() -> bool:
             budget = query.evaluation_budget
-            return budget is None or budget.can_consume(1 + reserved_count)
+            within_kernel_limit = (
+                self.max_evaluations is None
+                or total_evaluation_count() < self.max_evaluations
+            )
+            return within_kernel_limit and (
+                budget is None or budget.can_consume(1 + reserved_count)
+            )
 
         def result_request(
             candidate: ContinuousCandidateT,
@@ -568,11 +583,13 @@ class ScipyMinimizeKernel(
                 else original_attempt.single_success_or_none()
             )
             if original_success is None and original_attempt is None:
-                if (
-                    query.evaluation_budget is not None
-                    and not can_evaluate_local_candidate()
-                    and len(evaluated_successes_by_coordinates) > 0
-                ):
+                if not can_evaluate_local_candidate():
+                    if len(evaluated_successes_by_coordinates) == 0:
+                        return self._attempt_batch_from_success_and_failures(
+                            success=None,
+                            failed_attempts=failed_attempts,
+                            failure_request=original_request,
+                        )
                     original_success = min(
                         evaluated_successes_by_coordinates.values(),
                         key=lambda success: success.payload.score,
@@ -654,11 +671,13 @@ class ScipyMinimizeKernel(
                     message="optimized candidate evaluation failed",
                 )
 
-            if (
-                query.evaluation_budget is not None
-                and not can_evaluate_local_candidate()
-                and len(evaluated_successes_by_coordinates) > 0
-            ):
+            if not can_evaluate_local_candidate():
+                if len(evaluated_successes_by_coordinates) == 0:
+                    return self._attempt_batch_from_success_and_failures(
+                        success=None,
+                        failed_attempts=failed_attempts,
+                        failure_request=original_request,
+                    )
                 best_seen_success = min(
                     evaluated_successes_by_coordinates.values(),
                     key=lambda success: success.payload.score,
@@ -720,6 +739,88 @@ class ScipyMinimizeKernel(
         return self._attempt_batch_from_success_and_failures(
             success=success,
             failed_attempts=failed_attempts,
+        )
+
+    @override
+    def preferred_request_local_evaluation_limit(
+        self,
+        *,
+        problem: Problem[BoundaryT, ContinuousCandidateT, ObservationPayload],
+        request: EvaluationRequest[ContinuousCandidateT],
+        proposal_kernel_hint: ProposalKernelHint | None,
+    ) -> int | None:
+        """Return the explicit objective-call cap for one SciPy episode."""
+        del problem, request
+        context = _as_local_search_context(proposal_kernel_hint)
+        if context is not None and not context.enabled:
+            return 1
+        return self.max_evaluations
+
+    @override
+    def run_request_local_episode(
+        self,
+        *,
+        problem: Problem[BoundaryT, ContinuousCandidateT, ObservationPayload],
+        episode: RequestLocalEpisode[
+            BoundaryT,
+            ContinuousCandidateT,
+            ObservationPayload,
+        ],
+        runner: RequestLocalEvaluationRunner[
+            ContinuousCandidateT,
+            ObservationPayload,
+        ],
+    ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
+        """Run one SciPy episode through a bounded worker-local runner."""
+        local_budget = EvaluationBudget(episode.evaluation_limit)
+        hint = episode.proposal_kernel_hint
+        query = ProposalBatchQuery(
+            problem=problem,
+            proposals=(episode.request.proposal,),
+            execution_resources=episode.execution_resources,
+            proposal_evaluation_specs=(
+                None
+                if episode.request.proposal_evaluation_spec is None
+                else (episode.request.proposal_evaluation_spec,)
+            ),
+            proposal_kernel_hints=None if hint is None else (hint,),
+            evaluation_budget=local_budget,
+        )
+
+        def evaluate_query(
+            local_query: ProposalBatchQuery[
+                BoundaryT,
+                ContinuousCandidateT,
+                ObservationPayload,
+            ],
+        ) -> EvaluationAttemptBatch[ContinuousCandidateT, ObservationPayload]:
+            if len(local_query.proposals) != 1:
+                msg = "request-local SciPy runners require one proposal"
+                raise ValueError(msg)
+            proposal_evaluation_spec = (
+                None
+                if local_query.proposal_evaluation_specs is None
+                else local_query.proposal_evaluation_specs[0]
+            )
+            local_budget.consume(1)
+            return runner.evaluate(
+                EvaluationRequest(
+                    proposal=local_query.proposals[0],
+                    proposal_evaluation_spec=proposal_evaluation_spec,
+                ),
+            )
+
+        codec_provider = _ContinuousCodecProvider[
+            BoundaryT,
+            ContinuousCandidateT,
+        ](space=problem.space)
+        return self._optimize_proposal(
+            query=query,
+            proposal_index=0,
+            proposal=episode.request.proposal,
+            codec_provider=codec_provider.codec,
+            runner=evaluate_query,
+            reserved_count=0,
         )
 
     @override

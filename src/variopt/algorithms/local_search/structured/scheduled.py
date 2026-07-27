@@ -10,6 +10,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 from ....artifacts import (
     EvaluationAttemptBatch,
+    EvaluationRequest,
     KernelDiagnostics,
     KernelStatus,
     ObservationPayload,
@@ -17,12 +18,25 @@ from ....artifacts import (
     ProposalEvaluationSpec,
 )
 from ....kernel import (
-    Kernel,
     ProposalBatchQuery,
+    ProposalKernelHint,
     ProposalLocalSearchContext,
+    RequestLocalEpisode,
+    RequestLocalEpisodeKernel,
+    RequestLocalEvaluationRunner,
 )
+from ....problem import Problem
 from ....spaces import LeafPath
 from .neighborhood import BoundaryT, DiscreteLeafSpace, StructuredCandidateT
+from .runtime.episodes import (
+    prepare_structured_request_local_runtime,
+    structured_episode_is_disabled,
+    structured_episode_max_steps,
+    structured_leaf_schedule,
+    structured_local_search_context,
+    structured_pair_scan_limit,
+    structured_single_scan_limit,
+)
 from .runtime.prepared import (
     PreparedStructuredLocalSearchRuntime,
     prepare_structured_local_search_runtime,
@@ -37,16 +51,10 @@ from .runtime.search import (
 @dataclass(frozen=True, slots=True)
 class StructuredScheduledLocalSearchKernel(
     FrozenGenericSlotsCompat,
-    Kernel[
-        ProposalBatchQuery[
-            BoundaryT,
-            StructuredCandidateT,
-            ObservationPayload,
-        ],
-        EvaluationAttemptBatch[
-            StructuredCandidateT,
-            ObservationPayload,
-        ],
+    RequestLocalEpisodeKernel[
+        BoundaryT,
+        StructuredCandidateT,
+        ObservationPayload,
     ],
     Generic[BoundaryT, StructuredCandidateT],
 ):
@@ -266,6 +274,63 @@ class StructuredScheduledLocalSearchKernel(
         return structured_episode_attempt_batch(
             success=success,
             failed_attempts=failed_attempts,
+        )
+
+    @override
+    def preferred_request_local_evaluation_limit(
+        self,
+        *,
+        problem: Problem[BoundaryT, StructuredCandidateT, ObservationPayload],
+        request: EvaluationRequest[StructuredCandidateT],
+        proposal_kernel_hint: ProposalKernelHint | None,
+    ) -> int:
+        """Return a safe objective-call cap for one scheduled episode."""
+        context = structured_local_search_context(proposal_kernel_hint)
+        if structured_episode_is_disabled(context):
+            return 1
+        leaf_schedule = structured_leaf_schedule(
+            problem=problem,
+            request=request,
+            context=context,
+        )
+        scan_limit = structured_single_scan_limit(
+            leaf_schedule
+        ) + structured_pair_scan_limit(
+            leaf_schedule,
+            pair_move_leaf_limit=self.pair_move_leaf_limit,
+        )
+        max_steps = structured_episode_max_steps(
+            default_max_steps=self.max_steps,
+            context=context,
+        )
+        return 1 + max_steps * scan_limit
+
+    @override
+    def run_request_local_episode(
+        self,
+        *,
+        problem: Problem[BoundaryT, StructuredCandidateT, ObservationPayload],
+        episode: RequestLocalEpisode[
+            BoundaryT,
+            StructuredCandidateT,
+            ObservationPayload,
+        ],
+        runner: RequestLocalEvaluationRunner[
+            StructuredCandidateT,
+            ObservationPayload,
+        ],
+    ) -> EvaluationAttemptBatch[StructuredCandidateT, ObservationPayload]:
+        """Run one scheduled episode without coordinator callbacks."""
+        runtime = prepare_structured_request_local_runtime(
+            problem=problem,
+            episode=episode,
+            runner=runner,
+        )
+        return self._optimize_proposal(
+            runtime=runtime,
+            proposal_index=0,
+            proposal=episode.request.proposal,
+            reserved_count=0,
         )
 
     @override

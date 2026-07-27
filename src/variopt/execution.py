@@ -1,8 +1,9 @@
 """Execution resource and execution-model contracts."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Literal, NoReturn, SupportsIndex
 
 
 class EvaluationBudgetExhausted(RuntimeError):
@@ -84,6 +85,171 @@ class EvaluationBudget:
             msg = "evaluation budget exhausted"
             raise EvaluationBudgetExhausted(msg)
         self.remaining -= count
+
+
+@dataclass(slots=True, init=False)
+class EvaluationReservationBatch:
+    """One-shot coordinator reservation for a batch of evaluation limits.
+
+    Parameters
+    ----------
+    budget : EvaluationBudget
+        Coordinator-owned hard-budget ledger.
+    limits : Sequence[int]
+        Positive per-request evaluation limits reserved atomically from
+        ``budget``.
+
+    Notes
+    -----
+    A reservation is finalized exactly once by :meth:`settle` or
+    :meth:`forfeit`. Invalid settlement data fails closed: the reservation
+    becomes final and no capacity is refunded.
+    """
+
+    budget: EvaluationBudget
+    limits: tuple[int, ...]
+    _is_finalized: bool
+
+    def __init__(
+        self,
+        *,
+        budget: EvaluationBudget,
+        limits: Sequence[int],
+    ) -> None:
+        """Reserve all requested evaluation limits atomically.
+
+        Parameters
+        ----------
+        budget : EvaluationBudget
+            Coordinator-owned hard-budget ledger.
+        limits : Sequence[int]
+            Non-empty sequence of positive per-request limits.
+
+        Raises
+        ------
+        TypeError
+            If a limit is not an exact integer.
+        ValueError
+            If ``limits`` is empty or contains a non-positive value.
+        EvaluationBudgetExhausted
+            If the total reservation exceeds the remaining budget.
+        """
+        normalized_limits = tuple(limits)
+        if len(normalized_limits) == 0:
+            msg = "evaluation reservation limits must not be empty"
+            raise ValueError(msg)
+
+        for limit in normalized_limits:
+            if type(limit) is not int:
+                msg = "evaluation reservation limits must be exact integers"
+                raise TypeError(msg)
+            if limit <= 0:
+                msg = "evaluation reservation limits must be positive"
+                raise ValueError(msg)
+
+        budget.consume(sum(normalized_limits))
+        self.budget = budget
+        self.limits = normalized_limits
+        self._is_finalized = False
+
+    @property
+    def reserved_evaluation_count(self) -> int:
+        """Return the total evaluation capacity reserved by this batch.
+
+        Returns
+        -------
+        int
+            Sum of the per-request limits.
+        """
+        return sum(self.limits)
+
+    @property
+    def is_finalized(self) -> bool:
+        """Return whether this reservation has been settled or forfeited.
+
+        Returns
+        -------
+        bool
+            ``True`` after the first settlement or forfeiture attempt.
+        """
+        return self._is_finalized
+
+    def settle(self, consumed_counts: Sequence[int]) -> int:
+        """Settle trusted per-request costs and refund unused capacity.
+
+        Parameters
+        ----------
+        consumed_counts : Sequence[int]
+            Non-negative exact integer costs aligned one-to-one with
+            :attr:`limits`.
+
+        Returns
+        -------
+        int
+            Total trusted evaluation cost retained by the budget.
+
+        Raises
+        ------
+        RuntimeError
+            If this reservation is already finalized.
+        TypeError
+            If a consumed count is not an exact integer.
+        ValueError
+            If counts are misaligned, negative, or exceed their limits.
+
+        Notes
+        -----
+        The reservation is finalized before validating ``consumed_counts``.
+        Malformed output therefore forfeits all reserved capacity.
+        """
+        self._require_open()
+        self._is_finalized = True
+
+        normalized_counts = tuple(consumed_counts)
+        if len(normalized_counts) != len(self.limits):
+            msg = "consumed counts must align one-to-one with reservation limits"
+            raise ValueError(msg)
+
+        for consumed_count, limit in zip(
+            normalized_counts,
+            self.limits,
+            strict=True,
+        ):
+            if type(consumed_count) is not int:
+                msg = "consumed counts must be exact integers"
+                raise TypeError(msg)
+            if consumed_count < 0:
+                msg = "consumed counts must be non-negative"
+                raise ValueError(msg)
+            if consumed_count > limit:
+                msg = "consumed count must not exceed its reservation limit"
+                raise ValueError(msg)
+
+        total_consumed = sum(normalized_counts)
+        self.budget.remaining += self.reserved_evaluation_count - total_consumed
+        return total_consumed
+
+    def forfeit(self) -> None:
+        """Finalize this reservation without refunding unused capacity.
+
+        Raises
+        ------
+        RuntimeError
+            If this reservation is already finalized.
+        """
+        self._require_open()
+        self._is_finalized = True
+
+    def _require_open(self) -> None:
+        if self._is_finalized:
+            msg = "evaluation reservation is already finalized"
+            raise RuntimeError(msg)
+
+    def __reduce_ex__(self, protocol: SupportsIndex) -> NoReturn:
+        """Reject serialization of coordinator-owned mutable budget state."""
+        del protocol
+        msg = "EvaluationReservationBatch is coordinator-local and cannot be pickled"
+        raise TypeError(msg)
 
 
 class ExecutionCompletionMode(Enum):

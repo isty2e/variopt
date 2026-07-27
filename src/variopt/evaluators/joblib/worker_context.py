@@ -10,9 +10,14 @@ from numpy.typing import NDArray
 from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
+from ...kernel import RequestLocalEpisode
 from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
+from ..episodes import (
+    RequestLocalEpisodeAttemptResult,
+    execute_request_local_episode,
+)
 from .contracts import (
     BoundaryT,
     JoblibEvaluationPayloadT,
@@ -158,3 +163,49 @@ def evaluate_worker_session_request_attempt(
         )
     )
     return evaluate_request_attempt(problem=problem, request=request)
+
+
+def evaluate_request_local_episode_task(
+    *,
+    problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
+    episode: RequestLocalEpisode[
+        BoundaryT,
+        CandidateT,
+        JoblibEvaluationPayloadT,
+    ],
+) -> RequestLocalEpisodeAttemptResult[CandidateT, JoblibEvaluationPayloadT]:
+    """Execute one indexed request-local episode against a transported problem."""
+    return (
+        episode.request_index,
+        execute_request_local_episode(
+            problem=problem,
+            episode=episode,
+        ),
+    )
+
+
+def evaluate_worker_session_request_local_episode(
+    *,
+    token: bytes,
+    transport: NDArray[np.uint8],
+    episode: RequestLocalEpisode[
+        BoundaryT,
+        CandidateT,
+        JoblibEvaluationPayloadT,
+    ],
+) -> RequestLocalEpisodeAttemptResult[CandidateT, JoblibEvaluationPayloadT]:
+    """Execute one indexed episode against the token-qualified worker problem."""
+    problem = cast(
+        Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
+        WORKER_PROBLEM_REGISTRY.problem_for(
+            token=token,
+            transport=transport,
+        ),
+    )
+    return (
+        episode.request_index,
+        execute_request_local_episode(
+            problem=problem,
+            episode=episode,
+        ),
+    )

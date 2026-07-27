@@ -15,6 +15,7 @@ from ..artifacts import (
     ProposalEvaluationSpec,
     RunReport,
 )
+from ..artifacts.alignment import validate_aligned_attempts
 from ..evaluators.async_evaluator.sessions import EvaluationBatchSession
 from ..execution import (
     STALE_ASYNC_EXECUTION_MODEL,
@@ -38,7 +39,6 @@ from .common import (
     StudyRecordT,
     build_evaluation_requests,
     supports_attempt_batch_sessions,
-    validate_aligned_attempts,
 )
 from .validation import require_async_evaluator, validate_execution_request
 

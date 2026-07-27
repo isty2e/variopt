@@ -21,9 +21,14 @@ from ...artifacts import EvaluationAttemptBatch, EvaluationRequest
 from ...artifacts.records import RequestAlignedEvaluationRecord
 from ...evaluation_pipeline import evaluate_request_attempt, evaluate_request_outcome
 from ...execution import ExecutionResources
+from ...kernel import RequestLocalEpisode
 from ...outcomes import EvaluationOutcome
 from ...problem import Problem
 from ...typevars import CandidateT
+from ..episodes import (
+    ordered_request_local_episode_attempts,
+    ordered_request_local_episodes,
+)
 from .contracts import (
     BoundaryT,
     JoblibDelayedFactory,
@@ -37,8 +42,10 @@ from .execution import build_execution_resources
 from .worker_context import (
     SESSION_TOKEN_BYTES,
     JoblibProblemEnvelope,
+    evaluate_request_local_episode_task,
     evaluate_worker_session_request,
     evaluate_worker_session_request_attempt,
+    evaluate_worker_session_request_local_episode,
 )
 
 
@@ -380,6 +387,70 @@ class JoblibWorkerSession(
             CandidateT,
             JoblibEvaluationPayloadT,
         ].from_single_request_attempts(attempts)
+
+    def evaluate_request_local_episodes(
+        self,
+        problem: Problem[BoundaryT, CandidateT, JoblibEvaluationPayloadT],
+        episodes: Sequence[
+            RequestLocalEpisode[
+                BoundaryT,
+                CandidateT,
+                JoblibEvaluationPayloadT,
+            ]
+        ],
+    ) -> EvaluationAttemptBatch[CandidateT, JoblibEvaluationPayloadT]:
+        """Execute one ordered request-local episode batch.
+
+        The threading backend passes the exact bound ``Problem`` reference to
+        every worker. Its evaluation protocol must therefore be thread-safe.
+        """
+        self._require_active_problem(problem)
+        ordered_episodes = ordered_request_local_episodes(episodes)
+        if len(ordered_episodes) == 0:
+            return EvaluationAttemptBatch[
+                CandidateT,
+                JoblibEvaluationPayloadT,
+            ](attempts=())
+
+        parallel_runner = self._parallel_runner
+        results: Sequence[object]
+        if parallel_runner is None:
+            results = tuple(
+                evaluate_request_local_episode_task(
+                    problem=problem,
+                    episode=episode,
+                )
+                for episode in ordered_episodes
+            )
+        else:
+            delayed_factory = cast(
+                JoblibDelayedFactory,
+                joblib.delayed,
+            )
+            transport = self._transport
+            if transport is None:
+                raw_results = parallel_runner(
+                    delayed_factory(evaluate_request_local_episode_task)(
+                        problem=problem,
+                        episode=episode,
+                    )
+                    for episode in ordered_episodes
+                )
+            else:
+                raw_results = parallel_runner(
+                    delayed_factory(evaluate_worker_session_request_local_episode)(
+                        token=transport.token,
+                        transport=transport.mapping,
+                        episode=episode,
+                    )
+                    for episode in ordered_episodes
+                )
+            results = tuple(raw_results)
+
+        return ordered_request_local_episode_attempts(
+            results,
+            request_count=len(ordered_episodes),
+        )
 
     def _require_active_problem(
         self,
