@@ -25,17 +25,23 @@ returns exactly one top-level `EvaluationSuccess` or `EvaluationFailure` slot
 for its source proposal. Its actual objective-call cost is reported through
 `evaluation_count`.
 
-```mermaid
-flowchart LR
-    A["RunMethod.ask()"] --> B["Study validates requests<br/>and reserves hard budget"]
-    B --> C1["Evaluator worker 1<br/>bounded serial kernel episode"]
-    B --> C2["Evaluator worker 2<br/>bounded serial kernel episode"]
-    B --> C3["Evaluator worker N<br/>bounded serial kernel episode"]
-    C1 --> D["Evaluator restores<br/>logical request order"]
-    C2 --> D
-    C3 --> D
-    D --> E["Study validates attempts,<br/>settles cost, and refunds unused capacity"]
-    E --> F["RunMethod.tell_attempts()"]
+```text
+Coordinator                  Evaluator workers                 Coordinator
+
+RunMethod.ask()
+      |
+      v
+validate requests
+reserve hard budget --------> bounded serial episode
+                              (one per proposal)
+                                      |
+                                      v
+                              restore request order ----------> validate attempts
+                                                                settle actual cost
+                                                                refund unused capacity
+                                                                       |
+                                                                       v
+                                                              RunMethod.tell_attempts()
 ```
 
 The coordinator continues to own optimizer state, hard-budget accounting, and
@@ -45,7 +51,9 @@ owner.
 
 ## Configuration
 
-Start with `SequentialEvaluator` while validating a kernel:
+Given a compatible `problem` and `optimizer` already constructed as in the
+[Quickstart](../getting-started/quickstart.md), start with
+`SequentialEvaluator` while validating a kernel:
 
 ```python
 from variopt import Study
@@ -90,10 +98,11 @@ result, final_state = study.optimize(
 )
 ```
 
-Both examples use only supported public imports. `problem` and `optimizer`
-must still be compatible with the selected structured local-search kernel.
-Configure this feature through `Study`; do not construct internal episode or
-budget-reservation objects or call evaluator orchestration hooks directly.
+These configuration fragments import only supported public names. `problem`
+and `optimizer` must still be compatible with the selected structured
+local-search kernel. Configure this feature through `Study`; do not construct
+internal episode or budget-reservation objects or call evaluator orchestration
+hooks directly.
 
 For SciPy local search, set an objective-call cap:
 

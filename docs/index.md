@@ -6,6 +6,10 @@ Define a search space with named fields, pick an optimizer, and run — the
 package keeps your candidate structure intact from sampling through to the
 result.
 
+This landing-page example uses a structured record to show that defining
+capability. For the smallest scalar example, see the
+[Quickstart](getting-started/quickstart.md).
+
 ```python
 from typing_extensions import override
 

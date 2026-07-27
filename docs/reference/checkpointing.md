@@ -1,8 +1,9 @@
 # Checkpointing
 
 `variopt` currently exposes explicit CSA state checkpointing through
-[`CSAOptimizer.state_to_dict()`](api/population.md) and
-[`CSAOptimizer.state_from_dict()`](api/population.md).
+[`CSAOptimizer.state_to_dict()`][variopt.algorithms.population.CSAOptimizer.state_to_dict]
+and
+[`CSAOptimizer.state_from_dict()`][variopt.algorithms.population.CSAOptimizer.state_from_dict].
 
 ## Scope
 
