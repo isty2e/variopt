@@ -170,6 +170,14 @@ class UnsafeCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
         return False
 
 
+class TwoStepCheckpointBatchQueueOptimizer(BatchQueueOptimizer):
+    """Batch-queue optimizer with a safe boundary after every two tells."""
+
+    @override
+    def is_checkpoint_safe_state(self, state: BatchQueueOptimizerState) -> bool:
+        return len(state.tell_history) % 2 == 0
+
+
 class TellFailingFailureRecordingBatchQueueOptimizer(
     FailureRecordingBatchQueueOptimizer
 ):
@@ -268,6 +276,15 @@ class KeyboardInterruptObjective(Objective[int]):
     def evaluate(self, candidate: int) -> float:
         _ = candidate
         raise KeyboardInterrupt
+
+
+class NonFiniteObjective(Objective[int]):
+    """Objective that returns a scalar rejected during payload normalization."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        _ = candidate
+        return float("nan")
 
 
 class CountingObservationMaterializer(
@@ -1398,7 +1415,7 @@ class StudyTests:
         assert isinstance(exception.cause, ValueError)
         assert exception.partial_report.records == ()
         assert exception.partial_report.failures == ()
-        assert exception.partial_report.evaluation_count == 0
+        assert exception.partial_report.evaluation_count == 1
         assert objective.evaluation_count == 0
 
     def test_optimize_fast_path_preserves_proposal_evaluation_specs(self) -> None:
@@ -1418,7 +1435,7 @@ class StudyTests:
 
         assert result.observations[0].request.proposal_evaluation_spec is spec
 
-    def test_optimize_fast_path_rejects_misaligned_proposal_metadata(self) -> None:
+    def test_optimize_fast_path_rejects_misaligned_proposal_specs(self) -> None:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             objective=SquareObjective(),
@@ -1426,10 +1443,6 @@ class StudyTests:
         spec_optimizer = StaticProposalSpecOptimizer(
             proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
             proposal_evaluation_specs=(LocalProposalEvaluationSpec(), None),
-        )
-        hint_optimizer = StaticKernelHintOptimizer(
-            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
-            proposal_kernel_hints=(ProposalLocalSearchContext(), None),
         )
         evaluator = SequentialEvaluator[int, int]()
 
@@ -1447,12 +1460,33 @@ class StudyTests:
         else:
             pytest.fail("expected proposal_evaluation_specs hard failure")
 
+    def test_optimize_fast_path_skips_unobservable_kernel_hints(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        hint_optimizer = StaticKernelHintOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+            proposal_kernel_hints=(ProposalLocalSearchContext(), None),
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(
+            problem=problem,
+            run_method=hint_optimizer,
+            evaluator=evaluator,
+        )
+
+        result, _ = study.optimize(
+            max_evaluations=1,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert tuple(
+            observation.proposal.proposal_id for observation in result.observations
+        ) == ("p-1",)
+
         try:
-            _ = Study(
-                problem=problem,
-                run_method=hint_optimizer,
-                evaluator=evaluator,
-            ).optimize(max_evaluations=1)
+            _ = study.run(max_evaluations=1)
         except RuntimeError as raw_exception:
             assert type(raw_exception) is RunExecutionFailed
             assert isinstance(raw_exception, BatchQueueRunFailure)
@@ -1460,6 +1494,214 @@ class StudyTests:
             assert "proposal_kernel_hints" in str(raw_exception.cause)
         else:
             pytest.fail("expected proposal_kernel_hints hard failure")
+
+    @pytest.mark.parametrize("batch_size", [1, 2, 3])
+    @pytest.mark.parametrize("count_evaluation_cost", [False, True])
+    def test_optimize_fast_path_matches_generic_checkpoint_recovery(
+        self,
+        batch_size: int,
+        count_evaluation_cost: bool,
+    ) -> None:
+        proposal_batches = [
+            tuple(
+                Proposal(
+                    candidate=batch_index * batch_size + offset,
+                    proposal_id=f"p-{batch_index}-{offset}",
+                )
+                for offset in range(batch_size)
+            )
+            for batch_index in range(3)
+        ]
+        problem = Problem(
+            space=IntegerSpace(low=0, high=20),
+            objective=SquareObjective(),
+        )
+        direct_optimizer = TwoStepCheckpointBatchQueueOptimizer(proposal_batches)
+        generic_optimizer = TwoStepCheckpointBatchQueueOptimizer(proposal_batches)
+        evaluator = SequentialEvaluator[int, int]()
+        direct_study = Study(
+            problem=problem,
+            run_method=direct_optimizer,
+            evaluator=evaluator,
+        )
+        generic_study = Study(
+            problem=problem,
+            run_method=generic_optimizer,
+            evaluator=evaluator,
+        )
+
+        direct_result, direct_state = direct_study.optimize(
+            max_evaluations=3 * batch_size,
+            batch_size=batch_size,
+            count_evaluation_cost=count_evaluation_cost,
+            stop_at_checkpoint_boundary=True,
+        )
+        generic_report, generic_state = generic_study.run(
+            max_evaluations=3 * batch_size,
+            batch_size=batch_size,
+            count_evaluation_cost=count_evaluation_cost,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert direct_result.observations == generic_report.records
+        assert direct_result.failures == generic_report.failures
+        assert direct_result.evaluation_count == generic_report.evaluation_count
+        assert direct_result.trace == generic_report.trace
+        assert direct_state == generic_state
+        assert len(direct_result.observations) == 2 * batch_size
+
+    @pytest.mark.parametrize("count_evaluation_cost", [False, True])
+    def test_optimize_fast_path_matches_generic_checkpoint_rollback(
+        self,
+        count_evaluation_cost: bool,
+    ) -> None:
+        proposal_batches: list[tuple[Proposal[int], ...]] = [
+            (Proposal(candidate=2, proposal_id="p-1"),),
+            (Proposal(candidate=3, proposal_id="p-2"),),
+        ]
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        direct_optimizer = TwoStepCheckpointBatchQueueOptimizer(proposal_batches)
+        generic_optimizer = TwoStepCheckpointBatchQueueOptimizer(proposal_batches)
+        evaluator = SequentialEvaluator[int, int]()
+        direct_study = Study(
+            problem=problem,
+            run_method=direct_optimizer,
+            evaluator=evaluator,
+        )
+        generic_study = Study(
+            problem=problem,
+            run_method=generic_optimizer,
+            evaluator=evaluator,
+        )
+
+        direct_result, direct_state = direct_study.optimize(
+            max_evaluations=1,
+            count_evaluation_cost=count_evaluation_cost,
+            stop_at_checkpoint_boundary=True,
+        )
+        generic_report, generic_state = generic_study.run(
+            max_evaluations=1,
+            count_evaluation_cost=count_evaluation_cost,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert direct_result.observations == generic_report.records == ()
+        assert direct_result.failures == generic_report.failures == ()
+        assert direct_result.evaluation_count == generic_report.evaluation_count == 0
+        assert direct_result.trace == generic_report.trace
+        assert direct_state == generic_state == direct_optimizer.create_initial_state()
+
+    def test_optimize_fast_path_checkpoint_resume_matches_continuation(self) -> None:
+        proposal_batches: list[tuple[Proposal[int], ...]] = [
+            (Proposal(candidate=index, proposal_id=f"p-{index}"),)
+            for index in range(1, 5)
+        ]
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        continuous_optimizer = TwoStepCheckpointBatchQueueOptimizer(proposal_batches)
+        continuous_study = Study(
+            problem=problem,
+            run_method=continuous_optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        _, checkpoint_state = continuous_study.optimize(
+            max_evaluations=4,
+            stop_at_checkpoint_boundary=True,
+        )
+        restored_state = pickle.loads(pickle.dumps(checkpoint_state))
+        continuous_result, continuous_state = continuous_study.optimize(
+            max_evaluations=4,
+            initial_state=checkpoint_state,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        resumed_optimizer = TwoStepCheckpointBatchQueueOptimizer(proposal_batches)
+        resumed_study = Study(
+            problem=problem,
+            run_method=resumed_optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+        resumed_result, resumed_state = resumed_study.optimize(
+            max_evaluations=4,
+            initial_state=restored_state,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert resumed_result == continuous_result
+        assert resumed_state == continuous_state
+
+    def test_optimize_fast_path_checkpoint_failure_exposes_safe_projection(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = TellFailingFailureRecordingBatchQueueOptimizer(
+            proposal_batches=[
+                (Proposal(candidate=2, proposal_id="p-safe"),),
+                (Proposal(candidate=3, proposal_id="p-fail"),),
+            ],
+            fail_on_tell_call=2,
+        )
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        try:
+            _ = study.optimize(
+                max_evaluations=2,
+                stop_at_checkpoint_boundary=True,
+            )
+        except RuntimeError as raw_exception:
+            assert isinstance(raw_exception, FailureRecordingRunFailure)
+            exception: FailureRecordingRunFailure = raw_exception
+            assert type(raw_exception) is RunExecutionFailed
+        else:
+            pytest.fail("expected fast-path tell failure")
+
+        checkpoint_report = exception.checkpoint_safe_report
+        checkpoint_state = exception.checkpoint_safe_state
+        assert checkpoint_report is not None
+        assert checkpoint_state is not None
+        assert tuple(
+            record.proposal.proposal_id for record in checkpoint_report.records
+        ) == ("p-safe",)
+        assert checkpoint_report.evaluation_count == 1
+        assert checkpoint_state.tell_history == ((checkpoint_report.records[0],),)
+
+    def test_optimize_fast_path_rejects_unreachable_checkpoint_boundary(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SquareObjective(),
+        )
+        optimizer = UnsafeCheckpointBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=2, proposal_id="p-1"),)],
+        )
+        study = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match="did not reach a checkpoint-safe state",
+        ):
+            _ = study.optimize(
+                max_evaluations=0,
+                stop_at_checkpoint_boundary=True,
+            )
 
     def test_optimize_fast_path_preserves_budget_boundaries(self) -> None:
         problem = Problem(
@@ -2072,7 +2314,11 @@ class StudyTests:
         evaluator = SequentialEvaluator[int, int]()
         study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
 
-        result, final_state = study.optimize(max_evaluations=3, batch_size=3)
+        result, final_state = study.optimize(
+            max_evaluations=3,
+            batch_size=3,
+            stop_at_checkpoint_boundary=True,
+        )
 
         assert tuple(
             observation.proposal.proposal_id for observation in result.observations
@@ -2212,6 +2458,31 @@ class StudyTests:
         )
         assert final_state.tell_history == ((),)
         assert final_state.failure_history == (("p-1", "p-2"),)
+
+    def test_optimize_fast_path_records_scalar_normalization_failures(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=NonFiniteObjective(),
+        )
+        optimizer = FailureRecordingBatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=2, proposal_id="p-nan"),)],
+        )
+        study: FailureRecordingStudy = Study(
+            problem=problem,
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        result, final_state = study.optimize(
+            max_evaluations=1,
+            stop_at_checkpoint_boundary=True,
+        )
+
+        assert result.observations == ()
+        assert len(result.failures) == 1
+        assert result.failures[0].exception.exception_type == "builtins.ValueError"
+        assert result.evaluation_count == 1
+        assert final_state.failure_history == (("p-nan",),)
 
     def test_run_keeps_no_refinement_report_allocation_light(self) -> None:
         problem = Problem(
