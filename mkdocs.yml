@@ -88,6 +88,7 @@ nav:
       - Canonical Usage Patterns: guides/canonical-usage-patterns.md
       - Customize an Optimizer Profile: guides/customize-optimizer-profile.md
       - Local Optimization Methods: guides/local-optimization-methods.md
+      - Evaluator-Owned Local Search: guides/request-local-episodes.md
   - Concepts:
       - Overview: concepts/index.md
       - Optimization Model: concepts/optimization-model.md

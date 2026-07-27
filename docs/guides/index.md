@@ -12,3 +12,4 @@ choice about optimizers, evaluators, or configuration patterns.
 - [Canonical Usage Patterns](canonical-usage-patterns.md)
 - [Customize an Optimizer Profile](customize-optimizer-profile.md)
 - [Local Optimization Methods](local-optimization-methods.md)
+- [Evaluator-Owned Local-Search Episodes](request-local-episodes.md)

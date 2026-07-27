@@ -206,6 +206,16 @@ The built-in kernel hint for per-proposal local-search enablement, local budget,
 and prioritized structured leaf paths. See
 [`ProposalLocalSearchContext`][variopt.ProposalLocalSearchContext].
 
+## Request-Local Kernel Episode
+
+One bounded local-search procedure associated with one source proposal. It may
+make several serial objective calls but returns exactly one top-level
+`EvaluationSuccess` or `EvaluationFailure` attempt with the actual logical cost
+in `evaluation_count`. Eligible synchronous episodes may execute inside
+`SequentialEvaluator` or `JoblibEvaluator`; optimizer state and budget
+settlement remain coordinator-owned. See
+[Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+
 ## RunMethod
 
 The search-state owner. Proposes candidates via `ask`, consumes successful

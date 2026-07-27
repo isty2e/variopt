@@ -1,8 +1,9 @@
 # Checkpointing
 
 `variopt` currently exposes explicit CSA state checkpointing through
-[`CSAOptimizer.state_to_dict()`](api/population.md) and
-[`CSAOptimizer.state_from_dict()`](api/population.md).
+[`CSAOptimizer.state_to_dict()`][variopt.algorithms.population.CSAOptimizer.state_to_dict]
+and
+[`CSAOptimizer.state_from_dict()`][variopt.algorithms.population.CSAOptimizer.state_from_dict].
 
 ## Scope
 
@@ -130,6 +131,12 @@ The checkpoint intentionally does not capture:
 - `Study.run(...)` reports or `Study.optimize(...)` results
 - trace or telemetry reducer state
 - derived caches that can be recomputed from authoritative state
+
+Evaluator-owned request-local local-search episodes fall under the live-worker
+and in-flight-batch exclusions above. Resuming creates fresh evaluator runtime
+state and derives later proposal-local random streams from the restored
+optimizer state. See
+[Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
 
 When a CSA checkpoint is restored, the optimizer state resumes with no
 accumulated CSA trace reducer state. This does not affect exact optimization

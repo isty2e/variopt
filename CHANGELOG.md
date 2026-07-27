@@ -160,10 +160,13 @@ format. Stability guarantees for the public surface are documented in the
   request-local episodes through `SequentialEvaluator` and `JoblibEvaluator`.
   Hard evaluation capacity is partitioned fairly across the batch, worker
   completion order does not affect assimilation, and unsupported kernels,
-  evaluators, execution models, or unbounded episodes retain coordinator
-  execution. `ScipyMinimizeKernel.max_evaluations` is the explicit
-  objective-call cap that enables this dispatch; `max_iterations` remains a
-  separate SciPy algorithm-step setting.
+  evaluators, or unbounded synchronous episodes retain coordinator execution.
+  `ScipyMinimizeKernel.max_evaluations` is the explicit objective-call cap that
+  enables this dispatch; `max_iterations` remains a separate SciPy
+  algorithm-step setting. MPI retains coordinator episode execution, while
+  study-level exact-async and stale-async paths remain `DirectKernel`-only.
+  Completed batches refund unused reserved capacity; unresolved worker failures
+  conservatively retain their reservation.
 - `JoblibEvaluator` now supports the explicit
   `problem_transport="worker_session"` mode for synchronous runs. The opt-in
   mode serializes one problem snapshot per run scope and reuses a single

@@ -10,11 +10,16 @@ The current boundary is:
 
 - `RunMethod` proposes candidates
 - `Kernel` optionally organizes one bounded local-search episode
-- `Evaluator` executes raw proposal batches only
+- a capable synchronous `Evaluator` may execute each bounded episode
 - `Study` wires `RunMethod`, optional `Kernel`, and `Evaluator`
 
-Local optimization therefore lives on the kernel side of the execution path,
-not inside evaluator backends.
+The kernel owns local-search semantics. Execution placement is separate:
+eligible bounded episodes can run inside `SequentialEvaluator` or
+`JoblibEvaluator`, while other synchronous cases retain coordinator execution.
+The current study-level exact-async and stale-async paths require
+`DirectKernel` and do not accept these local-search kernels. See
+[Evaluator-Owned Local-Search Episodes](request-local-episodes.md) for the
+dispatch, budget, failure, and reproducibility contracts.
 
 When local optimization changes a candidate, the kernel should attach
 [`CandidateRefinement`](../reference/api/variopt.md) to the successful
@@ -205,7 +210,7 @@ still charging a larger inner evaluation count.
 
 ## Evaluator Backend Interaction
 
-Local optimization no longer lives inside evaluator backends, but kernels still
+Local-search semantics do not belong to evaluator backends, but kernels still
 receive evaluator-owned
 [`ExecutionResources`](../reference/api/variopt.md)
 through [`ProposalBatchQuery`](../reference/api/variopt.md).
@@ -245,6 +250,10 @@ require a proposal-local random-state snapshot so worker scheduling cannot
 change their trajectories. Kernels without a safe finite cap, custom subclasses
 that only inherit an episode implementation, and evaluators without the
 request-local capability use the ordinary coordinator callback path.
+
+For the complete support matrix, hard-budget reservation examples, failure
+semantics, checkpoint behavior, and measured performance guidance, see
+[Evaluator-Owned Local-Search Episodes](request-local-episodes.md).
 
 Practical rule:
 
