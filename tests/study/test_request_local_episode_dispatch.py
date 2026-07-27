@@ -10,6 +10,7 @@ from typing_extensions import override
 from tests.study_support import (
     BatchQueueOptimizer,
     BatchQueueOptimizerState,
+    FailureRecordingBatchQueueOptimizer,
     SquareObjective,
 )
 from variopt import (
@@ -209,6 +210,16 @@ class FloatSquareObjective(Objective[float]):
         return candidate * candidate
 
 
+class SelectiveFailureObjective(Objective[int]):
+    """Square objective that fails one designated top-level candidate."""
+
+    @override
+    def evaluate(self, candidate: int) -> float:
+        if candidate == 6:
+            raise ValueError("candidate 6 is unavailable")
+        return float(candidate * candidate)
+
+
 @dataclass(frozen=True, slots=True)
 class FloatOneShotOptimizerState:
     """State for a one-proposal floating-point optimizer."""
@@ -325,6 +336,41 @@ def run_structured_kernel_study(
     )
 
 
+def run_mixed_attempt_study(
+    evaluator: (
+        CoordinatorOnlySequentialEvaluator
+        | SequentialEvaluator[int, int, ObservationPayload]
+        | JoblibEvaluator[int, int, ObservationPayload]
+    ),
+) -> tuple[tuple[Observation[int], ...], tuple[int, ...], int, int]:
+    """Run one success/failure batch through a selected execution boundary."""
+    optimizer = FailureRecordingBatchQueueOptimizer(
+        proposal_batches=[
+            (
+                Proposal(candidate=4, proposal_id="p-1"),
+                Proposal(candidate=6, proposal_id="p-2"),
+            ),
+        ],
+    )
+    study = Study(
+        problem=Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=SelectiveFailureObjective(),
+        ),
+        run_method=optimizer,
+        evaluator=evaluator,
+        kernel=StructuredHillClimbKernel[int, int](max_steps=8),
+    )
+
+    report, final_state = study.run(max_evaluations=34, batch_size=2)
+    return (
+        report.records,
+        tuple(failure.candidate for failure in report.failures),
+        report.evaluation_count,
+        len(final_state.tell_history),
+    )
+
+
 class RequestLocalEpisodeDispatchTests:
     """Coverage for Study-level episode capability routing."""
 
@@ -400,6 +446,22 @@ class RequestLocalEpisodeDispatchTests:
         assert tuple(record.candidate for record in records) == (1, 3)
         assert evaluation_counts == (4, 4)
         assert tell_count == 1
+
+    def test_mixed_success_and_failure_match_coordinator_execution(self) -> None:
+        coordinator_result = run_mixed_attempt_study(
+            CoordinatorOnlySequentialEvaluator(),
+        )
+        sequential_episode_result = run_mixed_attempt_study(
+            SequentialEvaluator[int, int](),
+        )
+        joblib_episode_result = run_mixed_attempt_study(
+            JoblibEvaluator[int, int](n_jobs=2, backend="threading"),
+        )
+
+        assert sequential_episode_result == coordinator_result
+        assert joblib_episode_result == coordinator_result
+        assert tuple(record.candidate for record in coordinator_result[0]) == (0,)
+        assert coordinator_result[1:] == ((6,), 7, 1)
 
     @pytest.mark.parametrize(
         "kernel",
