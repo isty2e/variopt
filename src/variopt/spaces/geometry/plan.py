@@ -313,6 +313,13 @@ class BuiltinStructuredGeometryPlan(
     def encode(self, candidate: CandidateT) -> EncodedStructuredCandidate:
         """Validate and encode one canonical candidate."""
         self.space.validate(candidate)
+        return self.encode_validated(candidate)
+
+    def encode_validated(
+        self,
+        candidate: CandidateT,
+    ) -> EncodedStructuredCandidate:
+        """Encode a canonical candidate already validated by the caller."""
         builder = _EncodingBuilder()
         self._encoder.encode(candidate, builder)
         if (
@@ -335,6 +342,13 @@ class BuiltinStructuredGeometryPlan(
     ) -> tuple[EncodedStructuredCandidate, ...]:
         """Validate and encode candidates in input order."""
         return tuple(self.encode(candidate) for candidate in candidates)
+
+    def encode_many_validated(
+        self,
+        candidates: Sequence[CandidateT],
+    ) -> tuple[EncodedStructuredCandidate, ...]:
+        """Encode already validated candidates in input order."""
+        return tuple(self.encode_validated(candidate) for candidate in candidates)
 
     def distance_parts(
         self,

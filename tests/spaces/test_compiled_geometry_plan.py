@@ -169,6 +169,24 @@ def test_plan_supports_empty_batches() -> None:
     assert plan.pairwise_squared_distances(()) == ()
 
 
+def test_plan_can_encode_candidate_validated_by_operation_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = compile_builtin_geometry_plan(IntegerSpace(-8, 8))
+    assert plan is not None
+
+    def reject_revalidation(_space: IntegerSpace, _candidate: int) -> None:
+        raise AssertionError("validated encoding must not repeat space validation")
+
+    monkeypatch.setattr(IntegerSpace, "validate", reject_revalidation)
+
+    encoded = plan.encode_validated(3)
+
+    assert encoded.integer_values == (3,)
+    with pytest.raises(AssertionError, match="must not repeat"):
+        _ = plan.encode(3)
+
+
 def test_plan_rejects_encodings_from_another_plan() -> None:
     space = ArraySpace(IntegerSpace(-8, 8), length=4)
     left_plan = compile_builtin_geometry_plan(space)

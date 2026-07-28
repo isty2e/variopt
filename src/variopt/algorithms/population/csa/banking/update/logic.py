@@ -7,6 +7,7 @@ import numpy as np
 from ......artifacts import Observation
 from ......distance import require_valid_distance
 from ......diversity import DiversityMetric
+from ......diversity.space_metric import supports_compiled_structured_distance
 from ......typevars import CandidateT
 from ...progression.cutoff.logic import initialize_cutoff_state
 from ...progression.cutoff.policy import CSACutoffSchedule
@@ -156,12 +157,18 @@ def apply_bank_update_batch(
     distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
     transitions: list[CSABankTransition] = []
     if shadow_clustering_state.requires_initialization(entries=shadow_bank.entries):
+        if supports_compiled_structured_distance(diversity_metric):
+            distance_workspace = BankDistanceWorkspace(
+                entries=shadow_bank.entries,
+                diversity_metric=diversity_metric,
+            )
         # Guard before calling ensure_initialized: Python evaluates arguments
         # eagerly, so this branch owns average-distance inference laziness.
         shadow_clustering_state = shadow_clustering_state.ensure_initialized(
             entries=shadow_bank.entries,
             reference_average_distance=infer_average_distance(shadow_bank.entries),
             diversity_metric=diversity_metric,
+            distance_workspace=distance_workspace,
         )
 
     for observation, proposal_id in validated_observations:
@@ -169,12 +176,20 @@ def apply_bank_update_batch(
         if shadow_bank.is_full and shadow_clustering_state.requires_initialization(
             entries=shadow_bank.entries,
         ):
+            if distance_workspace is None and supports_compiled_structured_distance(
+                diversity_metric
+            ):
+                distance_workspace = BankDistanceWorkspace(
+                    entries=shadow_bank.entries,
+                    diversity_metric=diversity_metric,
+                )
             # Earlier observations may have filled a partial shadow bank. Delay
             # rebuilding stale labels until full-bank logic actually needs them.
             shadow_clustering_state = shadow_clustering_state.ensure_initialized(
                 entries=shadow_bank.entries,
                 reference_average_distance=infer_average_distance(shadow_bank.entries),
                 diversity_metric=diversity_metric,
+                distance_workspace=distance_workspace,
             )
         shadow_state = initialize_cutoff_if_needed(
             bank=shadow_bank,
@@ -195,12 +210,18 @@ def apply_bank_update_batch(
                 diversity_metric=diversity_metric,
                 distance_cutoff=active_distance_cutoff,
             )
+            next_distance_workspace = distance_workspace
+            if next_distance_workspace is not None:
+                next_distance_workspace = next_distance_workspace.rebase(
+                    entries=next_bank.entries,
+                    invalidated_indices=frozenset({len(bank_before_step.entries)}),
+                )
             admission_result = BankAdmissionResult(
                 bank=next_bank,
                 score_model_state=shadow_score_model_state,
                 growth_state=shadow_growth_state,
                 clustering_state=shadow_clustering_state,
-                distance_workspace=distance_workspace,
+                distance_workspace=next_distance_workspace,
                 transition=CSABankTransition(
                     proposal_id=proposal_id,
                     route="initial",
@@ -293,10 +314,26 @@ def apply_bank_update_batch(
         minimum_distance_cutoff=shadow_state.minimum_distance_cutoff,
         distance_workspace=distance_workspace,
     )
+    if removed_indices and distance_workspace is not None:
+        distance_workspace = distance_workspace.rebase(
+            entries=shadow_bank.entries,
+            invalidated_indices=frozenset(),
+        )
     if final_changed_indices or removed_indices:
+        if (
+            shadow_clustering_state.enabled
+            and shadow_clustering_state.is_initialized
+            and distance_workspace is None
+            and supports_compiled_structured_distance(diversity_metric)
+        ):
+            distance_workspace = BankDistanceWorkspace(
+                entries=shadow_bank.entries,
+                diversity_metric=diversity_metric,
+            )
         shadow_clustering_state = shadow_clustering_state.recluster(
             entries=shadow_bank.entries,
             diversity_metric=diversity_metric,
+            distance_workspace=distance_workspace,
         )
     surviving_proposal_ids = frozenset(
         entry.proposal_id
@@ -436,16 +473,22 @@ def admit_full_bank_observation(
         )
         return rebased_workspace
 
-    entry_distances = tuple(
-        require_valid_distance(
-            validated_candidate_distance(
-                diversity_metric,
-                observation.candidate,
-                entry.candidate,
-            ),
+    workspace = distance_workspace
+    if workspace is not None or supports_compiled_structured_distance(diversity_metric):
+        entry_distances = get_distance_workspace().distances_to_candidate(
+            observation.candidate
         )
-        for entry in bank.entries
-    )
+    else:
+        entry_distances = tuple(
+            require_valid_distance(
+                validated_candidate_distance(
+                    diversity_metric,
+                    observation.candidate,
+                    entry.candidate,
+                ),
+            )
+            for entry in bank.entries
+        )
     scored_bank, score_model_state = score_model_state.score_bank(
         entries=bank.entries,
         diversity_metric=diversity_metric,

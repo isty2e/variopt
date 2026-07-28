@@ -18,7 +18,7 @@ from ......json_types import (
 )
 from ......typevars import CandidateT
 from ..bank import BankEntry
-from .linkage import cluster_labels_for_entries
+from .linkage import IndexedDistanceWorkspace, cluster_labels_for_entries
 from .policy import CSAClusteringPolicy
 
 
@@ -190,6 +190,7 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         entries: Sequence[BankEntry[CandidateT]],
         reference_average_distance: float,
         diversity_metric: DiversityMetric[CandidateT],
+        distance_workspace: IndexedDistanceWorkspace[CandidateT] | None = None,
     ) -> "CSAClusteringState[CandidateT]":
         """Return a state initialized for one reference-average scale.
 
@@ -201,6 +202,8 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Reference-average distance used to derive the clustering threshold.
         diversity_metric : DiversityMetric[CandidateT]
             Diversity metric used for pairwise bank-entry distances.
+        distance_workspace : IndexedDistanceWorkspace[CandidateT] | None, default=None
+            Optional operation-local distance source aligned to ``entries``.
 
         Returns
         -------
@@ -221,6 +224,7 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 entries=entries,
                 cluster_distance=cluster_distance,
                 diversity_metric=diversity_metric,
+                distance_workspace=distance_workspace,
             ),
         )
 
@@ -229,6 +233,7 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         *,
         entries: Sequence[BankEntry[CandidateT]],
         diversity_metric: DiversityMetric[CandidateT],
+        distance_workspace: IndexedDistanceWorkspace[CandidateT] | None = None,
     ) -> "CSAClusteringState[CandidateT]":
         """Return a state with cluster labels rebuilt for one bank snapshot.
 
@@ -238,6 +243,8 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             Current bank entries to recluster.
         diversity_metric : DiversityMetric[CandidateT]
             Diversity metric used for pairwise bank-entry distances.
+        distance_workspace : IndexedDistanceWorkspace[CandidateT] | None, default=None
+            Optional operation-local distance source aligned to ``entries``.
 
         Returns
         -------
@@ -255,6 +262,7 @@ class CSAClusteringState(FrozenGenericSlotsCompat, Generic[CandidateT]):
                 entries=entries,
                 cluster_distance=self.cluster_distance,
                 diversity_metric=diversity_metric,
+                distance_workspace=distance_workspace,
             ),
         )
 

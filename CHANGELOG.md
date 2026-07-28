@@ -142,6 +142,12 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- CSA bank admission, crowding, clustering, growth, and seed-selection distance
+  queries now reuse an operation-local encoded geometry view for exact built-in
+  structured spaces. Bank candidates are encoded once per update snapshot,
+  trial candidates once per admission, and rebases retain only identity-aligned
+  encodings; custom metrics and unsupported spaces retain the generic distance
+  contract.
 - Algorithm-family imports now defer SciPy backend loading until SciPy-backed
   local search or CSA clustering actually executes. Importing population-only
   algorithm surfaces no longer initializes SciPy.

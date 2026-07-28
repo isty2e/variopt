@@ -1,6 +1,7 @@
 """Tests for structured space-derived diversity metrics."""
 
 import math
+import pickle
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -20,6 +21,7 @@ from variopt import (
 )
 from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.diversity.space_metric import (
+    CompiledStructuredDistanceView,
     structured_distance_between_validated_candidates,
 )
 from variopt.spaces import (
@@ -255,6 +257,41 @@ class ProviderWrappedPairSpace(
 
 class StructuredSpaceDiversityMetricTests:
     """Regression tests for generic space-derived diversity metrics."""
+
+    def test_compiled_distance_view_rejects_misaligned_encodings(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        plan = metric.compiled_geometry_plan
+        assert plan is not None
+        candidate = space.normalize((1, 2))
+        foreign_metric = StructuredSpaceDiversityMetric(space=space)
+        foreign_plan = foreign_metric.compiled_geometry_plan
+        assert foreign_plan is not None
+
+        with pytest.raises(ValueError, match="must align"):
+            _ = CompiledStructuredDistanceView(
+                plan=plan,
+                candidates=(candidate,),
+                encodings=(),
+            )
+        with pytest.raises(ValueError, match="belong to the view plan"):
+            _ = CompiledStructuredDistanceView(
+                plan=plan,
+                candidates=(candidate,),
+                encodings=(foreign_plan.encode_validated(candidate),),
+            )
+
+    def test_pickled_metric_rebuilds_usable_compiled_distance_view(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize((1, 2))
+        right = space.normalize((3, 4))
+
+        restored_metric = pickle.loads(pickle.dumps(metric))
+        view = restored_metric._compile_distance_view((left, right))
+
+        assert view is not None
+        assert view.distance(0, 1) == metric.distance(left, right)
 
     def test_real_space_distance_is_linearly_normalized(self) -> None:
         metric = StructuredSpaceDiversityMetric(space=RealSpace(0.0, 10.0))
