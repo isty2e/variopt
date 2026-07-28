@@ -1,6 +1,6 @@
 """Internal helpers for validating distance-like quantities."""
 
-import numpy as np
+from math import isfinite
 
 
 def require_valid_distance(distance: float) -> float:
@@ -22,7 +22,7 @@ def require_valid_distance(distance: float) -> float:
         If ``distance`` is non-finite or negative.
     """
     normalized_distance = float(distance)
-    if not np.isfinite(normalized_distance):
+    if not isfinite(normalized_distance):
         msg = "distance must be finite"
         raise ValueError(msg)
 
