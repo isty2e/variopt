@@ -10,6 +10,7 @@ The supported public facade modules are:
 - `variopt.study`
 - `variopt.artifacts`
 - `variopt.algorithms.population`
+- `variopt.algorithms.population.csa`
 - `variopt.algorithms.local_search`
 
 Deeper submodules may be importable, but they are not automatically stable
@@ -72,3 +73,9 @@ supported type-hint/runtime state artifacts because the GA-family optimizer
 methods return and accept them directly.
 Lifecycle helpers under `variopt.algorithms.population.generational_ga` remain
 implementation details.
+
+The same population facade exposes `CSAConfigurationManifest`,
+`CSAComponentDescriptor`, and `CSAConfigurationResolutionError` for recording
+resolved CSA optimizer configuration. See
+[Record CSA Configuration Provenance](../guides/csa-configuration-provenance.md)
+for the represented scope and fingerprint contract.

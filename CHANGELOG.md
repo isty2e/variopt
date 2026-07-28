@@ -167,6 +167,13 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- Added `CSAOptimizer.configuration_manifest(...)` and the supported
+  `CSAConfigurationManifest`, `CSAComponentDescriptor`, and
+  `CSAConfigurationResolutionError` artifacts. The versioned manifest records
+  resolved optimizer-side CSA configuration as canonical JSON, provides a
+  content fingerprint, and requires explicit caller provenance for custom
+  components without treating that assertion as executable equivalence or a
+  complete run identity.
 - Synchronous `Study.run(...)` and `Study.optimize(...)` can now dispatch
   explicitly eligible SciPy and structured local-search kernels as bounded
   request-local episodes through `SequentialEvaluator` and `JoblibEvaluator`.

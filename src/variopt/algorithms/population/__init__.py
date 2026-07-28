@@ -6,7 +6,13 @@ their subpackages such as :mod:`variopt.algorithms.population.csa`.
 """
 
 from .clearing_ga import ClearingGAProfile, ClearingGeneticAlgorithmOptimizer
-from .csa import CSAOptimizer, CSAProfile
+from .csa import (
+    CSAComponentDescriptor,
+    CSAConfigurationManifest,
+    CSAConfigurationResolutionError,
+    CSAOptimizer,
+    CSAProfile,
+)
 from .de import DEProfile, DifferentialEvolutionOptimizer
 from .ga import GAProfile, GeneticAlgorithmOptimizer
 from .generational_ga.state import (
@@ -26,6 +32,9 @@ from .species_ga import (
 )
 
 __all__ = [
+    "CSAComponentDescriptor",
+    "CSAConfigurationManifest",
+    "CSAConfigurationResolutionError",
     "CSAOptimizer",
     "CSAProfile",
     "ClearingGAProfile",

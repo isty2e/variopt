@@ -87,6 +87,7 @@ nav:
       - Choose an Evaluator: guides/choose-an-evaluator.md
       - Canonical Usage Patterns: guides/canonical-usage-patterns.md
       - Customize an Optimizer Profile: guides/customize-optimizer-profile.md
+      - Record CSA Configuration Provenance: guides/csa-configuration-provenance.md
       - Local Optimization Methods: guides/local-optimization-methods.md
       - Evaluator-Owned Local Search: guides/request-local-episodes.md
   - Concepts:

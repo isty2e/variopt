@@ -18,6 +18,14 @@ surface is the explicit `to_dict()` / `from_dict()` checkpoint contract; Python
 `pickle` round trips are runtime compatibility conveniences only and are not a
 cross-version or crash-recovery checkpoint format.
 
+A checkpoint does not contain the optimizer configuration that gives its state
+meaning. Persist a
+[`CSAConfigurationManifest`][variopt.algorithms.population.CSAConfigurationManifest]
+beside the checkpoint and compare it before restoring state. See
+[Record CSA Configuration
+Provenance](../guides/csa-configuration-provenance.md#guard-a-checkpoint-restore)
+for the guard pattern and for provenance dimensions that remain caller-owned.
+
 ## Usage
 
 ```python

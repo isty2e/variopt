@@ -161,5 +161,8 @@ comes from `derive_csa_defaults(...)` or an explicit override.
 
 - [Customize an Optimizer Profile](../guides/customize-optimizer-profile.md)
   — the task-oriented guide for overriding presets and profile slots.
+- [Record CSA Configuration
+  Provenance](../guides/csa-configuration-provenance.md) — persist and compare
+  the resolved optimizer-side configuration.
 - [Presets and Contracts](../reference/presets-and-contracts.md) — the
   supported preset surface and slot catalog.

@@ -17,6 +17,7 @@ BASE_INSTALL_MODULES: tuple[str, ...] = (
     "variopt.study",
     "variopt.algorithms",
     "variopt.algorithms.population",
+    "variopt.algorithms.population.csa",
     "variopt.algorithms.local_search",
     "variopt.spaces.projections",
 )

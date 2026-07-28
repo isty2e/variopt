@@ -10,6 +10,7 @@ import variopt.algorithms.population.csa.manifest as manifest_package
 from variopt.algorithms.population.csa.manifest import (
     CSAComponentDescriptor,
     CSAConfigurationManifest,
+    CSAConfigurationResolutionError,
 )
 from variopt.json_types import JSONDict, JSONValue, require_json_mapping
 
@@ -35,6 +36,40 @@ def make_manifest(
 
 class UnsupportedInteger(int):
     """Non-JSON integer subclass used to probe exact boundary types."""
+
+
+class CSAConfigurationResolutionErrorTests:
+    """Exercise deterministic unresolved-path reporting."""
+
+    def test_canonicalizes_and_deduplicates_reported_paths(self) -> None:
+        error = CSAConfigurationResolutionError(
+            missing_component_paths=(
+                ("profile", 10),
+                ("profile", 2),
+                ("profile", 2),
+                ("diversity_metric",),
+            ),
+            unused_component_paths=(
+                ("space", "fields", 1),
+                ("space", "fields", 0),
+            ),
+        )
+
+        assert error.missing_component_paths == (
+            ("diversity_metric",),
+            ("profile", 2),
+            ("profile", 10),
+        )
+        assert error.unused_component_paths == (
+            ("space", "fields", 0),
+            ("space", "fields", 1),
+        )
+        assert str(error) == (
+            "CSA configuration manifest resolution failed: "
+            'missing component paths [["diversity_metric"],["profile",2],'
+            '["profile",10]]; unused component paths '
+            '[["space","fields",0],["space","fields",1]]'
+        )
 
 
 class CSAComponentDescriptorTests:
@@ -64,6 +99,7 @@ class CSAComponentDescriptorTests:
         assert frozenset(manifest_package.__all__) == {
             "CSAComponentDescriptor",
             "CSAConfigurationManifest",
+            "CSAConfigurationResolutionError",
         }
 
     def test_rejects_builtin_provenance_and_reserved_identifiers(self) -> None:
