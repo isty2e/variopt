@@ -1,6 +1,6 @@
 """Tests for CSA banking, score-model, and admission semantics."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Literal, cast
 
@@ -66,6 +66,7 @@ from variopt.algorithms.population.csa.selection.state import SeedSelectionState
 from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.json_types import JSONValue
 from variopt.spaces import (
+    ArraySpace,
     CategoricalSpace,
     RecordCandidate,
     RecordSpace,
@@ -99,6 +100,12 @@ class RejectingStructuredRecordMetric(
     def distance(self, left: RecordCandidate, right: RecordCandidate) -> float:
         """Raise when a caller bypasses the subclass distance contract."""
         raise RuntimeError("custom structured distance used")
+
+
+class FallbackStructuredArrayMetric(
+    StructuredSpaceDiversityMetric[Sequence[int], tuple[int, ...]],
+):
+    """Structured array metric that deliberately retains the generic CSA path."""
 
 
 class BankUpdatePolicyTests:
@@ -187,6 +194,28 @@ class BankUpdatePolicyTests:
         assert workspace.distance(1, 2) == 4.0
         assert workspace.distance(2, 1) == 4.0
         assert metric.call_count == 0
+
+    def test_distance_workspace_rebase_detects_unreported_candidate_replacement(
+        self,
+    ) -> None:
+        entries = (
+            BankEntry(candidate=0, value=1.0),
+            BankEntry(candidate=10, value=2.0),
+        )
+        metric = CountingDistance()
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+        assert workspace.distance(0, 1) == 10.0
+
+        rebased_workspace = workspace.rebase(
+            entries=(
+                entries[0],
+                BankEntry(candidate=20, value=3.0),
+            ),
+            invalidated_indices=frozenset(),
+        )
+
+        assert rebased_workspace.distance(0, 1) == 20.0
+        assert metric.call_count == 2
 
     def test_distance_workspace_seed_rejects_invalid_nonself_distance(self) -> None:
         entries = (
@@ -297,6 +326,288 @@ class BankUpdatePolicyTests:
 
         assert distance == 1.0
 
+    def test_distance_workspace_rebases_compiled_structured_candidates_by_identity(
+        self,
+    ) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=3)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        entries = (
+            BankEntry(candidate=space.normalize((0, 1, 2)), value=1.0),
+            BankEntry(candidate=space.normalize((3, 4, 5)), value=2.0),
+        )
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+        initial_view = workspace.compiled_distance_view
+        assert initial_view is not None
+
+        forced_rebase = workspace.rebase(
+            entries=entries,
+            invalidated_indices=frozenset({0}),
+        )
+        forced_view = forced_rebase.compiled_distance_view
+        assert forced_view is not None
+        assert forced_view.encodings[0] is not initial_view.encodings[0]
+        assert forced_view.encodings[1] is initial_view.encodings[1]
+
+        trial = space.normalize((6, 7, 8))
+        assert workspace.distances_to_candidate(trial) == tuple(
+            metric.distance(trial, entry.candidate) for entry in entries
+        )
+
+        replaced_entry = BankEntry(
+            candidate=space.normalize((3, 4, 6)),
+            value=3.0,
+        )
+        appended_entry = BankEntry(candidate=trial, value=4.0)
+        next_entries = (entries[0], replaced_entry, appended_entry)
+        rebased_workspace = workspace.rebase(
+            entries=next_entries,
+            invalidated_indices=frozenset({1, 2}),
+        )
+        rebased_view = rebased_workspace.compiled_distance_view
+        assert rebased_view is not None
+        assert rebased_view.encodings[0] is initial_view.encodings[0]
+        assert rebased_view.encodings[1] is not initial_view.encodings[1]
+        assert rebased_workspace.distance(0, 1) == metric.distance(
+            entries[0].candidate,
+            replaced_entry.candidate,
+        )
+
+        removed_entries = next_entries[1:]
+        removed_workspace = rebased_workspace.rebase(
+            entries=removed_entries,
+            invalidated_indices=frozenset(),
+        )
+        removed_view = removed_workspace.compiled_distance_view
+        assert removed_view is not None
+        assert removed_view.encodings[0] is not rebased_view.encodings[0]
+        assert removed_workspace.distance(0, 1) == metric.distance(
+            replaced_entry.candidate,
+            appended_entry.candidate,
+        )
+
+    def test_distance_workspace_rejects_stale_or_foreign_compiled_view(self) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        entries = (
+            BankEntry(candidate=space.normalize((0, 1)), value=1.0),
+            BankEntry(candidate=space.normalize((2, 3)), value=2.0),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+        compiled_view = workspace.compiled_distance_view
+        assert compiled_view is not None
+
+        stale_entries = (
+            entries[0],
+            BankEntry(candidate=space.normalize((2, 4)), value=3.0),
+        )
+        with pytest.raises(ValueError, match="must align"):
+            _ = BankDistanceWorkspace(
+                entries=stale_entries,
+                diversity_metric=metric,
+                compiled_distance_view=compiled_view,
+            )
+
+        foreign_metric = StructuredSpaceDiversityMetric(space=space)
+        with pytest.raises(ValueError, match="must align"):
+            _ = BankDistanceWorkspace(
+                entries=entries,
+                diversity_metric=foreign_metric,
+                compiled_distance_view=compiled_view,
+            )
+
+    def test_empty_compiled_distance_workspace_is_stable_under_input_mutation(
+        self,
+    ) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        mutable_entries: list[BankEntry[tuple[int, ...]]] = []
+        workspace = BankDistanceWorkspace(
+            entries=mutable_entries,
+            diversity_metric=metric,
+        )
+        view = workspace.compiled_distance_view
+        assert view is not None
+
+        mutable_entries.append(BankEntry(candidate=space.normalize((0, 1)), value=1.0))
+
+        assert workspace.entries == ()
+        assert view.candidates == ()
+        assert workspace.distances_to_candidate(space.normalize((2, 3))) == ()
+
+    def test_compiled_structured_distance_preserves_csa_trajectory(self) -> None:
+        space = ArraySpace(IntegerSpace(-8, 8), length=4)
+        compiled_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            diversity_metric=StructuredSpaceDiversityMetric(space=space),
+            bank_capacity=6,
+            random_state=17,
+        )
+        fallback_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            diversity_metric=FallbackStructuredArrayMetric(space=space),
+            bank_capacity=6,
+            random_state=17,
+        )
+        compiled_state = compiled_optimizer.create_initial_state()
+        fallback_state = fallback_optimizer.create_initial_state()
+
+        for _step in range(48):
+            compiled_proposals, compiled_state = compiled_optimizer.ask(compiled_state)
+            fallback_proposals, fallback_state = fallback_optimizer.ask(fallback_state)
+            assert compiled_proposals == fallback_proposals
+
+            compiled_observations = tuple(
+                Observation(
+                    proposal=proposal,
+                    candidate=proposal.candidate,
+                    value=float(sum(value * value for value in proposal.candidate)),
+                    score=float(sum(value * value for value in proposal.candidate)),
+                )
+                for proposal in compiled_proposals
+            )
+            fallback_observations = tuple(
+                Observation(
+                    proposal=proposal,
+                    candidate=proposal.candidate,
+                    value=float(sum(value * value for value in proposal.candidate)),
+                    score=float(sum(value * value for value in proposal.candidate)),
+                )
+                for proposal in fallback_proposals
+            )
+            compiled_state = compiled_optimizer.tell(
+                compiled_state,
+                compiled_observations,
+            )
+            fallback_state = fallback_optimizer.tell(
+                fallback_state,
+                fallback_observations,
+            )
+            assert compiled_state == fallback_state
+
+    def test_compiled_geometry_serves_average_distance_and_clustering(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            diversity_metric=metric,
+            bank_capacity=3,
+            random_state=17,
+        )
+        entries = (
+            BankEntry(candidate=space.normalize((0, 0)), value=1.0),
+            BankEntry(candidate=space.normalize((1, 1)), value=2.0),
+            BankEntry(candidate=space.normalize((9, 9)), value=3.0),
+        )
+        workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+        expected_average = workspace.average_pairwise_distance()
+        clustering_state = CSAClusteringState[tuple[int, ...]](
+            policy=CSAClusteringPolicy(enabled=True),
+            cluster_distance=0.2,
+            cluster_labels=(1, 1, 2),
+        )
+        with pytest.raises(TypeError, match="integer candidate"):
+            _ = optimizer.infer_average_distance_for_entries(
+                (
+                    BankEntry(candidate=(0, True), value=0.0),
+                    entries[0],
+                ),
+            )
+
+        def reject_public_distance(
+            _metric: StructuredSpaceDiversityMetric[
+                Sequence[int],
+                tuple[int, ...],
+            ],
+            _left: tuple[int, ...],
+            _right: tuple[int, ...],
+        ) -> float:
+            raise AssertionError("public distance path should not be called")
+
+        monkeypatch.setattr(
+            StructuredSpaceDiversityMetric,
+            "distance",
+            reject_public_distance,
+        )
+
+        average = optimizer.infer_average_distance_for_entries(entries)
+        reclustered_state = clustering_state.recluster(
+            entries=entries,
+            diversity_metric=metric,
+            distance_workspace=workspace,
+        )
+
+        assert average == expected_average
+        assert reclustered_state.cluster_labels == (1, 1, 2)
+        with pytest.raises(ValueError, match="must align"):
+            _ = clustering_state.recluster(
+                entries=tuple(reversed(entries)),
+                diversity_metric=metric,
+                distance_workspace=workspace,
+            )
+
+    def test_partial_structured_bank_rebases_clustering_workspace_on_append(
+        self,
+    ) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        growth_policy = CSABankGrowthPolicy()
+        first_candidate = space.normalize((0, 0))
+        second_candidate = space.normalize((9, 9))
+
+        result = apply_bank_update_batch(
+            bank=Bank[tuple[int, ...]](capacity=2),
+            state=CSAProgressionState(
+                cutoff_state=CSACutoffState(
+                    distance_cutoff=0.5,
+                    minimum_distance_cutoff=0.5,
+                    cutoff_recover_limit=0.5,
+                ),
+                stage_state=CSAStageState(base_capacity=2, max_capacity=2),
+            ),
+            observations=(
+                Observation(
+                    proposal=Proposal(candidate=first_candidate, proposal_id="p-0"),
+                    candidate=first_candidate,
+                    value=0.0,
+                    score=0.0,
+                ),
+                Observation(
+                    proposal=Proposal(candidate=second_candidate, proposal_id="p-1"),
+                    candidate=second_candidate,
+                    value=1.0,
+                    score=1.0,
+                ),
+            ),
+            diversity_metric=StructuredSpaceDiversityMetric(space=space),
+            infer_average_distance=lambda entries: 1.0,
+            infer_score_gap=lambda entries: 1.0,
+            cutoff_schedule=CSACutoffSchedule(
+                initial_distance_cutoff=0.5,
+                minimum_distance_cutoff=0.5,
+            ),
+            update_policy=CSABankUpdatePolicy(),
+            acceptance_state=CSAAcceptanceState.from_policy(CSAAcceptancePolicy()),
+            score_model_state=CSAScoreModelState(score_model=CSAScoreModel()),
+            growth_state=CSABankGrowthState[tuple[int, ...]](
+                policy=growth_policy,
+                active_energy_gap_limit=growth_policy.initial_energy_gap_limit,
+            ),
+            clustering_state=CSAClusteringState(
+                policy=CSAClusteringPolicy(enabled=True),
+            ),
+            base_bank_capacity=2,
+            masked_seed_indices=frozenset(),
+            random_state=None,
+        )
+
+        assert tuple(entry.candidate for entry in result.bank.entries) == (
+            first_candidate,
+            second_candidate,
+        )
+        assert len(result.clustering_state.cluster_labels) == 2
+
     def test_standalone_banking_queries_use_structured_metric_for_canonical_entries(
         self,
     ) -> None:
@@ -402,6 +713,32 @@ class BankUpdatePolicyTests:
 
         assert distance == 0.0
         assert metric.call_count == 0
+
+    @pytest.mark.parametrize(
+        ("left_index", "right_index"),
+        ((-1, 0), (0, -1), (2, 2), (0, 2)),
+    )
+    def test_distance_workspace_rejects_out_of_snapshot_indices(
+        self,
+        left_index: int,
+        right_index: int,
+    ) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        entries = (
+            BankEntry(candidate=space.normalize((0, 1)), value=1.0),
+            BankEntry(candidate=space.normalize((2, 3)), value=2.0),
+        )
+        workspace = BankDistanceWorkspace(
+            entries=entries,
+            diversity_metric=StructuredSpaceDiversityMetric(space=space),
+        )
+        view = workspace.compiled_distance_view
+        assert view is not None
+
+        with pytest.raises(IndexError, match="workspace entries"):
+            _ = workspace.distance(left_index, right_index)
+        with pytest.raises(IndexError, match="compiled snapshot"):
+            _ = view.distance(left_index, right_index)
 
     def test_score_bank_distance_workspace_preserves_biased_scores(self) -> None:
         entries: tuple[BankEntry[int], ...] = (

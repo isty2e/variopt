@@ -3,15 +3,15 @@
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from math import isfinite
-from typing import ClassVar, Generic, Protocol, TypeVar, cast
+from typing import ClassVar, Generic, Protocol, TypeVar
 
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
 from .....diversity.space_metric import (
+    CompiledStructuredDistanceView,
     structured_distance_between_validated_candidates,
-    supports_validated_structured_distance,
+    supports_candidate_typed_structured_distance,
 )
-from .....spaces.types import SpaceCandidateValue
 from .....typevars import CandidateT
 from .update.policy import CSANicheQualityPolicy
 
@@ -85,6 +85,10 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         Bank entries whose pairwise distances may be requested.
     diversity_metric : DiversityMetric[CandidateT]
         Diversity metric used to compute and validate distances.
+    compiled_distance_view : CompiledStructuredDistanceView[CandidateT] | None, default=None
+        Previously prepared view aligned to ``entries``. This is used only when
+        rebasing the operation-local workspace; ordinary construction compiles
+        an eligible exact structured metric automatically.
 
     Notes
     -----
@@ -92,11 +96,13 @@ class BankDistanceWorkspace(Generic[CandidateT]):
     stored in checkpoint state or persistent optimizer state.
     """
 
-    entries: Sequence[CandidateEntry[CandidateT]]
+    entries: tuple[CandidateEntry[CandidateT], ...]
     diversity_metric: DiversityMetric[CandidateT]
     distances: dict[tuple[int, int], float]
+    compiled_distance_view: CompiledStructuredDistanceView[CandidateT] | None
 
     __slots__: ClassVar[tuple[str, ...]] = (
+        "compiled_distance_view",
         "distances",
         "diversity_metric",
         "entries",
@@ -107,10 +113,28 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         *,
         entries: Sequence[CandidateEntry[CandidateT]],
         diversity_metric: DiversityMetric[CandidateT],
+        compiled_distance_view: CompiledStructuredDistanceView[CandidateT]
+        | None = None,
     ) -> None:
-        self.entries = entries
+        self.entries = tuple(entries)
         self.diversity_metric = diversity_metric
         self.distances = {}
+        candidates = tuple(entry.candidate for entry in self.entries)
+        if compiled_distance_view is not None:
+            if (
+                not supports_candidate_typed_structured_distance(diversity_metric)
+                or not diversity_metric._owns_distance_view(compiled_distance_view)
+                or not compiled_distance_view.is_aligned_with(candidates)
+            ):
+                msg = "compiled distance view must align with the metric and entries"
+                raise ValueError(msg)
+            self.compiled_distance_view = compiled_distance_view
+        elif supports_candidate_typed_structured_distance(diversity_metric):
+            self.compiled_distance_view = diversity_metric._compile_distance_view(
+                candidates
+            )
+        else:
+            self.compiled_distance_view = None
 
     def rebase(
         self,
@@ -136,9 +160,17 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         if entries is self.entries and not invalidated_indices:
             return self
 
+        compiled_distance_view = self.compiled_distance_view
+        if compiled_distance_view is not None:
+            compiled_distance_view = compiled_distance_view.rebase(
+                candidates=tuple(entry.candidate for entry in entries),
+                invalidated_indices=invalidated_indices,
+            )
+
         workspace = type(self)(
             entries=entries,
             diversity_metric=self.diversity_metric,
+            compiled_distance_view=compiled_distance_view,
         )
         if not self.distances or len(entries) < len(self.entries):
             return workspace
@@ -147,12 +179,18 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         invalidated_index_set = frozenset(
             index for index in invalidated_indices if index >= 0
         )
+        reusable_indices = frozenset(
+            index
+            for index in range(common_entry_count)
+            if index not in invalidated_index_set
+            and entries[index].candidate is self.entries[index].candidate
+        )
         workspace.distances.update(
             (key, distance)
             for key, distance in self.distances.items()
             if key[1] < common_entry_count
-            and key[0] not in invalidated_index_set
-            and key[1] not in invalidated_index_set
+            and key[0] in reusable_indices
+            and key[1] in reusable_indices
         )
         return workspace
 
@@ -170,7 +208,20 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         -------
         float
             Validated pairwise distance between the two entries.
+
+        Raises
+        ------
+        IndexError
+            If either index lies outside the workspace entry snapshot.
         """
+        if (
+            left_index < 0
+            or left_index >= len(self.entries)
+            or right_index < 0
+            or right_index >= len(self.entries)
+        ):
+            msg = "distance indices must reference workspace entries"
+            raise IndexError(msg)
         if left_index == right_index:
             return 0.0
 
@@ -183,17 +234,97 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         if distance is not None:
             return distance
 
-        left_entry = self.entries[key[0]]
-        right_entry = self.entries[key[1]]
-        distance = require_valid_distance(
-            validated_candidate_distance(
-                self.diversity_metric,
-                left_entry.candidate,
-                right_entry.candidate,
-            ),
-        )
+        compiled_distance_view = self.compiled_distance_view
+        if compiled_distance_view is None:
+            left_entry = self.entries[key[0]]
+            right_entry = self.entries[key[1]]
+            distance = require_valid_distance(
+                validated_candidate_distance(
+                    self.diversity_metric,
+                    left_entry.candidate,
+                    right_entry.candidate,
+                ),
+            )
+        else:
+            distance = require_valid_distance(
+                compiled_distance_view.distance(key[0], key[1])
+            )
         self.distances[key] = distance
         return distance
+
+    def distances_to_candidate(self, candidate: CandidateT) -> tuple[float, ...]:
+        """Return validated distances from one candidate to every bank entry.
+
+        Parameters
+        ----------
+        candidate : CandidateT
+            Canonical candidate already admitted through the CSA proposal
+            validation boundary.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Distances aligned one-to-one with :attr:`entries`.
+        """
+        compiled_distance_view = self.compiled_distance_view
+        if compiled_distance_view is not None:
+            return tuple(
+                require_valid_distance(distance)
+                for distance in compiled_distance_view.distances_to(candidate)
+            )
+        return tuple(
+            require_valid_distance(
+                validated_candidate_distance(
+                    self.diversity_metric,
+                    candidate,
+                    entry.candidate,
+                )
+            )
+            for entry in self.entries
+        )
+
+    def is_aligned_with_entries(
+        self,
+        entries: Sequence[CandidateEntry[CandidateT]],
+    ) -> bool:
+        """Return whether entries carry the represented candidates in order.
+
+        Parameters
+        ----------
+        entries : Sequence[CandidateEntry[CandidateT]]
+            Entry snapshot whose candidate alignment is checked by identity.
+
+        Returns
+        -------
+        bool
+            Whether every entry carries the candidate represented at the same
+            workspace index.
+        """
+        return len(entries) == len(self.entries) and all(
+            entry.candidate is self.entries[index].candidate
+            for index, entry in enumerate(entries)
+        )
+
+    def average_pairwise_distance(self) -> float:
+        """Return the mean distance across distinct bank-entry pairs.
+
+        Returns
+        -------
+        float
+            Mean pairwise distance, or ``0.0`` when fewer than two entries are
+            represented.
+        """
+        entry_count = len(self.entries)
+        if entry_count < 2:
+            return 0.0
+
+        distance_sum = 0.0
+        pair_count = 0
+        for left_index in range(entry_count - 1):
+            for right_index in range(left_index + 1, entry_count):
+                distance_sum += self.distance(left_index, right_index)
+                pair_count += 1
+        return distance_sum / float(pair_count)
 
     def seed_entry_distances(
         self,
@@ -455,11 +586,11 @@ def validated_candidate_distance(
     revalidate structured candidate shape; callers own the bank-admission
     validation boundary.
     """
-    if supports_validated_structured_distance(diversity_metric):
+    if supports_candidate_typed_structured_distance(diversity_metric):
         return structured_distance_between_validated_candidates(
             diversity_metric,
-            cast(SpaceCandidateValue, left),
-            cast(SpaceCandidateValue, right),
+            left,
+            right,
         )
     return diversity_metric.distance(left, right)
 

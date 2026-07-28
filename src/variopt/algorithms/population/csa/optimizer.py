@@ -17,7 +17,10 @@ from ....artifacts import (
 )
 from ....distance import require_valid_distance
 from ....diversity import DiversityMetric
-from ....diversity.space_metric import supports_validated_structured_distance
+from ....diversity.space_metric import (
+    supports_compiled_structured_distance,
+    supports_validated_structured_distance,
+)
 from ....execution import (
     EXACT_ASYNC_EXECUTION_MODEL,
     SEQUENTIAL_EXECUTION_MODEL,
@@ -49,7 +52,7 @@ from ....typevars import CandidateT
 from .banking.bank import Bank, BankEntry
 from .banking.clustering import CSAClusteringState
 from .banking.growth import CSABankGrowthState
-from .banking.queries import infer_score_gap
+from .banking.queries import BankDistanceWorkspace, infer_score_gap
 from .banking.reference import ReferenceBank
 from .banking.update import CSABankUpdatePolicy
 from .defaults import derive_csa_defaults
@@ -854,7 +857,7 @@ class CSAOptimizer(
                 cutoff_schedule=self.resolved_profile.cutoff_schedule,
                 refresh_policy=self.resolved_profile.refresh_policy,
                 update_policy=self.bank_update_policy,
-                infer_average_distance=self.infer_average_distance_for_entries,
+                infer_average_distance=self._infer_average_distance_for_validated_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
@@ -870,7 +873,7 @@ class CSAOptimizer(
                 refresh_policy=self.resolved_profile.refresh_policy,
                 update_policy=self.bank_update_policy,
                 random_state=random_state,
-                infer_average_distance=self.infer_average_distance_for_entries,
+                infer_average_distance=self._infer_average_distance_for_validated_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
                 infer_local_displacement_leaf_paths=local_displacement_leaf_path_inference,
                 infer_numeric_subspace_displacement=numeric_subspace_displacement_inference,
@@ -1000,7 +1003,7 @@ class CSAOptimizer(
                 refresh_policy=self.resolved_profile.refresh_policy,
                 diversity_metric=self.diversity_metric,
                 cutoff_schedule=self.resolved_profile.cutoff_schedule,
-                infer_average_distance=self.infer_average_distance_for_entries,
+                infer_average_distance=self._infer_average_distance_for_validated_entries,
                 infer_score_gap=self.infer_score_gap_for_entries,
             )
 
@@ -1119,6 +1122,23 @@ class CSAOptimizer(
         """
         if len(entries) < 2:
             return 0.0
+        for entry in entries:
+            self.space.validate(entry.candidate)
+        return self._infer_average_distance_for_validated_entries(entries)
+
+    def _infer_average_distance_for_validated_entries(
+        self,
+        entries: Sequence[BankEntry[CandidateT]],
+    ) -> float:
+        """Estimate average distance for entries validated by the CSA boundary."""
+        if len(entries) < 2:
+            return 0.0
+
+        if supports_compiled_structured_distance(self.diversity_metric):
+            return BankDistanceWorkspace(
+                entries=entries,
+                diversity_metric=self.diversity_metric,
+            ).average_pairwise_distance()
 
         distance_sum = 0.0
         pair_count = 0
