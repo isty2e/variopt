@@ -205,6 +205,23 @@ class CSASelectionTests(CSAOptimizerTestCase):
 
         assert selected_index == 1
 
+    def test_diverse_seed_selection_handles_mean_rounding_above_all_scores(
+        self,
+    ) -> None:
+        entries = tuple(
+            BankEntry(candidate=index, value=float(abs(index - 3)))
+            for index in range(7)
+        )
+
+        selected_index = pick_diverse_low_value_seed(
+            entries=entries,
+            selected_indices=(0,),
+            remaining_indices=(1, 2, 3, 4, 5, 6),
+            distance_between_indices=lambda _left, _right: 1.0 / 58.0,
+        )
+
+        assert selected_index == 3
+
     def test_diverse_seed_selection_handles_large_finite_total(self) -> None:
         selected_index = pick_diverse_low_value_seed(
             entries=(

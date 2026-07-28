@@ -534,14 +534,22 @@ def pick_diverse_low_value_seed(
 
         scored_indices = mean_scored_indices
 
-    return min(
-        (
+    eligible_indices = tuple(
+        index
+        for index, distance_score in scored_indices
+        if distance_score >= average_distance_score
+    )
+    if not eligible_indices:
+        maximum_distance_score = max(
+            distance_score for _, distance_score in scored_indices
+        )
+        eligible_indices = tuple(
             index
             for index, distance_score in scored_indices
-            if distance_score >= average_distance_score
-        ),
-        key=lambda index: entries[index].value,
-    )
+            if distance_score == maximum_distance_score
+        )
+
+    return min(eligible_indices, key=lambda index: entries[index].value)
 
 
 def select_weighted_partner_index(
