@@ -13,6 +13,7 @@ from tests.problem_artifact_support import (
     MatchupSpec,
     ShiftedObservationProtocol,
     SquareObjective,
+    square_objective_value,
 )
 from variopt import (
     EvaluationOutcome,
@@ -110,6 +111,29 @@ class TupleLengthObjective(Objective[tuple[SpaceCandidateValue, ...]]):
         return float(len(candidate))
 
 
+class CountingSquareCallable:
+    """Count calls while returning a scalar square."""
+
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def __call__(self, candidate: int) -> float:
+        self.call_count += 1
+        return float(candidate * candidate)
+
+
+class EqualityHostileSquareCallable:
+    """Scalar callable whose value equality must remain outside normalization."""
+
+    def __call__(self, candidate: int) -> float:
+        return float(candidate * candidate)
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        _ = other
+        raise AssertionError("callable equality must not define Problem identity")
+
+
 class ProblemContractsTests:
     """Coverage for problem construction and interaction contract validation."""
 
@@ -149,6 +173,73 @@ class ProblemContractsTests:
         problem = Problem(
             space=IntegerSpace(low=0, high=10),
             objective=SquareObjective(),
+            name="square",
+        )
+
+        restored = pickle_round_trip(problem)
+
+        assert restored.name == "square"
+        assert restored.objective.evaluate(4) == 16.0
+
+    def test_problem_preserves_direct_objective_identity(self) -> None:
+        objective = SquareObjective()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+
+        assert problem.objective is objective
+        assert problem.direct_objective is objective
+
+    def test_callable_problem_equality_uses_source_identity(self) -> None:
+        objective = EqualityHostileSquareCallable()
+        first = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+        second = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+        )
+
+        assert first == second
+        assert hash(first) == hash(second)
+
+    @pytest.mark.parametrize(
+        ("direction", "expected_score"),
+        (
+            (OptimizationDirection.MINIMIZE, 16.0),
+            (OptimizationDirection.MAXIMIZE, -16.0),
+        ),
+    )
+    def test_problem_normalizes_callable_objective_once(
+        self,
+        direction: OptimizationDirection,
+        expected_score: float,
+    ) -> None:
+        objective = CountingSquareCallable()
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=objective,
+            direction=direction,
+            name="square",
+        )
+
+        payload = problem.evaluation_protocol.evaluate_proposal(
+            Proposal(candidate=4),
+        )
+
+        assert isinstance(problem.objective, Objective)
+        assert problem.direct_objective is problem.objective
+        assert problem.name == "square"
+        assert payload.value == 16.0
+        assert payload.score == expected_score
+        assert objective.call_count == 1
+
+    def test_callable_objective_problem_pickle_round_trips(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=square_objective_value,
             name="square",
         )
 

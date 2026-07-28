@@ -9,6 +9,7 @@ import pytest
 from typing_extensions import override
 
 import variopt.study.assimilation as study_assimilation
+from tests.problem_artifact_support import square_objective_value
 from tests.study_support import (
     BatchQueueOptimizer,
     BatchQueueOptimizerState,
@@ -80,6 +81,7 @@ from variopt.kernel import (
 )
 from variopt.study.common import CheckpointSafeRunSnapshot, build_evaluation_requests
 from variopt.study.execution import (
+    _supports_direct_scalar_sequential_path,
     evaluate_attempts_sync,
     materialize_scalar_run_result,
 )
@@ -1925,6 +1927,33 @@ class StudyTests:
                 batch_size=2,
                 execution_model=SEQUENTIAL_EXECUTION_MODEL,
             )
+
+    def test_callable_objective_remains_eligible_for_the_scalar_fast_path(
+        self,
+    ) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=square_objective_value,
+        )
+        optimizer = BatchQueueOptimizer(
+            proposal_batches=[(Proposal(candidate=4, proposal_id="p-1"),)],
+        )
+        evaluator = SequentialEvaluator[int, int]()
+        study = Study(problem=problem, run_method=optimizer, evaluator=evaluator)
+
+        result, _ = study.optimize(
+            max_evaluations=1,
+            execution_model=SEQUENTIAL_EXECUTION_MODEL,
+        )
+
+        assert result.evaluation_count == 1
+        assert result.best_observation is not None
+        assert result.best_observation.candidate == 4
+        assert result.best_observation.value == 16.0
+        assert _supports_direct_scalar_sequential_path(
+            study,
+            execution_model=SEQUENTIAL_EXECUTION_MODEL,
+        )
 
     def test_run_returns_terminal_run_report_for_scalar_observations(self) -> None:
         problem = Problem(

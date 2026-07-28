@@ -21,6 +21,19 @@ from variopt.artifacts import (
 )
 
 
+def square_objective_value(candidate: int) -> float:
+    """Return the square of one integer candidate."""
+    return float(candidate * candidate)
+
+
+def fail_on_four_objective_value(candidate: int) -> float:
+    """Raise for candidate four and otherwise return the candidate value."""
+    if candidate == 4:
+        msg = "boom"
+        raise ValueError(msg)
+    return float(candidate)
+
+
 class SquareObjective(Objective[int]):
     """Minimal objective used to exercise problem and artifact contracts."""
 
