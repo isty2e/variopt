@@ -13,6 +13,7 @@ from tests.problem_artifact_support import (
     NaNObjective,
     ShiftedObservationProtocol,
     SquareObjective,
+    fail_on_four_objective_value,
 )
 from variopt import (
     EvaluationProtocol,
@@ -297,6 +298,21 @@ class ProblemExecutionTests:
         assert attempts.failure_indices == (0,)
         assert attempts.failures[0].request is request
         assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
+
+    def test_callable_objective_failure_uses_the_standard_attempt_path(self) -> None:
+        problem = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=fail_on_four_objective_value,
+        )
+        request = EvaluationRequest(proposal=Proposal(candidate=4, proposal_id="p-1"))
+
+        attempts = evaluate_request_attempt(problem=problem, request=request)
+
+        assert attempts.successes == ()
+        assert attempts.failure_indices == (0,)
+        assert attempts.failures[0].request is request
+        assert attempts.failures[0].exception.exception_type == "builtins.ValueError"
+        assert attempts.failures[0].exception.message == "boom"
 
     def test_payload_success_helper_keeps_user_exception_hard(self) -> None:
         problem = Problem(

@@ -167,6 +167,12 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Added
 
+- `Problem` now accepts a typed scalar callable directly through `objective=`
+  and normalizes it at construction into the existing `Objective` and
+  evaluation-protocol path. Existing direction, failure, accounting,
+  diagnostics, and evaluator behavior is unchanged; `Problem.name` remains the
+  human-facing label. Picklable functions defined at an importable module level
+  are the conservative choice for process and MPI portability.
 - Added `CSAOptimizer.configuration_manifest(...)` and the supported
   `CSAConfigurationManifest`, `CSAComponentDescriptor`, and
   `CSAConfigurationResolutionError` artifacts. The versioned manifest records

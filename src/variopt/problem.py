@@ -1,5 +1,6 @@
 """Problem definitions."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Generic
 
@@ -28,6 +29,41 @@ from .typevars import CandidateT
 BoundaryT = TypeVar("BoundaryT")
 ProblemPayloadT = TypeVar("ProblemPayloadT", default=ObservationPayload)
 InteractionProblemRecordT = TypeVar("InteractionProblemRecordT")
+
+
+class _CallableObjective(Objective[CandidateT], Generic[CandidateT]):
+    """Scalar objective view over one typed candidate callable."""
+
+    def __init__(self, function: Callable[[CandidateT], float]) -> None:
+        self._function = function
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        """Return whether two views wrap the same callable object."""
+        return (
+            isinstance(other, _CallableObjective) and self._function is other._function
+        )
+
+    @override
+    def __hash__(self) -> int:
+        """Return an identity hash aligned with callable-view equality."""
+        return hash((type(self), id(self._function)))
+
+    @override
+    def evaluate(self, candidate: CandidateT) -> float:
+        """Return the wrapped callable's raw scalar value.
+
+        Parameters
+        ----------
+        candidate : CandidateT
+            Canonical candidate to evaluate.
+
+        Returns
+        -------
+        float
+            Raw objective value returned by the wrapped callable.
+        """
+        return self._function(candidate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,9 +157,9 @@ class Problem(
     ----------
     space : SearchSpace[BoundaryT, CandidateT]
         Canonical search-space definition for valid candidates.
-    objective : Objective[CandidateT] | None, optional
-        Optional scalar objective compatibility view. Provide this for the
-        simplest scalar problem definitions.
+    objective : Objective[CandidateT] | Callable[[CandidateT], float] | None, optional
+        Optional scalar objective or typed candidate callable. Callable inputs
+        are normalized immediately into the canonical objective contract.
     evaluation_protocol : EvaluationProtocol[CandidateT, ProblemPayloadT] | ObservationEvaluationProtocol[CandidateT] | None, optional
         Optional canonical request-aligned evaluation protocol. This may be
         direction-free or a scalar observation protocol that ``Problem`` will
@@ -138,7 +174,9 @@ class Problem(
     Notes
     -----
     Exactly one of ``objective`` or ``evaluation_protocol`` must be provided.
-    Internally, ``Problem`` stores the direction-free
+    Callable objectives are accepted only at construction and exposed
+    thereafter through the canonical :class:`~variopt.objective.Objective`
+    view. Internally, ``Problem`` stores the direction-free
     :class:`~variopt.objective.EvaluationProtocol` contract and exposes
     ``objective`` only as a compatibility view when a scalar interpretation is
     available. The canonical evaluation protocol must emit request-free
@@ -159,7 +197,9 @@ class Problem(
         self,
         *,
         space: SearchSpace[BoundaryT, CandidateT],
-        objective: Objective[CandidateT] | None = None,
+        objective: (
+            Objective[CandidateT] | Callable[[CandidateT], float] | None
+        ) = None,
         evaluation_protocol: (
             EvaluationProtocol[CandidateT, ProblemPayloadT]
             | ObservationEvaluationProtocol[CandidateT]
@@ -175,8 +215,9 @@ class Problem(
         space : SearchSpace[BoundaryT, CandidateT]
             Search-space definition that owns candidate validity and sampling
             semantics.
-        objective : Objective[CandidateT] | None, optional
-            Optional scalar objective compatibility view.
+        objective : Objective[CandidateT] | Callable[[CandidateT], float] | None, optional
+            Optional scalar objective or typed candidate callable. Callable
+            inputs are normalized into an :class:`Objective`.
         evaluation_protocol : EvaluationProtocol[CandidateT, ProblemPayloadT] | ObservationEvaluationProtocol[CandidateT] | None, optional
             Optional canonical payload-returning evaluation protocol or scalar
             observation protocol.
@@ -188,6 +229,10 @@ class Problem(
 
         Raises
         ------
+        TypeError
+            If ``objective`` is neither an :class:`Objective` nor a callable,
+            or if ``direction`` is not an
+            :class:`~variopt.direction.OptimizationDirection`.
         ValueError
             If neither or both of ``objective`` and ``evaluation_protocol`` are
             provided.
@@ -198,7 +243,22 @@ class Problem(
             msg = "exactly one of objective or evaluation_protocol must be provided"
             raise ValueError(msg)
 
-        protocol = objective if objective is not None else evaluation_protocol
+        normalized_objective: Objective[CandidateT] | None
+        if objective is None:
+            normalized_objective = None
+        elif isinstance(objective, Objective):
+            normalized_objective = objective
+        elif callable(objective):
+            normalized_objective = _CallableObjective(objective)
+        else:
+            msg = "objective must be an Objective, callable, or None"
+            raise TypeError(msg)
+
+        protocol = (
+            normalized_objective
+            if normalized_objective is not None
+            else evaluation_protocol
+        )
         if protocol is None:
             msg = "evaluation_protocol normalization failed"
             raise RuntimeError(msg)
@@ -217,12 +277,12 @@ class Problem(
             | _ObservationProtocolEvaluationProtocolAdapter[CandidateT]
         )
         objective_compat: Objective[CandidateT] | None
-        if objective is not None:
+        if normalized_objective is not None:
             canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
-                observation_evaluation_protocol=objective,
+                observation_evaluation_protocol=normalized_objective,
                 direction=canonical_direction,
             )
-            objective_compat = objective
+            objective_compat = normalized_objective
         elif isinstance(protocol, Objective):
             canonical_protocol = _ObservationProtocolEvaluationProtocolAdapter(
                 observation_evaluation_protocol=protocol,
@@ -290,7 +350,8 @@ class Problem(
         -----
         Prefer :attr:`evaluation_protocol` in canonical internal code. This
         property is for boundary convenience when a scalar objective view is
-        meaningful.
+        meaningful. Callable constructor inputs are returned through their
+        normalized :class:`Objective` view rather than as the original callable.
         """
         if self._objective_compat is None:
             msg = "problem does not expose a scalar Objective compatibility view"
@@ -299,14 +360,15 @@ class Problem(
 
     @property
     def direct_objective(self) -> Objective[CandidateT] | None:
-        """Return the direct scalar objective configured on this problem, if any.
+        """Return the direct scalar objective view for this problem, if any.
 
         Returns
         -------
         Objective[CandidateT] | None
-            The scalar objective supplied directly at construction time. Returns
-            ``None`` for non-scalar protocols and for scalar observation
-            protocols adapted through request-aware compatibility views.
+            The supplied scalar objective or the canonical objective view
+            normalized from a callable. Returns ``None`` for non-scalar
+            protocols and for scalar observation protocols adapted through
+            request-aware compatibility views.
 
         Notes
         -----

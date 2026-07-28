@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 from typing_extensions import Never, override
 
+from tests.problem_artifact_support import square_objective_value
 from variopt import (
     EvaluationAttemptBatch,
     EvaluationRequest,
@@ -200,6 +201,31 @@ def successful_values(
 
 class JoblibWorkerSessionTests:
     """Exercise lifecycle, isolation, and failure boundaries."""
+
+    @pytest.mark.parametrize(
+        "problem_transport",
+        ("per_request", "worker_session"),
+    )
+    def test_loky_transports_callable_objective(
+        self,
+        problem_transport: JoblibProblemTransportMode,
+    ) -> None:
+        problem: Problem[int, int, ObservationPayload] = Problem(
+            space=IntegerSpace(low=0, high=10),
+            objective=square_objective_value,
+        )
+        evaluator = JoblibEvaluator[int, int, ObservationPayload](
+            backend="loky",
+            n_jobs=2,
+            problem_transport=problem_transport,
+        )
+
+        attempts = evaluator.evaluate_attempts(
+            problem,
+            make_requests(2, 3),
+        )
+
+        assert successful_values(attempts) == (4.0, 9.0)
 
     def test_default_transport_remains_per_request(self) -> None:
         evaluator = JoblibEvaluator[int, int, ObservationPayload]()
