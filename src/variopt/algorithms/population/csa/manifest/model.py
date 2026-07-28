@@ -24,6 +24,51 @@ VARIOPT_COMPONENT_IDENTIFIER = "variopt"
 VARIOPT_COMPONENT_IDENTIFIER_PREFIX = "variopt."
 
 
+class CSAConfigurationResolutionError(ValueError):
+    """Report unresolved semantic locations in one manifest projection.
+
+    Parameters
+    ----------
+    missing_component_paths : tuple[tuple[str | int, ...], ...]
+        Deterministically ordered locations that require caller descriptors.
+    unused_component_paths : tuple[tuple[str | int, ...], ...]
+        Deterministically ordered caller locations that were not consumed.
+    """
+
+    missing_component_paths: tuple[tuple[str | int, ...], ...]
+    unused_component_paths: tuple[tuple[str | int, ...], ...]
+
+    def __init__(
+        self,
+        *,
+        missing_component_paths: tuple[tuple[str | int, ...], ...],
+        unused_component_paths: tuple[tuple[str | int, ...], ...],
+    ) -> None:
+        canonical_missing_paths = _canonical_component_paths(
+            missing_component_paths,
+        )
+        canonical_unused_paths = _canonical_component_paths(
+            unused_component_paths,
+        )
+        self.missing_component_paths = canonical_missing_paths
+        self.unused_component_paths = canonical_unused_paths
+
+        details: list[str] = []
+        if canonical_missing_paths:
+            details.append(
+                "missing component paths "
+                + _component_paths_json(canonical_missing_paths),
+            )
+        if canonical_unused_paths:
+            details.append(
+                "unused component paths "
+                + _component_paths_json(canonical_unused_paths),
+            )
+        super().__init__(
+            "CSA configuration manifest resolution failed: " + "; ".join(details),
+        )
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class CSAComponentDescriptor:
     """Stable caller-owned description of one custom CSA component.
@@ -362,6 +407,37 @@ def _validate_positive_version(version: int, *, field_name: str) -> None:
     if version <= 0:
         msg = f"{field_name} must be positive"
         raise ValueError(msg)
+
+
+def _component_paths_json(
+    paths: tuple[tuple[str | int, ...], ...],
+) -> str:
+    return json.dumps(
+        paths,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _canonical_component_paths(
+    paths: tuple[tuple[str | int, ...], ...],
+) -> tuple[tuple[str | int, ...], ...]:
+    return tuple(sorted(set(paths), key=_component_path_sort_key))
+
+
+def _component_path_sort_key(
+    path: tuple[str | int, ...],
+) -> tuple[tuple[int, str, int], ...]:
+    key_segments: list[tuple[int, str, int]] = []
+    for segment in path:
+        if type(segment) is str:
+            key_segments.append((0, segment, 0))
+        elif type(segment) is int:
+            key_segments.append((1, "", segment))
+        else:
+            msg = "component path segments must be exact strings or integers"
+            raise TypeError(msg)
+    return tuple(key_segments)
 
 
 def _require_exact_fields(

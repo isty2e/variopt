@@ -85,6 +85,8 @@ from .generation.proposal.state.attribution import (
     bind_proposal_provenance,
 )
 from .generation.state import GenerationRuntimeState
+from .manifest import CSAComponentDescriptor, CSAConfigurationManifest
+from .manifest.projection import project_csa_configuration
 from .profile import CSAProfile, CSAResolvedProfile
 from .progression.cutoff.state import CSACutoffState
 from .progression.stage import CSAStageState
@@ -284,6 +286,53 @@ class CSAOptimizer(
             profile=effective_profile,
             sampler=defaults.sampler if sampler is None else sampler,
             random_state=random_state,
+        )
+
+    def configuration_manifest(
+        self,
+        *,
+        custom_component_descriptors: (
+            Mapping[tuple[str | int, ...], CSAComponentDescriptor] | None
+        ) = None,
+    ) -> CSAConfigurationManifest:
+        """Return the canonical manifest for this resolved CSA configuration.
+
+        Parameters
+        ----------
+        custom_component_descriptors : Mapping[tuple[str | int, ...], CSAComponentDescriptor] | None, default=None
+            Caller-owned descriptions for custom objects keyed by documented
+            semantic configuration locations. Exact built-in components do not
+            accept descriptors.
+
+        Returns
+        -------
+        CSAConfigurationManifest
+            Immutable manifest of optimizer-side execution configuration.
+
+        Raises
+        ------
+        CSAConfigurationResolutionError
+            If required custom descriptors are missing or supplied descriptors
+            are not consumed.
+        TypeError
+            If descriptor paths, descriptor values, or the random seed have
+            invalid runtime types.
+        ValueError
+            If a descriptor path contains an invalid segment.
+
+        Notes
+        -----
+        The manifest excludes runtime state, RNG snapshots, the optimization
+        problem, evaluators, kernels, and dependency versions.
+        """
+        return project_csa_configuration(
+            space=self.space,
+            diversity_metric=self.diversity_metric,
+            bank_capacity=self.bank_capacity,
+            resolved_profile=self.resolved_profile,
+            sampler=self.sampler,
+            random_state=self.random_state,
+            custom_component_descriptors=custom_component_descriptors,
         )
 
     @staticmethod
