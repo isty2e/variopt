@@ -1078,7 +1078,7 @@ class RunResult(FrozenGenericSlotsCompat, Generic[CandidateT]):
             evaluation_count=normalized_evaluation_count,
             trace=normalized_trace,
             failures=failure_tuple,
-            candidate_equal=candidate_equal,
+            candidate_equal=None,
         )
 
 

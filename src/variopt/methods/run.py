@@ -171,6 +171,24 @@ class RunMethod(
             Advanced immutable run-method state.
         """
 
+    def _supports_direct_success_record_assimilation(self) -> bool:
+        """Return whether direct success records preserve attempt semantics.
+
+        Returns
+        -------
+        bool
+            ``True`` only when :meth:`tell` is equivalent to
+            :meth:`tell_attempts` for an all-success batch whose attempts each
+            consume one evaluation and carry no refinement or diagnostics.
+
+        Notes
+        -----
+        The default is deliberately conservative. Concrete run methods may
+        opt in only when bypassing success-attempt materialization preserves
+        their exact transition semantics.
+        """
+        return False
+
     def tell_attempts(
         self,
         state: RunMethodStateT,
