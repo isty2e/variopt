@@ -40,10 +40,10 @@ result, final_state = study.optimize(max_evaluations=40)
 ```python
 best = result.best_observation
 print(best.candidate)  # the best candidate found (e.g. 0)
-print(best.value)      # raw objective value (e.g. 0.0)
+print(best.value)  # raw objective value (e.g. 0.0)
 
-print(result.evaluation_count)    # total evaluations consumed
-print(len(result.observations))   # number of observed candidates
+print(result.evaluation_count)  # total evaluations consumed
+print(len(result.observations))  # number of observed candidates
 ```
 
 `best_observation` is an [`Observation`][variopt.Observation] — it carries the

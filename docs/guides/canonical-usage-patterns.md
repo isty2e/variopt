@@ -77,9 +77,7 @@ def evaluate_success(
     )
 
 
-successes = tuple(
-    evaluate_success(request) for request in requests
-)
+successes = tuple(evaluate_success(request) for request in requests)
 
 assert sum(success.evaluation_count for success in successes) == 2
 assert [success.payload.label for success in successes] == [
@@ -258,8 +256,7 @@ records = tuple(
     )
 )
 successes = tuple(
-    EvaluationSuccess(request=record.request, payload=record)
-    for record in records
+    EvaluationSuccess(request=record.request, payload=record) for record in records
 )
 
 report = RunReport[int, ObjectiveVectorRecord[int]].from_successes(

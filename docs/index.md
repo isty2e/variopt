@@ -34,7 +34,9 @@ space = RecordSpace(
 
 study = Study(
     problem=Problem(space=space, objective=SphereObjective()),
-    run_method=CSAOptimizer.from_space_defaults(space=space, bank_capacity=12, random_state=0),
+    run_method=CSAOptimizer.from_space_defaults(
+        space=space, bank_capacity=12, random_state=0
+    ),
     evaluator=SequentialEvaluator(),
 )
 result, _ = study.optimize(max_evaluations=100)
