@@ -3,22 +3,19 @@
 This is the smallest practical scalar optimization example.
 
 ```python
-from typing_extensions import override
-
-from variopt import IntegerSpace, Objective, Problem, Study
+from variopt import IntegerSpace, Problem, Study
 from variopt.algorithms.population import CSAOptimizer
 from variopt.evaluators import SequentialEvaluator
 
 
-class SquareObjective(Objective[int]):
-    @override
-    def evaluate(self, candidate: int) -> float:
-        return float(candidate * candidate)
+def square(candidate: int) -> float:
+    return float(candidate * candidate)
 
 
 problem = Problem(
     space=IntegerSpace(-10, 10),
-    objective=SquareObjective(),
+    objective=square,
+    name="square",
 )
 
 optimizer = CSAOptimizer.from_space_defaults(
@@ -59,7 +56,8 @@ evaluation sequence.
 ## What This Example Uses
 
 - [`IntegerSpace`][variopt.IntegerSpace] defines the search domain
-- [`Objective`][variopt.Objective] maps a candidate to a scalar value
+- [`Problem`][variopt.Problem] normalizes the typed `square` callable into its
+  canonical scalar objective contract
 - [`CSAOptimizer.from_space_defaults(...)`][variopt.algorithms.population.CSAOptimizer.from_space_defaults]
   derives sampler, diversity metric, and perturbation schedule from the space
 - [`SequentialEvaluator`][variopt.evaluators.SequentialEvaluator] evaluates
@@ -71,6 +69,13 @@ evaluation sequence.
 `population_size` in a GA: larger banks explore more candidates in parallel at
 higher evaluation cost. `8` is chosen here for a small illustrative run; pick
 the size based on your evaluation budget, not from this example.
+
+An explicit [`Objective`][variopt.Objective] subclass remains useful when a
+named reusable class better represents the evaluation rule. For process and
+MPI evaluators, a picklable function defined at an importable module level is
+the conservative callable choice. Lambdas, closures, bound methods, and
+stateful callable objects may work with particular serializers but are not
+guaranteed to be portable across every backend.
 
 ## Next Steps
 

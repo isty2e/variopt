@@ -13,24 +13,20 @@ stability policy, and [docs](docs/index.md) for the user-facing guide.
 ## Quickstart
 
 ```python
-from typing_extensions import override
-
-from variopt import IntegerSpace, Objective, OptimizationDirection, Problem, Study
+from variopt import IntegerSpace, OptimizationDirection, Problem, Study
 from variopt.algorithms.population import CSAOptimizer
 from variopt.evaluators import SequentialEvaluator
 
 
-class SquareObjective(Objective[int]):
-    @override
-    def evaluate(self, candidate: int) -> float:
-        return float(candidate * candidate)
+def square(candidate: int) -> float:
+    return float(candidate * candidate)
 
 
 space = IntegerSpace(-10, 10)
 
 problem = Problem(
     space=space,
-    objective=SquareObjective(),
+    objective=square,
     direction=OptimizationDirection.MINIMIZE,
 )
 
@@ -57,6 +53,13 @@ a [`RunResult`](docs/reference/api/artifacts.md). When a problem uses a
 non-scalar [`EvaluationProtocol`](docs/reference/api/variopt.md), use
 `Study.run(...)` instead to get a generic
 [`RunReport`](docs/reference/api/artifacts.md).
+
+`Problem` accepts either a typed scalar callable or an explicit
+[`Objective`](docs/reference/api/variopt.md) implementation. Prefer a
+picklable, importable module-level function when the problem may cross a
+process or MPI boundary; lambdas, closures, bound methods, and stateful
+callable objects are not guaranteed to be portable across every evaluator
+backend.
 
 ## Evaluator Backends
 

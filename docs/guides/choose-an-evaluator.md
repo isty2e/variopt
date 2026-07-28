@@ -28,6 +28,13 @@ Evaluator choice should not silently change the meaning of the optimizer.
 `exact_async`, and `stale_async` as semantic contracts rather than backend
 labels.
 
+When [`Problem`][variopt.Problem] receives a scalar callable as its objective,
+prefer a picklable function defined at an importable module level if evaluation
+may cross a process or MPI boundary. Sequential and threading execution can use
+process-local callables, and Joblib's loky backend uses `cloudpickle`, but those
+capabilities do not make lambdas, closures, bound methods, or stateful callable
+objects universally portable across evaluator backends.
+
 ## Practical Mapping
 
 - want the simplest one-proposal path:
