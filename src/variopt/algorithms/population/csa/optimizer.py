@@ -18,7 +18,7 @@ from ....artifacts import (
 from ....distance import require_valid_distance
 from ....diversity import DiversityMetric
 from ....diversity.space_metric import (
-    supports_compiled_structured_distance,
+    supports_compiled_structured_distance_view,
     supports_validated_structured_distance,
 )
 from ....execution import (
@@ -1147,7 +1147,7 @@ class CSAOptimizer(
         if len(entries) < 2:
             return 0.0
 
-        if supports_compiled_structured_distance(self.diversity_metric):
+        if supports_compiled_structured_distance_view(self.diversity_metric):
             return BankDistanceWorkspace(
                 entries=entries,
                 diversity_metric=self.diversity_metric,

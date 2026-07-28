@@ -68,6 +68,11 @@ class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
         """
         ...
 
+    @property
+    def reuses_candidate_structure(self) -> bool:
+        """Return whether encoding avoids repeated candidate-structure traversal."""
+        ...
+
     def encode_validated(
         self,
         candidate: PlanCandidateT_contra,
@@ -332,8 +337,8 @@ class ValidatedStructuredDistanceMetric(Protocol[MetricCandidateT]):
     """Internal structured metric operations available after validation."""
 
     @property
-    def _has_compiled_distance_plan(self) -> bool:
-        """Return whether exact built-in compiled geometry is available."""
+    def _supports_compiled_distance_view(self) -> bool:
+        """Return whether operation-local encoded candidate views are beneficial."""
         ...
 
     def _compile_distance_view(
@@ -422,9 +427,10 @@ class StructuredSpaceDiversityMetric(
         )
 
     @property
-    def _has_compiled_distance_plan(self) -> bool:
-        """Return whether exact built-in compiled geometry is available."""
-        return self.compiled_geometry_plan is not None
+    def _supports_compiled_distance_view(self) -> bool:
+        """Return whether compiled geometry reduces repeated candidate traversal."""
+        plan = self.compiled_geometry_plan
+        return plan is not None and plan.reuses_candidate_structure
 
     def _compile_distance_view(
         self,
@@ -432,7 +438,7 @@ class StructuredSpaceDiversityMetric(
     ) -> CompiledStructuredDistanceView[CandidateT] | None:
         """Compile an operation-local encoded view of canonical candidates."""
         plan = self.compiled_geometry_plan
-        if plan is None:
+        if plan is None or not plan.reuses_candidate_structure:
             return None
         return CompiledStructuredDistanceView.from_candidates(
             plan=plan,
@@ -538,13 +544,13 @@ def supports_candidate_typed_structured_distance(
     return type(metric) is StructuredSpaceDiversityMetric
 
 
-def supports_compiled_structured_distance(
+def supports_compiled_structured_distance_view(
     metric: DiversityMetric[MetricCandidateT],
 ) -> bool:
-    """Return whether ``metric`` exposes exact compiled candidate geometry."""
+    """Return whether ``metric`` benefits from an encoded candidate view."""
     return (
         supports_candidate_typed_structured_distance(metric)
-        and metric._has_compiled_distance_plan
+        and metric._supports_compiled_distance_view
     )
 
 

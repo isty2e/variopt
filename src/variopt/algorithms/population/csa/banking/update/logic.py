@@ -7,7 +7,7 @@ import numpy as np
 from ......artifacts import Observation
 from ......distance import require_valid_distance
 from ......diversity import DiversityMetric
-from ......diversity.space_metric import supports_compiled_structured_distance
+from ......diversity.space_metric import supports_compiled_structured_distance_view
 from ......typevars import CandidateT
 from ...progression.cutoff.logic import initialize_cutoff_state
 from ...progression.cutoff.policy import CSACutoffSchedule
@@ -157,7 +157,7 @@ def apply_bank_update_batch(
     distance_workspace: BankDistanceWorkspace[CandidateT] | None = None
     transitions: list[CSABankTransition] = []
     if shadow_clustering_state.requires_initialization(entries=shadow_bank.entries):
-        if supports_compiled_structured_distance(diversity_metric):
+        if supports_compiled_structured_distance_view(diversity_metric):
             distance_workspace = BankDistanceWorkspace(
                 entries=shadow_bank.entries,
                 diversity_metric=diversity_metric,
@@ -176,8 +176,9 @@ def apply_bank_update_batch(
         if shadow_bank.is_full and shadow_clustering_state.requires_initialization(
             entries=shadow_bank.entries,
         ):
-            if distance_workspace is None and supports_compiled_structured_distance(
-                diversity_metric
+            if (
+                distance_workspace is None
+                and supports_compiled_structured_distance_view(diversity_metric)
             ):
                 distance_workspace = BankDistanceWorkspace(
                     entries=shadow_bank.entries,
@@ -324,7 +325,7 @@ def apply_bank_update_batch(
             shadow_clustering_state.enabled
             and shadow_clustering_state.is_initialized
             and distance_workspace is None
-            and supports_compiled_structured_distance(diversity_metric)
+            and supports_compiled_structured_distance_view(diversity_metric)
         ):
             distance_workspace = BankDistanceWorkspace(
                 entries=shadow_bank.entries,
@@ -474,7 +475,9 @@ def admit_full_bank_observation(
         return rebased_workspace
 
     workspace = distance_workspace
-    if workspace is not None or supports_compiled_structured_distance(diversity_metric):
+    if workspace is not None or supports_compiled_structured_distance_view(
+        diversity_metric
+    ):
         entry_distances = get_distance_workspace().distances_to_candidate(
             observation.candidate
         )
