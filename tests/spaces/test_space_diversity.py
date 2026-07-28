@@ -23,6 +23,7 @@ from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.diversity.space_metric import (
     CompiledStructuredDistanceView,
     structured_distance_between_validated_candidates,
+    supports_compiled_structured_distance_view,
 )
 from variopt.spaces import (
     LeafPath,
@@ -258,6 +259,20 @@ class ProviderWrappedPairSpace(
 class StructuredSpaceDiversityMetricTests:
     """Regression tests for generic space-derived diversity metrics."""
 
+    def test_direct_geometry_metrics_keep_validated_distance_path(self) -> None:
+        real_metric = StructuredSpaceDiversityMetric(space=RealSpace(-5.0, 5.0))
+        permutation_metric = StructuredSpaceDiversityMetric(space=PermutationSpace(4))
+
+        assert real_metric.compiled_geometry_plan is not None
+        assert not supports_compiled_structured_distance_view(real_metric)
+        assert real_metric._compile_distance_view((-1.0, 1.0)) is None
+        assert permutation_metric.compiled_geometry_plan is not None
+        assert not supports_compiled_structured_distance_view(permutation_metric)
+        assert (
+            permutation_metric._compile_distance_view(((0, 1, 2, 3), (3, 2, 1, 0)))
+            is None
+        )
+
     def test_compiled_distance_view_rejects_misaligned_encodings(self) -> None:
         space = ArraySpace(IntegerSpace(0, 9), length=2)
         metric = StructuredSpaceDiversityMetric(space=space)
@@ -290,6 +305,7 @@ class StructuredSpaceDiversityMetricTests:
         restored_metric = pickle.loads(pickle.dumps(metric))
         view = restored_metric._compile_distance_view((left, right))
 
+        assert supports_compiled_structured_distance_view(restored_metric)
         assert view is not None
         assert view.distance(0, 1) == metric.distance(left, right)
 

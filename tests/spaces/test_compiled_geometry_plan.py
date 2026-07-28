@@ -103,6 +103,31 @@ def test_plan_matches_scalar_geometry() -> None:
     assert_plan_matches_existing_geometry(PermutationSpace(7))
 
 
+def test_direct_geometry_plans_do_not_claim_candidate_structure_reuse() -> None:
+    plans = (
+        compile_builtin_geometry_plan(RealSpace(-5.0, 5.0)),
+        compile_builtin_geometry_plan(IntegerSpace(-8, 8)),
+        compile_builtin_geometry_plan(CategoricalSpace(("a", "b", "c"))),
+        compile_builtin_geometry_plan(PermutationSpace(4)),
+    )
+
+    for plan in plans:
+        assert plan is not None
+        assert not plan.reuses_candidate_structure
+
+
+def test_container_plans_claim_candidate_structure_reuse() -> None:
+    plans = (
+        compile_builtin_geometry_plan(ArraySpace(RealSpace(-1.0, 1.0), length=1)),
+        compile_builtin_geometry_plan(TupleSpace(IntegerSpace(-2, 2))),
+        compile_builtin_geometry_plan(RecordSpace(value=IntegerSpace(-2, 2))),
+    )
+
+    for plan in plans:
+        assert plan is not None
+        assert plan.reuses_candidate_structure
+
+
 def test_plan_matches_nested_composite_geometry() -> None:
     assert_plan_matches_existing_geometry(
         TupleSpace(

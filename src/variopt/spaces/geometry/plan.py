@@ -304,6 +304,7 @@ class BuiltinStructuredGeometryPlan(
     space: StructuredSearchSpace[BoundaryT, CandidateT] = field(repr=False)
     plan_identity: StructuredGeometryPlanIdentity = field(repr=False)
     leaf_count: int
+    reuses_candidate_structure: bool
     _encoder: _CandidateEncoder = field(repr=False, compare=False)
     _kernel: _DistanceKernel = field(repr=False, compare=False)
     _real_value_count: int = field(repr=False)
@@ -440,6 +441,10 @@ def compile_builtin_geometry_plan(
         space=candidate_space,
         plan_identity=StructuredGeometryPlanIdentity(),
         leaf_count=builder.leaf_count,
+        reuses_candidate_structure=isinstance(
+            space,
+            (ArraySpace, RecordSpace, TupleSpace),
+        ),
         _encoder=compiled_geometry.encoder,
         _kernel=compiled_geometry.kernel,
         _real_value_count=builder.real_value_count,
