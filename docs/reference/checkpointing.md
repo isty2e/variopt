@@ -47,7 +47,9 @@ class SquareObjective(Objective[int]):
 
 space = IntegerSpace(0, 20)
 optimizer = CSAOptimizer.from_space_defaults(
-    space=space, bank_capacity=8, random_state=0,
+    space=space,
+    bank_capacity=8,
+    random_state=0,
 )
 study = Study(
     problem=Problem(space=space, objective=SquareObjective()),

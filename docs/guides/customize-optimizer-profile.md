@@ -137,12 +137,8 @@ from variopt.algorithms.population.csa import (
 space = IntegerSpace(low=0, high=31)
 
 schedule = CSAPerturbationSchedule(
-    regular_family=(
-        CSAPerturbationSpec(UniformCrossover(space=space), count=4),
-    ),
-    initial_family=(
-        CSAPerturbationSpec(UniformCrossover(space=space), count=2),
-    ),
+    regular_family=(CSAPerturbationSpec(UniformCrossover(space=space), count=4),),
+    initial_family=(CSAPerturbationSpec(UniformCrossover(space=space), count=2),),
     mutation_family=(
         CSAPerturbationSpec(BoundedMutation(space=space), count=3),
         CSAPerturbationSpec(RandomResetMutation(space=space), count=1),
@@ -220,9 +216,7 @@ from variopt.diversity import StructuredSpaceDiversityMetric
 space = IntegerSpace(low=0, high=99)
 
 schedule = CSAPerturbationSchedule(
-    mutation_family=(
-        CSAPerturbationSpec(BoundedMutation(space=space), count=3),
-    ),
+    mutation_family=(CSAPerturbationSpec(BoundedMutation(space=space), count=3),),
 )
 
 profile: CSAProfile[int] = CSAProfile(

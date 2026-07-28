@@ -26,7 +26,9 @@ and perturbation schedule from the declared space semantics automatically.
 from variopt.algorithms.population import CSAOptimizer
 
 optimizer = CSAOptimizer.from_space_defaults(
-    space=space, bank_capacity=12, random_state=0,
+    space=space,
+    bank_capacity=12,
+    random_state=0,
 )
 ```
 
@@ -41,7 +43,9 @@ Good broad continuous baseline. Requires all leaves to be numeric.
 from variopt.algorithms.population import DifferentialEvolutionOptimizer
 
 optimizer = DifferentialEvolutionOptimizer(
-    space=space, population_size=20, random_state=0,
+    space=space,
+    population_size=20,
+    random_state=0,
 )
 ```
 
