@@ -7,6 +7,7 @@ on:
       - "tests/**"
       - "docs/**"
       - "mkdocs.yml"
+      - "README.md"
       - "CHANGELOG.md"
       - "pyproject.toml"
       - ".gitignore"
@@ -23,6 +24,7 @@ on:
       - "tests/**"
       - "docs/**"
       - "mkdocs.yml"
+      - "README.md"
       - "CHANGELOG.md"
       - "pyproject.toml"
       - ".gitignore"
@@ -53,7 +55,7 @@ jobs:
       - name: Lint
         run: uv run --python ${{ matrix.python-version }} --extra test ruff check --extend-select I,UP pyproject.toml src tests .github/scripts
       - name: Format check
-        run: uv run --python ${{ matrix.python-version }} --extra test ruff format --check pyproject.toml src tests .github/scripts
+        run: uv run --python ${{ matrix.python-version }} --extra test ruff format --check .
       - name: Type check
         run: uv run --python ${{ matrix.python-version }} --extra test basedpyright src tests .github/scripts
       - name: Test
