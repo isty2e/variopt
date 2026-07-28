@@ -1,4 +1,4 @@
-"""CSA-lite optimizer components."""
+"""Supported CSA optimizer components and provenance values."""
 
 from .banking.bank import Bank
 from .banking.clustering import CSAClusteringPolicy
@@ -7,6 +7,11 @@ from .banking.update import CSABankUpdatePolicy, CSANicheQualityPolicy
 from .defaults import CSADefaultComponents, derive_csa_defaults
 from .generation.perturbation import CSAPerturbationSchedule, CSAPerturbationSpec
 from .generation.proposal import CSAProposalPolicy
+from .manifest import (
+    CSAComponentDescriptor,
+    CSAConfigurationManifest,
+    CSAConfigurationResolutionError,
+)
 from .operators import (
     BoundedMutation,
     DifferentialEvolutionVariation,
@@ -40,6 +45,9 @@ __all__ = [
     "CSABankUpdatePolicy",
     "CSABiasedPotential",
     "CSAClusteringPolicy",
+    "CSAComponentDescriptor",
+    "CSAConfigurationManifest",
+    "CSAConfigurationResolutionError",
     "CSACutoffObservation",
     "CSACutoffSchedule",
     "CSADefaultComponents",

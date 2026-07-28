@@ -18,6 +18,7 @@ importable modules. It consists of:
 - `variopt.study`
 - `variopt.artifacts`
 - `variopt.algorithms.population`
+- `variopt.algorithms.population.csa`
 - `variopt.algorithms.local_search`
 
 Every name exported through the `__all__` of one of these modules is part of
@@ -47,6 +48,19 @@ profile, schedule, and policy dataclasses used when overriding individual
 narrower advanced contract aimed at users who already work against
 `CSAProfile`. See [Customize an Optimizer
 Profile](../guides/customize-optimizer-profile.md).
+
+### CSA configuration provenance
+
+`CSAConfigurationManifest`, `CSAComponentDescriptor`, and
+`CSAConfigurationResolutionError` are supported through both
+`variopt.algorithms.population` and `variopt.algorithms.population.csa`.
+Manifest schema versions, algorithm-configuration versions, built-in component
+identifiers and versions, semantic custom-component locations, canonical JSON,
+and fingerprint interpretation are part of this versioned contract. Adding or
+removing represented fields, or changing their interpretation or semantic
+location grammar, requires the corresponding version axis to change. See
+[Record CSA Configuration
+Provenance](../guides/csa-configuration-provenance.md).
 
 ### What is *not* supported
 

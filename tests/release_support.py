@@ -12,6 +12,7 @@ BASE_INSTALL_MODULES: tuple[str, ...] = (
     "variopt.study",
     "variopt.algorithms",
     "variopt.algorithms.population",
+    "variopt.algorithms.population.csa",
     "variopt.algorithms.local_search",
     "variopt.spaces.projections",
 )
@@ -26,6 +27,9 @@ BASE_INSTALL_SYMBOLS: tuple[tuple[str, str], ...] = (
     ("variopt.evaluators", "MpiEvaluator"),
     ("variopt.evaluators", "MpiExecutorFactory"),
     ("variopt.algorithms.population", "CSAOptimizer"),
+    ("variopt.algorithms.population", "CSAComponentDescriptor"),
+    ("variopt.algorithms.population", "CSAConfigurationManifest"),
+    ("variopt.algorithms.population", "CSAConfigurationResolutionError"),
     ("variopt.algorithms.population", "DifferentialEvolutionOptimizer"),
     ("variopt.algorithms.local_search", "StructuredHillClimbKernel"),
     ("variopt.algorithms.local_search", "ScipyMinimizeKernel"),

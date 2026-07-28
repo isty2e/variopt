@@ -318,7 +318,8 @@ class CSAOptimizer(
             If descriptor paths, descriptor values, or the random seed have
             invalid runtime types.
         ValueError
-            If a descriptor path contains an invalid segment.
+            If a descriptor path contains an invalid segment or an integer
+            random seed lies outside the NumPy ``uint32`` seed range.
 
         Notes
         -----

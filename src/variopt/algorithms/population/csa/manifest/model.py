@@ -27,6 +27,9 @@ VARIOPT_COMPONENT_IDENTIFIER_PREFIX = "variopt."
 class CSAConfigurationResolutionError(ValueError):
     """Report unresolved semantic locations in one manifest projection.
 
+    The error is raised by ``CSAOptimizer.configuration_manifest()`` after
+    collecting every missing and unused custom-component location.
+
     Parameters
     ----------
     missing_component_paths : tuple[tuple[str | int, ...], ...]
@@ -119,7 +122,13 @@ class CSAComponentDescriptor:
 
     @property
     def configuration(self) -> JSONDict:
-        """Return a fresh JSON-safe copy of the asserted configuration."""
+        """Return a fresh copy of the asserted custom configuration.
+
+        Returns
+        -------
+        JSONDict
+            Mutable JSON-safe data detached from the immutable descriptor.
+        """
         return thaw_json_object(self._configuration)
 
     def to_dict(self) -> JSONDict:
@@ -234,32 +243,73 @@ class CSAConfigurationManifest:
 
     @property
     def format_identifier(self) -> str:
-        """Return the stable manifest format identifier."""
+        """Return the stable manifest format identifier.
+
+        Returns
+        -------
+        str
+            Identifier for the CSA configuration-manifest wire format.
+        """
         return CSA_CONFIGURATION_MANIFEST_FORMAT
 
     @property
     def schema_version(self) -> int:
-        """Return the supported manifest wire-schema version."""
+        """Return the supported manifest wire-schema version.
+
+        Returns
+        -------
+        int
+            Positive version of the manifest field and JSON-shape contract.
+        """
         return CSA_CONFIGURATION_MANIFEST_SCHEMA_VERSION
 
     @property
     def algorithm_identifier(self) -> str:
-        """Return the stable CSA algorithm identifier."""
+        """Return the stable represented-algorithm identifier.
+
+        Returns
+        -------
+        str
+            Identifier for the CSA configuration semantics.
+        """
         return CSA_ALGORITHM_IDENTIFIER
 
     @property
     def algorithm_configuration_version(self) -> int:
-        """Return the supported CSA configuration-semantics version."""
+        """Return the supported CSA configuration-semantics version.
+
+        Returns
+        -------
+        int
+            Positive version of represented fields and semantic locations.
+        """
         return CSA_ALGORITHM_CONFIGURATION_VERSION
 
     @property
     def configuration(self) -> JSONDict:
-        """Return a fresh JSON-safe copy of the resolved configuration."""
+        """Return a fresh copy of the resolved optimizer configuration.
+
+        Returns
+        -------
+        JSONDict
+            Mutable JSON-safe data detached from the immutable manifest.
+        """
         return thaw_json_object(self._configuration)
 
     @property
     def fingerprint(self) -> str:
-        """Return the version-scoped SHA-256 content fingerprint."""
+        """Return the version-scoped SHA-256 content fingerprint.
+
+        Returns
+        -------
+        str
+            ``sha256:``-prefixed digest of the complete canonical manifest.
+
+        Notes
+        -----
+        Equality establishes only identical represented manifest data. It does
+        not establish custom executable equivalence or complete run identity.
+        """
         digest = sha256(self.canonical_json().encode("utf-8")).hexdigest()
         return f"sha256:{digest}"
 
@@ -271,6 +321,10 @@ class CSAConfigurationManifest:
         str
             UTF-8-compatible JSON text with sorted object keys and compact
             separators.
+
+        Notes
+        -----
+        This is Variopt's versioned canonicalization contract, not RFC 8785.
         """
         return json.dumps(
             self.to_dict(),
@@ -319,6 +373,11 @@ class CSAConfigurationManifest:
             types are invalid.
         ValueError
             If a format identifier, version, or configuration value is invalid.
+
+        Notes
+        -----
+        Parsing validates manifest data but does not reconstruct an optimizer or
+        executable component.
         """
         _require_exact_fields(
             data,

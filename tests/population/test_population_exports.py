@@ -4,6 +4,7 @@ import variopt.algorithms as root_algorithms
 import variopt.algorithms.population as population_algorithms
 import variopt.algorithms.population.clearing_ga as clearing_ga_algorithms
 import variopt.algorithms.population.csa as csa_algorithms
+import variopt.algorithms.population.csa.manifest as csa_manifest
 import variopt.algorithms.population.csa.progression.cutoff as csa_cutoff
 import variopt.algorithms.population.de as de_algorithms
 import variopt.algorithms.population.ga as ga_algorithms
@@ -14,10 +15,13 @@ import variopt.algorithms.population.restricted_tournament_ga as restricted_tour
 import variopt.algorithms.population.species_ga as species_ga_algorithms
 
 EXPECTED_POPULATION_ALL = (
-    "ClearingGAProfile",
-    "ClearingGeneticAlgorithmOptimizer",
+    "CSAComponentDescriptor",
+    "CSAConfigurationManifest",
+    "CSAConfigurationResolutionError",
     "CSAOptimizer",
     "CSAProfile",
+    "ClearingGAProfile",
+    "ClearingGeneticAlgorithmOptimizer",
     "DEProfile",
     "DifferentialEvolutionOptimizer",
     "GAProfile",
@@ -41,20 +45,23 @@ EXPECTED_CSA_ALL = (
     "CSAAcceptancePolicy",
     "CSAAdaptivePotential",
     "CSAAdaptivePotentialAxis",
-    "CSACutoffObservation",
-    "CSACutoffSchedule",
-    "CSALocalRouteCutoffSchedule",
-    "CSADefaultComponents",
-    "CSAClusteringPolicy",
+    "CSABankGrowthPolicy",
     "CSABankUpdatePolicy",
     "CSABiasedPotential",
-    "CSABankGrowthPolicy",
+    "CSAClusteringPolicy",
+    "CSAComponentDescriptor",
+    "CSAConfigurationManifest",
+    "CSAConfigurationResolutionError",
+    "CSACutoffObservation",
+    "CSACutoffSchedule",
+    "CSADefaultComponents",
+    "CSALocalRouteCutoffSchedule",
     "CSANicheQualityPolicy",
     "CSAOptimizer",
-    "CSAProfile",
-    "CSAProposalPolicy",
     "CSAPerturbationSchedule",
     "CSAPerturbationSpec",
+    "CSAProfile",
+    "CSAProposalPolicy",
     "CSARefreshPolicy",
     "CSAScoreModel",
     "DifferentialEvolutionVariation",
@@ -94,6 +101,18 @@ class PopulationFacadeExportTests:
     def test_population_facade_reexports_population_family_entry_points(self) -> None:
         assert frozenset(population_algorithms.__all__) == frozenset(
             EXPECTED_POPULATION_ALL
+        )
+        assert (
+            population_algorithms.CSAComponentDescriptor
+            is csa_manifest.CSAComponentDescriptor
+        )
+        assert (
+            population_algorithms.CSAConfigurationManifest
+            is csa_manifest.CSAConfigurationManifest
+        )
+        assert (
+            population_algorithms.CSAConfigurationResolutionError
+            is csa_manifest.CSAConfigurationResolutionError
         )
         assert population_algorithms.CSAOptimizer is csa_algorithms.CSAOptimizer
         assert population_algorithms.CSAProfile is csa_algorithms.CSAProfile
@@ -208,10 +227,21 @@ class PopulationFacadeExportTests:
 
 
 class CSAFacadeExportTests:
-    """Lock the advanced CSA policy facade surface."""
+    """Lock the advanced CSA facade surface."""
 
-    def test_csa_facade_reexports_cutoff_contracts(self) -> None:
+    def test_csa_facade_reexports_supported_contracts(self) -> None:
         assert frozenset(csa_algorithms.__all__) == frozenset(EXPECTED_CSA_ALL)
+        assert (
+            csa_algorithms.CSAComponentDescriptor is csa_manifest.CSAComponentDescriptor
+        )
+        assert (
+            csa_algorithms.CSAConfigurationManifest
+            is csa_manifest.CSAConfigurationManifest
+        )
+        assert (
+            csa_algorithms.CSAConfigurationResolutionError
+            is csa_manifest.CSAConfigurationResolutionError
+        )
         assert csa_algorithms.CSACutoffObservation is csa_cutoff.CSACutoffObservation
         assert csa_algorithms.CSACutoffSchedule is csa_cutoff.CSACutoffSchedule
         assert (

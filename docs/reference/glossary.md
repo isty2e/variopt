@@ -5,6 +5,31 @@ to the reference page for the underlying symbol. For the narrative explanation
 of how these pieces fit together, see
 [Optimization Model](../concepts/optimization-model.md).
 
+## CSAComponentDescriptor
+
+A caller-owned, versioned assertion describing one custom component occurrence
+in resolved CSA configuration. Variopt fingerprints the identifier, version,
+and JSON configuration but does not verify executable equivalence. See
+[`CSAComponentDescriptor`][variopt.algorithms.population.CSAComponentDescriptor].
+
+## CSAConfigurationManifest
+
+An immutable, versioned projection of resolved optimizer-side CSA
+configuration. Its canonical JSON and fingerprint exclude runtime checkpoint
+state, problem/data/objective identity, evaluator settings, and environment
+provenance. See
+[`CSAConfigurationManifest`][variopt.algorithms.population.CSAConfigurationManifest]
+and [Record CSA Configuration
+Provenance](../guides/csa-configuration-provenance.md).
+
+## CSAConfigurationResolutionError
+
+The aggregate failure raised when a manifest projection needs custom component
+descriptors that were not supplied or receives descriptors that no semantic
+location consumed. It exposes deterministic `missing_component_paths` and
+`unused_component_paths`. See
+[`CSAConfigurationResolutionError`][variopt.algorithms.population.CSAConfigurationResolutionError].
+
 ## CandidateRefinement
 
 Execution-side provenance for a candidate transformed before evaluation.
