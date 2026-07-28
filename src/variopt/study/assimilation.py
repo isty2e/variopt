@@ -57,6 +57,39 @@ class StudyAssimilatedStep(Generic[CandidateT, AssimilationRecordT]):
     trace_event: TraceEvent
     evaluation_count: int
 
+    @staticmethod
+    def trace_event_for_records(
+        records: tuple[AssimilationRecordT, ...],
+        *,
+        attempt_count: int,
+        failure_count: int,
+    ) -> TraceEvent:
+        """Build the canonical trace event for one completed study step.
+
+        Parameters
+        ----------
+        records : tuple[AssimilationRecordT, ...]
+            Successful request-aligned records in attempt order.
+        attempt_count : int
+            Total request slots represented by the completed step.
+        failure_count : int
+            Failed request slots represented by the completed step.
+
+        Returns
+        -------
+        TraceEvent
+            Canonical study-step trace event.
+        """
+        return TraceEvent(
+            kind="study.step",
+            message=(
+                f"completed {attempt_count} attempt(s): "
+                f"{len(records)} succeeded, "
+                f"{failure_count} failed"
+            ),
+            value=trace_value_for_records(records),
+        )
+
     @classmethod
     def from_attempts(
         cls,
@@ -82,14 +115,10 @@ class StudyAssimilatedStep(Generic[CandidateT, AssimilationRecordT]):
         return cls(
             attempts=attempts,
             records=records,
-            trace_event=TraceEvent(
-                kind="study.step",
-                message=(
-                    f"completed {attempts.attempt_count} attempt(s): "
-                    f"{len(records)} succeeded, "
-                    f"{len(attempts.failures)} failed"
-                ),
-                value=trace_value_for_records(records),
+            trace_event=cls.trace_event_for_records(
+                records,
+                attempt_count=attempts.attempt_count,
+                failure_count=len(attempts.failures),
             ),
             evaluation_count=evaluation_count,
         )

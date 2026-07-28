@@ -661,6 +661,19 @@ class CSAOptimizer(
             ),
         )
 
+    @override
+    def _supports_direct_success_record_assimilation(self) -> bool:
+        """Return whether scalar success records can bypass attempt wrapping.
+
+        Returns
+        -------
+        bool
+            ``True`` for the exact built-in optimizer. Subclasses remain on
+            the attempt-aware path unless they explicitly override this
+            capability after establishing equivalent semantics.
+        """
+        return type(self) is CSAOptimizer
+
     def _tell_successes(
         self,
         state: CSAEngineState[CandidateT],

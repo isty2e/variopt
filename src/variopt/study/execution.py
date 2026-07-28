@@ -1,8 +1,8 @@
 """Generic study step and run orchestration."""
 
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
-from typing import Generic, Protocol, TypeGuard
+from dataclasses import dataclass, field, replace
+from typing import Generic, NoReturn, Protocol, TypeGuard
 
 from typing_extensions import TypeVar
 
@@ -21,6 +21,8 @@ from ..artifacts import (
     RunReport,
     RunResult,
     Trace,
+    TraceEvent,
+    materialize_attempt_batch_records,
     materialize_success_records,
 )
 from ..artifacts.alignment import validate_aligned_attempts
@@ -498,6 +500,118 @@ def _current_evaluation_count(
     return max_evaluations - evaluation_budget.remaining
 
 
+@dataclass(slots=True)
+class _DirectScalarRunHistory(Generic[CandidateT, RunMethodStateT]):
+    """Canonical terminal history for the fused direct scalar success path."""
+
+    successes: list[EvaluationSuccess[CandidateT, ObservationPayload]] = field(
+        default_factory=list,
+    )
+    failures: list[EvaluationFailure[CandidateT]] = field(default_factory=list)
+    trace_events: list[TraceEvent] = field(default_factory=list)
+    evaluation_count: int = 0
+
+    def append_batch(
+        self,
+        source_attempts: EvaluationAttemptBatch[CandidateT, ObservationPayload],
+        *,
+        records: tuple[Observation[CandidateT], ...],
+    ) -> None:
+        """Append one completed direct scalar batch."""
+        self.successes.extend(source_attempts.successes)
+        self.failures.extend(source_attempts.failures)
+        self.trace_events.append(
+            StudyAssimilatedStep[
+                CandidateT,
+                Observation[CandidateT],
+            ].trace_event_for_records(
+                records,
+                attempt_count=source_attempts.attempt_count,
+                failure_count=len(source_attempts.failures),
+            )
+        )
+        self.evaluation_count += source_attempts.evaluation_count
+
+    def checkpoint_snapshot(
+        self,
+        state: RunMethodStateT,
+    ) -> CheckpointSafeRunSnapshot[RunMethodStateT]:
+        """Return a checkpoint cut aligned with this terminal history."""
+        return CheckpointSafeRunSnapshot(
+            success_count=len(self.successes),
+            failure_count=len(self.failures),
+            trace_event_count=len(self.trace_events),
+            evaluation_count=self.evaluation_count,
+            state=state,
+        )
+
+    def checkpoint_result(
+        self,
+        snapshot: CheckpointSafeRunSnapshot[RunMethodStateT],
+    ) -> RunResult[CandidateT]:
+        """Return the scalar result projected to one checkpoint-safe cut."""
+        return RunResult[CandidateT].from_successes(
+            successes=tuple(self.successes[: snapshot.success_count]),
+            evaluation_count=snapshot.evaluation_count,
+            trace=Trace(events=tuple(self.trace_events[: snapshot.trace_event_count])),
+            failures=tuple(self.failures[: snapshot.failure_count]),
+            candidate_equal=None,
+        )
+
+    def to_result(self, *, evaluation_count: int) -> RunResult[CandidateT]:
+        """Return the terminal scalar result without rebuilding successes."""
+        return RunResult[CandidateT].from_successes(
+            successes=tuple(self.successes),
+            evaluation_count=evaluation_count,
+            trace=Trace(events=tuple(self.trace_events)),
+            failures=tuple(self.failures),
+            candidate_equal=None,
+        )
+
+    def _materialize_feedback_history(
+        self,
+    ) -> StudyRunHistory[
+        CandidateT,
+        RunMethodStateT,
+        Observation[CandidateT],
+    ]:
+        source_attempts = EvaluationAttemptBatch[
+            CandidateT,
+            ObservationPayload,
+        ](
+            attempts=(*self.successes, *self.failures),
+        )
+        feedback_attempts = materialize_attempt_batch_records(source_attempts)
+        return StudyRunHistory[
+            CandidateT,
+            RunMethodStateT,
+            Observation[CandidateT],
+        ](
+            successes=list(feedback_attempts.successes),
+            failures=list(feedback_attempts.failures),
+            trace_events=list(self.trace_events),
+            evaluation_count=self.evaluation_count,
+        )
+
+    def raise_run_execution_failed(
+        self,
+        *,
+        cause: Exception,
+        state: RunMethodStateT,
+        safe_snapshot: CheckpointSafeRunSnapshot[RunMethodStateT] | None,
+        candidate_equal: CandidateEquality[CandidateT],
+        evaluation_count: int | None = None,
+    ) -> NoReturn:
+        """Raise a hard run failure after lazily materializing report records."""
+        self._materialize_feedback_history().raise_run_execution_failed(
+            cause=cause,
+            state=state,
+            safe_snapshot=safe_snapshot,
+            candidate_equal=candidate_equal,
+            evaluation_count=evaluation_count,
+        )
+
+
 def _optimize_direct_scalar_sequential(
     study: DirectScalarSequentialStudyOwner[
         BoundaryT,
@@ -527,10 +641,7 @@ def _optimize_direct_scalar_sequential(
         msg = "direct scalar objective fast path requires a direct Objective"
         raise RuntimeError(msg)
 
-    run_history = StudyRunHistory[
-        CandidateT, RunMethodStateT, Observation[CandidateT]
-    ]()
-    observations: list[Observation[CandidateT]] = []
+    run_history = _DirectScalarRunHistory[CandidateT, RunMethodStateT]()
     evaluation_budget = (
         EvaluationBudget(max_evaluations) if count_evaluation_cost else None
     )
@@ -578,9 +689,10 @@ def _optimize_direct_scalar_sequential(
                 raise ValueError(msg)
 
             batch_attempt_slots: list[
-                EvaluationSuccess[CandidateT, Observation[CandidateT]]
+                EvaluationSuccess[CandidateT, ObservationPayload]
                 | EvaluationFailure[CandidateT]
             ] = []
+            batch_observations: list[Observation[CandidateT]] = []
             if evaluation_budget is not None:
                 evaluation_budget.consume(len(proposals))
             for index, proposal in enumerate(proposals):
@@ -612,31 +724,30 @@ def _optimize_direct_scalar_sequential(
                     )
                     continue
 
+                batch_observations.append(observation)
                 batch_attempt_slots.append(
-                    EvaluationSuccess[CandidateT, Observation[CandidateT]](
+                    EvaluationSuccess[CandidateT, ObservationPayload](
                         request=request,
-                        payload=observation,
+                        payload=ObservationPayload(
+                            value=observation.value,
+                            score=observation.score,
+                            elapsed_seconds=observation.elapsed_seconds,
+                        ),
                         evaluation_count=1,
+                        candidate_equal=study.problem.space.candidates_equal,
                     )
                 )
 
-            batch_attempts: EvaluationAttemptBatch[
+            source_attempts: EvaluationAttemptBatch[
                 CandidateT,
-                Observation[CandidateT],
+                ObservationPayload,
             ] = EvaluationAttemptBatch(
                 attempts=tuple(batch_attempt_slots),
             )
         except EvaluationBudgetExhausted:
             if stop_at_checkpoint_boundary and safe_snapshot is not None:
-                checkpoint_report = run_history.checkpoint_report(
-                    safe_snapshot,
-                    candidate_equal=study.problem.space.candidates_equal,
-                )
                 return (
-                    materialize_scalar_run_result(
-                        checkpoint_report,
-                        candidate_equal=study.problem.space.candidates_equal,
-                    ),
+                    run_history.checkpoint_result(safe_snapshot),
                     safe_snapshot.state,
                 )
             raise
@@ -652,16 +763,31 @@ def _optimize_direct_scalar_sequential(
                 safe_snapshot=safe_snapshot,
                 candidate_equal=study.problem.space.candidates_equal,
             )
-        step = StudyAssimilatedStep[
-            CandidateT,
-            Observation[CandidateT],
-        ].from_attempts(
-            batch_attempts,
-            evaluation_count=batch_attempts.evaluation_count,
+        observation_tuple = tuple(batch_observations)
+        feedback_attempts: (
+            EvaluationAttemptBatch[
+                CandidateT,
+                Observation[CandidateT],
+            ]
+            | None
+        ) = None
+        if (
+            source_attempts.has_failures
+            or not study.run_method._supports_direct_success_record_assimilation()
+        ):
+            feedback_attempts = materialize_attempt_batch_records(source_attempts)
+        run_history.append_batch(
+            source_attempts,
+            records=observation_tuple,
         )
-        run_history.append_step(step)
         try:
-            next_run_state = study.run_method.tell_attempts(next_state, batch_attempts)
+            if feedback_attempts is None:
+                next_run_state = study.run_method.tell(next_state, observation_tuple)
+            else:
+                next_run_state = study.run_method.tell_attempts(
+                    next_state,
+                    feedback_attempts,
+                )
         except Exception as exception:  # noqa: BLE001 - wrap run-method failures
             run_history.raise_run_execution_failed(
                 cause=exception,
@@ -670,9 +796,8 @@ def _optimize_direct_scalar_sequential(
                 candidate_equal=study.problem.space.candidates_equal,
             )
         state = next_run_state
-        observations.extend(step.records)
         if evaluation_budget is None:
-            record_budget_remaining -= batch_attempts.attempt_count
+            record_budget_remaining -= source_attempts.attempt_count
         if stop_at_checkpoint_boundary:
             if study.run_method.is_checkpoint_safe_state(state):
                 safe_snapshot = run_history.checkpoint_snapshot(state)
@@ -690,29 +815,18 @@ def _optimize_direct_scalar_sequential(
                 "run did not reach a checkpoint-safe state within the evaluation budget"
             )
             raise RuntimeError(msg)
-        checkpoint_report = run_history.checkpoint_report(
-            safe_snapshot,
-            candidate_equal=study.problem.space.candidates_equal,
-        )
         return (
-            materialize_scalar_run_result(
-                checkpoint_report,
-                candidate_equal=study.problem.space.candidates_equal,
-            ),
+            run_history.checkpoint_result(safe_snapshot),
             safe_snapshot.state,
         )
 
     return (
-        RunResult[CandidateT].from_observations(
-            observations=tuple(observations),
+        run_history.to_result(
             evaluation_count=(
                 max_evaluations - record_budget_remaining
                 if evaluation_budget is None
                 else max_evaluations - evaluation_budget.remaining
             ),
-            trace=Trace(events=tuple(run_history.trace_events)),
-            failures=tuple(run_history.failures),
-            candidate_equal=study.problem.space.candidates_equal,
         ),
         state,
     )
@@ -1298,7 +1412,7 @@ def materialize_scalar_run_result(
         evaluation_count=run_report.evaluation_count,
         trace=run_report.trace,
         failures=run_report.failures,
-        candidate_equal=candidate_equal,
+        candidate_equal=None,
     )
 
 

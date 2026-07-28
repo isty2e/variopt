@@ -54,6 +54,8 @@ from variopt import (
     RunReport,
     Study,
 )
+from variopt.algorithms.population import CSAOptimizer
+from variopt.algorithms.population.csa.engine.state import CSAEngineState
 from variopt.artifacts import (
     DefaultEvaluationAttemptMaterializer,
     EvaluationAttemptMaterializer,
@@ -77,7 +79,10 @@ from variopt.kernel import (
     ProposalLocalSearchContext,
 )
 from variopt.study.common import CheckpointSafeRunSnapshot, build_evaluation_requests
-from variopt.study.execution import evaluate_attempts_sync
+from variopt.study.execution import (
+    evaluate_attempts_sync,
+    materialize_scalar_run_result,
+)
 from variopt.study.failures import build_checkpoint_safe_report_or_raise_cause
 
 ScalarBatchStudy: TypeAlias = Study[
@@ -1236,6 +1241,200 @@ class StudyTests:
             tuple(observation.proposal.proposal_id for observation in batch)
             for batch in final_state.tell_history
         ) == (("p-1", "p-2"), ("p-3",))
+
+    def test_optimize_fuses_exact_csa_success_record_assimilation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail_tell_attempts(
+            self: CSAOptimizer[int, int],
+            state: CSAEngineState[int],
+            attempts: EvaluationAttemptBatch[int, Observation[int]],
+        ) -> CSAEngineState[int]:
+            _ = self, state, attempts
+            raise AssertionError("exact CSA success path should call tell directly")
+
+        monkeypatch.setattr(CSAOptimizer, "tell_attempts", fail_tell_attempts)
+        space = IntegerSpace(low=0, high=10)
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=0,
+        )
+        study = Study(
+            problem=Problem(space=space, objective=SquareObjective()),
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        result, _ = study.optimize(max_evaluations=4, batch_size=2)
+
+        assert result.evaluation_count == 4
+        assert len(result.successes) == 4
+
+    @pytest.mark.parametrize("batch_size", [1, 3])
+    def test_exact_csa_fused_success_path_matches_generic_assimilation(
+        self,
+        batch_size: int,
+    ) -> None:
+        space = IntegerSpace(low=0, high=10)
+        direct_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=17,
+        )
+        generic_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=17,
+        )
+        problem = Problem(space=space, objective=SquareObjective())
+        direct_study = Study(
+            problem=problem,
+            run_method=direct_optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+        generic_study = Study(
+            problem=problem,
+            run_method=generic_optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        direct_result, direct_state = direct_study.optimize(
+            max_evaluations=11,
+            batch_size=batch_size,
+        )
+        generic_report, generic_state = generic_study.run(
+            max_evaluations=11,
+            batch_size=batch_size,
+        )
+        generic_result = materialize_scalar_run_result(
+            generic_report,
+            candidate_equal=space.candidates_equal,
+        )
+
+        assert direct_result == generic_result
+        assert direct_state == generic_state
+
+    def test_csa_subclass_preserves_attempt_aware_assimilation(self) -> None:
+        seen_attempt_counts: list[int] = []
+
+        class AttemptAwareCSAOptimizer(CSAOptimizer[int, int]):
+            @override
+            def tell_attempts(
+                self,
+                state: CSAEngineState[int],
+                attempts: EvaluationAttemptBatch[
+                    TestOutcomeCandidateT,
+                    Observation[int],
+                ],
+            ) -> CSAEngineState[int]:
+                seen_attempt_counts.append(attempts.attempt_count)
+                return super().tell_attempts(state, attempts)
+
+        space = IntegerSpace(low=0, high=10)
+        base_optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=0,
+        )
+        optimizer = AttemptAwareCSAOptimizer(
+            space=base_optimizer.space,
+            diversity_metric=base_optimizer.diversity_metric,
+            bank_capacity=base_optimizer.bank_capacity,
+            random_state=base_optimizer.random_state,
+            profile=base_optimizer.profile,
+            sampler=base_optimizer.sampler,
+        )
+        study = Study(
+            problem=Problem(space=space, objective=SquareObjective()),
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        result, _ = study.optimize(max_evaluations=4, batch_size=2)
+
+        assert result.evaluation_count == 4
+        assert seen_attempt_counts == [2, 2]
+
+    def test_exact_csa_failure_batch_preserves_attempt_assimilation(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seen_attempt_counts: list[int] = []
+        original_tell_attempts = CSAOptimizer.tell_attempts
+
+        def record_tell_attempts(
+            self: CSAOptimizer[int, int],
+            state: CSAEngineState[int],
+            attempts: EvaluationAttemptBatch[
+                TestOutcomeCandidateT,
+                Observation[int],
+            ],
+        ) -> CSAEngineState[int]:
+            seen_attempt_counts.append(attempts.attempt_count)
+            return original_tell_attempts(self, state, attempts)
+
+        class AlwaysFailingObjective(Objective[int]):
+            @override
+            def evaluate(self, candidate: int) -> float:
+                raise ValueError(f"cannot evaluate {candidate}")
+
+        monkeypatch.setattr(CSAOptimizer, "tell_attempts", record_tell_attempts)
+        space = IntegerSpace(low=0, high=10)
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=0,
+        )
+        study = Study(
+            problem=Problem(space=space, objective=AlwaysFailingObjective()),
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        result, _ = study.optimize(max_evaluations=2, batch_size=2)
+
+        assert result.successes == ()
+        assert len(result.failures) == 2
+        assert seen_attempt_counts == [2]
+
+    def test_exact_csa_tell_failure_materializes_partial_report(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def fail_tell(
+            self: CSAOptimizer[int, int],
+            state: CSAEngineState[int],
+            observations: Sequence[Observation[int]],
+        ) -> CSAEngineState[int]:
+            _ = self, state, observations
+            raise RuntimeError("forced exact CSA tell failure")
+
+        monkeypatch.setattr(CSAOptimizer, "tell", fail_tell)
+        space = IntegerSpace(low=0, high=10)
+        optimizer = CSAOptimizer.from_space_defaults(
+            space=space,
+            bank_capacity=4,
+            random_state=0,
+        )
+        study = Study(
+            problem=Problem(space=space, objective=SquareObjective()),
+            run_method=optimizer,
+            evaluator=SequentialEvaluator[int, int](),
+        )
+
+        with pytest.raises(RunExecutionFailed) as exc_info:
+            _ = study.optimize(max_evaluations=2, batch_size=2)
+
+        exception = exc_info.value
+        assert str(exception.cause) == "forced exact CSA tell failure"
+        assert len(exception.partial_report.successes) == 2
+        assert all(
+            type(success.payload) is Observation
+            for success in exception.partial_report.successes
+        )
+        assert exception.partial_report.evaluation_count == 2
 
     def test_optimize_uses_custom_materializer_instead_of_fast_path(self) -> None:
         problem = Problem(

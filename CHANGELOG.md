@@ -142,6 +142,11 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- Direct scalar sequential optimization now reuses canonical success artifacts
+  across run-method assimilation, checkpoint projection, and terminal result
+  construction. Exact built-in CSA success batches bypass redundant
+  attempt-record materialization; failure-aware and customized run methods
+  retain the full attempt path.
 - CSA bank admission, crowding, clustering, growth, and seed-selection distance
   queries now reuse an operation-local encoded geometry view for exact built-in
   structured spaces. Bank candidates are encoded once per update snapshot,
