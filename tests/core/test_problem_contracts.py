@@ -1,6 +1,6 @@
 import dataclasses
 import pickle
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TypeVar, cast
 
 import pytest
@@ -556,6 +556,18 @@ class ProblemContractsTests:
                 space=IntegerSpace(low=0, high=10),
                 objective=SquareObjective(),
                 evaluation_protocol=ShiftedObservationProtocol(),
+            )
+
+    def test_problem_rejects_invalid_objective_type(self) -> None:
+        invalid_objective = cast(Callable[[int], float], 42)
+
+        with pytest.raises(
+            TypeError,
+            match="objective must be an Objective, callable, or None",
+        ):
+            _ = Problem(
+                space=IntegerSpace(low=0, high=10),
+                objective=invalid_objective,
             )
 
     def test_problem_rejects_empty_name(self) -> None:
