@@ -8,6 +8,8 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
 ### Breaking
 
 - Exact-async and stale-async study entry points now raise `TypeError`, rather

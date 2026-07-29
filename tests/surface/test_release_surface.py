@@ -9,7 +9,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 
 
 class ReleaseSurfaceBoundaryTests:
-    """Lock the 0.1.0 release-facing public-surface boundaries."""
+    """Lock the 0.2.0 release-facing public-surface boundaries."""
 
     def test_benchmark_package_is_not_release_surface(self) -> None:
         removed_modules = (
