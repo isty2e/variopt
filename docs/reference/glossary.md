@@ -239,7 +239,7 @@ make several serial objective calls but returns exactly one top-level
 in `evaluation_count`. Eligible synchronous episodes may execute inside
 `SequentialEvaluator` or `JoblibEvaluator`; optimizer state and budget
 settlement remain coordinator-owned. See
-[Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+[Run Local Search in Evaluator Workers](../guides/request-local-episodes.md).
 
 ## RunMethod
 

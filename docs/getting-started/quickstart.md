@@ -65,17 +65,10 @@ evaluation sequence.
 - [`Study.optimize(...)`][variopt.Study.optimize] orchestrates the run and
   returns a scalar summary
 
-`bank_capacity=8` is the CSA bank size, roughly the equivalent of
-`population_size` in a GA: larger banks explore more candidates in parallel at
-higher evaluation cost. `8` is chosen here for a small illustrative run; pick
-the size based on your evaluation budget, not from this example.
-
-An explicit [`Objective`][variopt.Objective] subclass remains useful when a
-named reusable class better represents the evaluation rule. For process and
-MPI evaluators, a picklable function defined at an importable module level is
-the conservative callable choice. Lambdas, closures, bound methods, and
-stateful callable objects may work with particular serializers but are not
-guaranteed to be portable across every backend.
+`bank_capacity=8` keeps the example small. Treat it as an illustrative CSA bank
+size rather than a general recommendation. [Choose an Evaluator](../guides/choose-an-evaluator.md)
+covers callable portability and process boundaries when you move beyond
+sequential execution.
 
 ## Next Steps
 

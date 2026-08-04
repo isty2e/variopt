@@ -28,7 +28,7 @@ Request-local local-search episode placement is another independent axis. In
 kernel episode per proposal while `Study` still preserves the execution
 model's assimilation law. This placement is not available in the current
 study-level exact-async or stale-async paths, which require `DirectKernel`.
-See [Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+See [Evaluator-Owned Local Search](evaluator-owned-local-search.md).
 
 ## What The Built-In Surface Supports Today
 
@@ -70,54 +70,13 @@ them for crash recovery. With `AsyncJoblibEvaluator`, suspended batches are
 stored in the same evaluator instance's in-memory runtime state, so a resume
 handle is only valid while that evaluator instance remains alive.
 
-## Exact-Async Example
+The run method still assimilates exact-async results under an exact
+state-transition law. Completions may arrive out of order from the evaluator,
+but the study reorders them before handing them to the optimizer. The optimizer
+sees the same logical sequence it would under `sync_batch`.
 
-The simplest way to use `exact_async` is to pass the execution model to
-`Study.optimize(...)` or `Study.run(...)` together with an
-`AsyncJoblibEvaluator`:
-
-```python
-from typing_extensions import override
-
-from variopt import EXACT_ASYNC_EXECUTION_MODEL, Objective, Problem, RealSpace, Study
-from variopt.algorithms.population import CSAOptimizer
-from variopt.evaluators import AsyncJoblibEvaluator
-
-
-class SphereObjective(Objective[float]):
-    @override
-    def evaluate(self, candidate: float) -> float:
-        return candidate * candidate
-
-
-problem = Problem(
-    space=RealSpace(-5.0, 5.0),
-    objective=SphereObjective(),
-)
-
-optimizer = CSAOptimizer.from_space_defaults(
-    space=problem.space,
-    bank_capacity=8,
-    random_state=0,
-)
-
-study = Study(
-    problem=problem,
-    run_method=optimizer,
-    evaluator=AsyncJoblibEvaluator(n_jobs=4, backend="loky"),
-)
-
-result, _ = study.optimize(
-    max_evaluations=60,
-    batch_size=8,
-    execution_model=EXACT_ASYNC_EXECUTION_MODEL,
-)
-```
-
-The run method still assimilates results under an exact state-transition law —
-completions may arrive out of order from the evaluator, but the study
-reorders them before handing them to the optimizer. The optimizer sees
-the same logical sequence it would under `sync_batch`.
+See [Run Exact-Async Evaluations](../guides/run-exact-async.md) for the
+task-oriented setup.
 
 ## Outcome Metadata
 

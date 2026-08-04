@@ -82,7 +82,7 @@ study = Study(
 )
 ```
 
-See [Local Optimization Methods](local-optimization-methods.md) for the
+See [Choose a Local Optimization Method](local-optimization-methods.md) for the
 full decision table on kernel choice.
 
 ## Multi-Objective Problems
@@ -104,7 +104,7 @@ Concrete [`ObjectiveVectorRecord`][variopt.ObjectiveVectorRecord] values remain
 the compatibility projection you see after materialization, not the preferred
 payload type for new evaluation protocols.
 
-See [Canonical Usage Patterns](canonical-usage-patterns.md#runreport-to-nondominatedrunsurface)
+See [Advanced Usage Recipes](canonical-usage-patterns.md#runreport-to-nondominatedrunsurface)
 for the concrete code pattern.
 
 ## Related Reading

@@ -38,7 +38,7 @@ For the current detailed method note, see
 [local-optimization-methods.md](../guides/local-optimization-methods.md).
 
 For execution placement, budgeting, failure, and reproducibility guarantees,
-see [Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+see [Evaluator-Owned Local Search](evaluator-owned-local-search.md).
 
 For the execution provenance vocabulary, see
 [Candidate Refinement](candidate-refinement.md).
