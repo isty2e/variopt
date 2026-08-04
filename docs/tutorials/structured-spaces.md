@@ -1,19 +1,16 @@
 # Structured Spaces
 
-`variopt` is most useful when the search domain has explicit structure.
+In this tutorial, we will optimize two named hyperparameters without flattening
+them into an anonymous vector. The candidate will remain a `RecordCandidate`
+from sampling through result inspection.
 
-Built-in space families include:
+Complete [First Optimization Run](first-optimization.md) first if `Problem`,
+`Study`, and an evaluator are still unfamiliar.
 
-- scalar spaces: `RealSpace`, `IntegerSpace`, `CategoricalSpace`
-- container spaces: `TupleSpace`, `RecordSpace`, `ArraySpace`
-- `PermutationSpace`
+## Declare the candidate structure
 
-## End-To-End Example: Hyperparameter Tuning
-
-This example optimizes a two-field record of hyperparameters. The space
-preserves field semantics throughout the entire pipeline — sampling, diversity
-measurement, local search, and result extraction all see named fields, not
-an anonymous vector.
+Define a learning rate on a logarithmic scale and a momentum value on a linear
+scale:
 
 ```python
 from typing_extensions import override
@@ -28,27 +25,54 @@ space = RecordSpace(
     learning_rate=RealSpace(1e-4, 1e-1, scale="log"),
     momentum=RealSpace(0.0, 0.99),
 )
+```
 
+The field names and leaf-space semantics are now part of the search domain.
+Sampling, validation, distance measurement, and structured local search can all
+use the same declaration.
 
+## Define an objective over the record
+
+The objective receives a mapping-like `RecordCandidate`, so access values by
+name rather than by coordinate index:
+
+```python
 class MockTrainingObjective(Objective[RecordCandidate]):
     @override
     def evaluate(self, candidate: RecordCandidate) -> float:
-        lr = float(candidate["learning_rate"])
-        mom = float(candidate["momentum"])
-        return (lr - 0.01) ** 2 + (mom - 0.9) ** 2
+        learning_rate = float(candidate["learning_rate"])
+        momentum = float(candidate["momentum"])
+        return (learning_rate - 0.01) ** 2 + (momentum - 0.9) ** 2
 
 
 problem = Problem(
     space=space,
     objective=MockTrainingObjective(),
 )
+```
 
+There is no decode step. The objective sees the same named structure that the
+space declared.
+
+## Derive an optimizer from the space
+
+CSA can derive its sampler, diversity metric, and perturbation schedule from
+the structured space:
+
+```python
 optimizer = CSAOptimizer.from_space_defaults(
     space=space,
     bank_capacity=10,
     random_state=42,
 )
+```
 
+The logarithmic learning-rate coordinate remains logarithmic in those derived
+components. It is not treated as a linearly scaled raw float.
+
+## Run and inspect the structured result
+
+```python
 study = Study(
     problem=problem,
     run_method=optimizer,
@@ -63,94 +87,37 @@ print(f"momentum:      {best.candidate['momentum']:.4f}")
 print(f"objective:     {best.value:.6f}")
 ```
 
-The candidate is a `RecordCandidate` mapping with the field names declared on
-the `RecordSpace`. Use `candidate.as_dict()` when you need a plain dictionary.
-You get back the same structure you put in — no index-based decoding needed.
+The `variopt` 0.2.0 reference environment produced:
 
-## Why Structure Matters
-
-A `RecordSpace` is not a thin naming layer over one anonymous vector. The
-package uses the declared structure for:
-
-- **validation** — out-of-bounds or wrong-type candidates are caught at
-  ingress
-- **log-scale awareness** — `scale="log"` on `learning_rate` means sampling,
-  normalization, and local search all operate in log coordinates
-- **diversity metrics** — CSA measures inter-candidate distance per field,
-  respecting each field's scale and type
-- **local-search neighborhoods** — structured kernels generate moves per
-  leaf field rather than perturbing a flat vector
-
-These stay aligned automatically. You do not need to write coordinate
-transforms or custom distance functions to get sensible behavior from the
-optimizer.
-
-## Permutation Example
-
-`PermutationSpace` models domains where the candidate is an ordering of
-`0..N-1`. A classic example is minimizing a tour cost over a set of cities.
-
-```python
-from typing_extensions import override
-
-from variopt import Objective, PermutationSpace, Problem, Study
-from variopt.algorithms.population import (
-    GAProfile,
-    GeneticAlgorithmOptimizer,
-    OrderCrossover,
-    SwapMutation,
-)
-from variopt.evaluators import SequentialEvaluator
-
-
-DISTANCES = [
-    [0, 10, 15, 20],
-    [10, 0, 35, 25],
-    [15, 35, 0, 30],
-    [20, 25, 30, 0],
-]
-
-
-class TourCostObjective(Objective[tuple[int, ...]]):
-    @override
-    def evaluate(self, candidate: tuple[int, ...]) -> float:
-        total = 0.0
-        for i in range(len(candidate)):
-            total += DISTANCES[candidate[i]][candidate[(i + 1) % len(candidate)]]
-        return total
-
-
-space = PermutationSpace(size=4)
-
-optimizer = GeneticAlgorithmOptimizer(
-    space=space,
-    population_size=20,
-    crossover_operator=OrderCrossover(space=space),
-    mutation_operator=SwapMutation(space=space),
-    profile=GAProfile(
-        crossover_probability=0.9,
-        mutation_probability=0.3,
-    ),
-    random_state=0,
-)
-
-study = Study(
-    problem=Problem(space=space, objective=TourCostObjective()),
-    run_method=optimizer,
-    evaluator=SequentialEvaluator[tuple[int, ...], tuple[int, ...]](),
-)
-
-result, _ = study.optimize(max_evaluations=200)
-print(f"best tour: {result.best_observation.candidate}")
-print(f"tour cost: {result.best_observation.value}")
+```text
+learning_rate: 0.00015
+momentum:      0.9094
+objective:     0.000186
 ```
 
-Permutation-specific operators like `OrderCrossover`, `SwapMutation`, and
-`InversionMutation` are available from `variopt.algorithms.population`.
+The final digits can vary with dependency versions. The candidate must retain
+the declared fields and satisfy both leaf spaces.
 
-## Next
+Use `best.candidate.as_dict()` when an external API needs a plain dictionary:
 
-- conceptual model:
-  [Spaces and Candidates](../concepts/spaces-and-candidates.md)
-- local-search details:
-  [Local Search](../concepts/local-search.md)
+```python
+print(best.candidate.as_dict())
+```
+
+The output retains both declared fields:
+
+```text
+{'learning_rate': 0.00014936568554617635, 'momentum': 0.9094403824985425}
+```
+
+You have now used one structural declaration for validation, optimization, and
+result access without writing coordinate transforms or decode functions.
+
+## Next steps
+
+- [Spaces and Candidates](../concepts/spaces-and-candidates.md) explains how
+  structured spaces participate across the pipeline.
+- [Optimize a Permutation](../guides/optimize-a-permutation.md) applies the
+  workflow to ordered combinatorial candidates.
+- [Customize an Optimizer Profile](../guides/customize-optimizer-profile.md)
+  shows how to override selected CSA defaults.

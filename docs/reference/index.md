@@ -10,6 +10,7 @@ submodule.
 
 - [API Surface](api.md)
 - [Checkpointing](checkpointing.md)
+- [Evaluator Contracts](evaluator-contracts.md)
 - [Presets and Contracts](presets-and-contracts.md)
 - [Glossary](glossary.md)
 - [Stability Policy](stability.md)

@@ -18,3 +18,4 @@ everything into one optimizer object.
 - [CSA](csa.md)
 - [Population Algorithms](population-algorithms.md)
 - [Local Search](local-search.md)
+- [Evaluator-Owned Local Search](evaluator-owned-local-search.md)

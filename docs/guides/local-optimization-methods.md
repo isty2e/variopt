@@ -1,303 +1,120 @@
-# Local Optimization Method Guidance
+# Choose a Local Optimization Method
 
-## Purpose
+Add local optimization only after the global run method behaves correctly on
+its own. Then choose a kernel from candidate structure and local objective
+behavior.
 
-This guide explains when local optimization is a good fit in `variopt`, which
-built-in method to prefer, and how local optimization interacts with budgeting
-and execution backends.
+## Start from the candidate space
 
-The current boundary is:
-
-- `RunMethod` proposes candidates
-- `Kernel` optionally organizes one bounded local-search episode
-- a capable synchronous `Evaluator` may execute each bounded episode
-- `Study` wires `RunMethod`, optional `Kernel`, and `Evaluator`
-
-The kernel owns local-search semantics. Execution placement is separate:
-eligible bounded episodes can run inside `SequentialEvaluator` or
-`JoblibEvaluator`, while other synchronous cases retain coordinator execution.
-The current study-level exact-async and stale-async paths require
-`DirectKernel` and do not accept these local-search kernels. See
-[Evaluator-Owned Local-Search Episodes](request-local-episodes.md) for the
-dispatch, budget, failure, and reproducibility contracts.
-
-When local optimization changes a candidate, the kernel should attach
-[`CandidateRefinement`](../reference/api/variopt.md) to the successful
-`EvaluationSuccess` slot in the returned `EvaluationAttemptBatch`. That metadata
-records the source candidate, the candidate actually evaluated, and any
-structured leaf paths changed by the episode. It is provenance, not
-evaluation-protocol semantics; the success payload remains the authoritative
-evaluation result.
-
-For the proposed/refined/evaluated/accepted vocabulary, see
-[Candidate Refinement](../concepts/candidate-refinement.md).
-
-## Current Built-In Support
-
-The current reusable built-in kernels are:
-
-- [`ScipyMinimizeKernel`](../reference/api/local-search.md)
-- [`StructuredHillClimbKernel`](../reference/api/local-search.md)
-- [`StructuredIteratedLocalSearchKernel`](../reference/api/local-search.md)
-- [`StructuredScheduledLocalSearchKernel`](../reference/api/local-search.md)
-- [`StructuredStochasticNeighborhoodKernel`](../reference/api/local-search.md)
-- [`StructuredVariableNeighborhoodKernel`](../reference/api/local-search.md)
-
-Their scopes are intentionally strict:
-
-- the SciPy kernel only supports structured spaces whose leaves are all
-  [`RealSpace`](../reference/api/spaces.md)
-- the SciPy kernel optimizes in the space coordinate system, so log-scaled
-  real leaves are optimized in log coordinates rather than raw value space
-- the SciPy kernel currently supports only `L-BFGS-B` and `Powell`
-- the structured hill climber supports only structured spaces whose leaves are
-  all [`IntegerSpace`](../reference/api/spaces.md)
-  or [`CategoricalSpace`](../reference/api/spaces.md)
-- the structured hill climber applies deterministic one-leaf
-  first-improvement moves and uses an explicit `max_steps` budget
-- the stochastic structured kernel supports the same discrete structured-space
-  boundary, but samples a bounded subset of one-leaf moves per local-search
-  step through explicit `max_neighbors_per_step` and optional
-  `max_categorical_neighbors_per_leaf` limits
-- the variable-neighborhood kernel supports the same discrete structured-space
-  boundary, but sequences explicit neighborhood stages and resets to the first
-  stage after each accepted improvement
-- the iterated local-search kernel supports the same discrete structured-space
-  boundary, but alternates deterministic local improvement with explicit
-  bounded kicks under a separate kick policy
-- the scheduled local-search kernel supports the same discrete structured-space
-  boundary, but runs one explicit sequence of local-search stages instead of
-  choosing or resetting stages dynamically
-- neither built-in kernel exposes analytic gradients, repair logic, or
-  domain-specific move families as first-class public contracts
-
-If your problem falls outside that scope, provide a custom `Kernel` to
-[`Study`](../reference/api/study.md) or skip
-local optimization entirely.
-
-## Method Choice
-
-### `L-BFGS-B`
-
-Prefer `L-BFGS-B` when all of the following are roughly true:
-
-- every optimized variable is continuous
-- the objective is reasonably smooth in the local neighborhood
-- local progress is not dominated by large discontinuities or hard thresholding
-- coordinate bounds matter
-
-This is the best default for smooth continuous objectives. It is also the most
-natural built-in choice when your search space uses log-scaled real variables,
-because the current SciPy kernel already respects coordinate-space geometry.
-
-Practical trade-off:
-
-- `L-BFGS-B` often reduces the number of outer proposals needed
-- but it may consume many inner objective evaluations due to finite-difference
-  gradient estimation
-
-`Study.optimize(...)` budgets by actual objective-evaluation cost by default, so
-SciPy inner evaluations are charged against `max_evaluations` rather than hidden
-behind one outer proposal.
-
-### `Powell`
-
-Prefer `Powell` when the space is still continuous but the objective is less
-smooth, more rugged, or derivative information is unreliable.
-
-Typical cases:
-
-- piecewise or weakly discontinuous objectives over real variables
-- objectives with noisy directional behavior where numerical gradients are not
-  trustworthy
-- cases where `L-BFGS-B` stalls or oscillates due to local non-smoothness
-
-`Powell` stays within the current continuous-only local-search boundary, but it
-is usually a better practical fallback than `L-BFGS-B` for rougher objectives.
-
-Trade-off:
-
-- it is often more robust than `L-BFGS-B`
-- but it can require many function evaluations and may be slower wall-clock wise
-
-### Mixed, Integer, or Categorical Spaces
-
-Do not use the built-in SciPy kernel for mixed or discrete search spaces.
-
-The current SciPy kernel rejects any structured space that contains non-real
-leaves. That is intentional. Projecting integer or categorical candidates into
-a fake continuous local search would blur the canonical candidate ontology and
-make the episode semantics harder to reason about.
-
-Use one of these instead:
-
-- [`StructuredHillClimbKernel`](../reference/api/local-search.md)
-  when every structured leaf is discrete and a simple leafwise neighborhood is
-  appropriate
-- [`StructuredStochasticNeighborhoodKernel`](../reference/api/local-search.md)
-  when the same discrete neighborhood is appropriate but categorical fanout or
-  per-step neighborhood cost is too large for deterministic enumeration
-- [`StructuredVariableNeighborhoodKernel`](../reference/api/local-search.md)
-  when a staged escape mechanism is needed across multiple explicit discrete
-  neighborhood families inside one bounded episode
-- [`StructuredIteratedLocalSearchKernel`](../reference/api/local-search.md)
-  when a bounded kick-and-refine loop is needed and the perturbation law can
-  be explained cleanly through an explicit kick policy
-- [`StructuredScheduledLocalSearchKernel`](../reference/api/local-search.md)
-  when you want a fixed, explicit sequence of discrete local-search stages
-  without variable-neighborhood reset semantics
-- no local optimization
-- a custom kernel that understands the true candidate domain
-- a problem-specific continuous relaxation only if you can define it cleanly
-  and map back to canonical candidates without ambiguity
-
-As a rule of thumb, if you cannot explain the relaxation and projection in one
-clear sentence, do not hide it inside a generic local-search kernel.
-
-The current variable-neighborhood kernel should be read narrowly: it is an
-explicit staged escape mechanism when you already have a concrete neighborhood
-widening story, not a broad default for generic structured discrete search.
-
-The iterated local-search kernel should also be read narrowly. It is a
-kick-and-refine tool when you already have a justified perturbation story, not
-a blanket replacement for the deterministic hill climber or the categorical
-stochastic kernel.
-
-Public helper types such as `StructuredKickPolicy` and
-`StructuredVariableNeighborhoodStage` are configuration records for these
-advanced kernels. `ScipyMinimizeMethod` is the literal method set accepted by
-`ScipyMinimizeKernel`: currently `"L-BFGS-B"` and `"Powell"`.
-
-## Budget Accounting
-
-`variopt` distinguishes two different budgets:
-
-- outer proposal count
-- actual objective-evaluation cost
-
-This matters because a single kernel episode can evaluate the objective many
-times.
-
-For `ScipyMinimizeKernel`, `max_iterations` limits SciPy algorithm iterations,
-not objective calls. Set `max_evaluations` when you need an explicit
-per-proposal objective-call cap. That finite cap also makes the kernel eligible
-for evaluator-owned request-local episode dispatch; without it, SciPy local
-search keeps the coordinator execution path.
-
-The kernel path reports that cost through successful attempt
-`evaluation_count` metadata.
-`Study.optimize(...)` then offers two modes:
-
-- default: budget decreases by the sum of objective evaluations reported by the
-  kernel/evaluator path
-- `count_evaluation_cost=False`: budget decreases by the number of returned
-  attempt slots, including recorded evaluation failures
-
-Practical guidance:
-
-- keep the default when comparing methods with and without local optimization,
-  or when the objective itself is expensive
-- use `count_evaluation_cost=False` only when you deliberately want an outer-step
-  budget rather than an objective-cost budget
-
-If a custom kernel already computed the objective value, it should return both
-that value and the true `evaluation_count` so that `Study` can reuse the value
-instead of evaluating the objective again.
-
-Refinement metadata and budget metadata are orthogonal. A kernel can report a
-refined candidate with `evaluation_count=1`, or it can report no refinement while
-still charging a larger inner evaluation count.
-
-## Evaluator Backend Interaction
-
-Local-search semantics do not belong to evaluator backends, but kernels still
-receive evaluator-owned
-[`ExecutionResources`](../reference/api/variopt.md)
-through [`ProposalBatchQuery`](../reference/api/variopt.md).
-
-That means evaluator choice still affects how local search should behave.
-
-### `SequentialEvaluator`
-
-Use
-[`SequentialEvaluator`](../reference/api/evaluators.md)
-when:
-
-- you want the simplest execution path
-- your kernel already uses significant internal compute
-- debugging and determinism are more important than throughput
-
-This is the safest default while tuning or validating a new local-search kernel.
-
-### `JoblibEvaluator`
-
-Use [`JoblibEvaluator`](../reference/api/evaluators.md)
-when objective work is request-local and worth running across multiple
-workers.
-
-The current nested-parallelism contract makes the evaluator the outer parallel
-owner. In practice that means:
-
-- `JoblibEvaluator` fans out explicitly eligible bounded proposal-local
-  episodes across workers
-- kernels should respect `ExecutionResources` and remain serial when the
-  evaluator owns parallelism
-- nested worker spawning should be treated as exceptional, not as the default
-
-Built-in structured local-search kernels derive finite objective-call caps from
-their step and neighborhood bounds. Stochastic structured episodes additionally
-require a proposal-local random-state snapshot so worker scheduling cannot
-change their trajectories. Kernels without a safe finite cap, custom subclasses
-that only inherit an episode implementation, and evaluators without the
-request-local capability use the ordinary coordinator callback path.
-
-For the complete support matrix, hard-budget reservation examples, failure
-semantics, checkpoint behavior, and measured performance guidance, see
-[Evaluator-Owned Local-Search Episodes](request-local-episodes.md).
-
-Practical rule:
-
-- outer parallelism in the evaluator
-- inner local search kept serial unless you have a deliberate partitioning
-  story
-
-This avoids oversubscription and keeps execution semantics easier to reason
-about.
-
-It does not imply equivalence with fully sequential execution. If a run method
-changes state only after a whole batch is evaluated, then preserving proposal
-order still leaves `sync_batch` observably different from `sequential`. Treat
-changes in evaluator backend, worker count, or batch size as changes in the
-execution configuration, not as free throughput toggles.
-
-## Decision Table
-
-| Situation | Recommended local optimization choice |
+| Candidate domain | Recommended starting point |
 | --- | --- |
-| Smooth continuous objective over `RealSpace` leaves | `ScipyMinimizeKernel(method="L-BFGS-B")` |
-| Continuous but rough or weakly discontinuous objective | `ScipyMinimizeKernel(method="Powell")` |
-| All-discrete structured space | `StructuredHillClimbKernel(max_steps=...)` |
-| All-discrete structured space that needs explicit kick-and-refine episodes | `StructuredIteratedLocalSearchKernel(max_steps=..., max_kicks=..., kick_policy=...)` |
-| All-discrete structured space with large categorical fanout | `StructuredStochasticNeighborhoodKernel(max_steps=..., max_neighbors_per_step=...)` |
-| All-discrete structured space that already has a justified staged neighborhood-widening story | `StructuredVariableNeighborhoodKernel(max_steps=..., stages=(...))` |
-| All-discrete structured space with a fixed stage sequence | `StructuredScheduledLocalSearchKernel(stages=(...))` |
-| Mixed real/integer/categorical space | no built-in generic mixed adapter yet; use a custom kernel, split the local search cleanly by domain, or skip local optimization |
-| Comparing methods with and without local optimization | use the default objective-cost budget |
-| Batch-parallel evaluation with joblib | keep the kernel serial and let the evaluator own parallelism |
-| Early debugging or correctness validation | start with `SequentialEvaluator` |
+| Smooth continuous `RealSpace` leaves | `ScipyMinimizeKernel(method="L-BFGS-B")` |
+| Rough or weakly discontinuous continuous objective | `ScipyMinimizeKernel(method="Powell")` |
+| Discrete structured space | `StructuredHillClimbKernel(max_steps=...)` |
+| Discrete space with expensive categorical enumeration | `StructuredStochasticNeighborhoodKernel(...)` |
+| Discrete space with a justified widening sequence | `StructuredVariableNeighborhoodKernel(...)` |
+| Discrete space with a bounded kick-and-refine strategy | `StructuredIteratedLocalSearchKernel(...)` |
+| Discrete space with a fixed stage sequence | `StructuredScheduledLocalSearchKernel(...)` |
+| Mixed real, integer, and categorical leaves | Custom kernel, explicit domain split, or no local optimization |
 
-## Recommended Starting Point
+The built-in SciPy kernel rejects non-real leaves. Do not project integer or
+categorical values into a continuous optimizer unless the relaxation and its
+return to canonical candidates are explicit parts of the problem model.
 
-If you are unsure, start here:
+## Choose between `L-BFGS-B` and `Powell`
 
-1. Use no local optimization at first.
-2. If the space is continuous and local improvement is clearly valuable, try
-   `L-BFGS-B`.
-3. If `L-BFGS-B` behaves poorly on a rough objective, switch to `Powell`.
-4. Keep default objective-cost budgeting before making any fairness claims about
-   efficiency.
-5. Add `JoblibEvaluator` only after the kernel itself is behaving well in
-   sequential execution.
+Use `L-BFGS-B` when all optimized leaves are continuous, the objective is
+reasonably smooth locally, and coordinate bounds matter. It is also the natural
+built-in choice for log-scaled real leaves because the kernel optimizes in the
+space coordinate system.
 
-This sequence keeps the execution boundary explicit and avoids mixing algorithm
-effects with backend or budgeting artifacts.
+Finite-difference gradient estimation can consume many objective evaluations.
+Set both iteration and objective-call limits when cost must remain bounded:
+
+```python
+from variopt.algorithms.local_search import ScipyMinimizeKernel
+
+kernel = ScipyMinimizeKernel(
+    method="L-BFGS-B",
+    max_iterations=20,
+    max_evaluations=40,
+)
+```
+
+Use `Powell` when the space is still continuous but numerical gradients are
+unreliable, the objective is piecewise, or `L-BFGS-B` stalls on local
+non-smoothness. Powell may be more tolerant of those conditions, but it can
+also require many function evaluations.
+
+## Choose a discrete neighborhood
+
+Use `StructuredHillClimbKernel` when every leaf is `IntegerSpace` or
+`CategoricalSpace` and deterministic one-leaf first improvement is affordable.
+
+Move to another discrete kernel only when the corresponding neighborhood law is
+part of the optimization intent:
+
+- `StructuredStochasticNeighborhoodKernel` samples a bounded subset of
+  one-leaf moves when full categorical enumeration is too expensive.
+- `StructuredVariableNeighborhoodKernel` widens through explicit stages and
+  resets after an accepted improvement.
+- `StructuredIteratedLocalSearchKernel` alternates deterministic improvement
+  with bounded kicks under a separate kick policy.
+- `StructuredScheduledLocalSearchKernel` executes one fixed sequence of stages
+  without variable-neighborhood reset semantics.
+
+Variable-neighborhood and iterated local search are not generic upgrades over
+hill climbing. Use them only when the widening or perturbation story is
+specific enough to configure and explain.
+
+The built-in kernels do not expose analytic gradients, repair logic, or
+domain-specific move families as first-class contracts. Provide a custom
+`Kernel` or skip local optimization when those capabilities define the domain.
+
+## Preserve objective-cost accounting
+
+Keep the default `count_evaluation_cost=True` when comparing runs with and
+without local search. A single top-level proposal can trigger many inner
+objective calls, and the default budget charges those calls against
+`max_evaluations`.
+
+Use `count_evaluation_cost=False` only when the experiment deliberately budgets
+outer attempt slots instead of objective cost. A custom kernel that evaluates
+the objective must return the computed value and the true `evaluation_count` so
+the study can reuse the result and account for it once.
+
+Refinement and budget metadata are independent. A kernel can report a changed
+candidate with `evaluation_count=1`, or no refinement with a larger inner cost.
+
+## Validate sequentially before parallelizing
+
+Start with `SequentialEvaluator`. After checking the kernel's candidates,
+refinement metadata, failures, and evaluation counts, use synchronous
+`JoblibEvaluator` only when a batch contains multiple bounded episodes whose
+work can amortize transport.
+
+Keep the evaluator as the outer parallel owner and each local-search episode
+serial. Nested worker spawning risks oversubscription and weakens the resource
+contract.
+
+The current study-level exact-async and stale-async paths require
+`DirectKernel`. MPI also keeps request-local episodes on the coordinator.
+
+See [Run Local Search in Evaluator Workers](request-local-episodes.md) for the
+configuration steps and [Evaluator Contracts](../reference/evaluator-contracts.md)
+for dispatch, hard-budget, failure, and checkpoint rules.
+
+## Recommended sequence
+
+1. Run the global optimizer without local search.
+2. Add `L-BFGS-B` for a smooth continuous domain or deterministic hill climbing
+   for a discrete structured domain.
+3. Compare under the default objective-cost budget.
+4. Change the method only in response to observed objective or neighborhood
+   behavior.
+5. Add Joblib only after the sequential episode is correct and expensive enough
+   to parallelize.
+
+See [Local Search](../concepts/local-search.md) for the kernel ownership model
+and [the local-search API](../reference/api/local-search.md) for constructor and
+configuration types.

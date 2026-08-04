@@ -1,111 +1,40 @@
 # Checkpointing
 
-`variopt` currently exposes explicit CSA state checkpointing through
+`variopt` exposes explicit CSA state checkpointing through
 [`CSAOptimizer.state_to_dict()`][variopt.algorithms.population.CSAOptimizer.state_to_dict]
 and
 [`CSAOptimizer.state_from_dict()`][variopt.algorithms.population.CSAOptimizer.state_from_dict].
+See [Checkpoint and Resume a CSA Run](../guides/checkpoint-and-resume-csa.md)
+for the save and restore procedure.
 
 ## Scope
 
-The current contract covers CSA engine state only. It is an exact
-safe-boundary checkpoint: resuming with the same optimizer configuration,
-seed, objective, and execution model continues exactly from the saved
-boundary.
+The current contract covers CSA engine state only. It is an exact safe-boundary
+checkpoint: resuming with the same optimizer configuration, seed, objective,
+and execution model continues exactly from the saved boundary.
 
-The checkpoint payload is JSON-safe and is intended to be written through JSON
-or another structured serialization format. The supported durable persistence
-surface is the explicit `to_dict()` / `from_dict()` checkpoint contract; Python
-`pickle` round trips are runtime compatibility conveniences only and are not a
-cross-version or crash-recovery checkpoint format.
+The payload is JSON-safe and intended for JSON or another structured
+serialization format. The supported durable persistence surface is the explicit
+`to_dict()` / `from_dict()` contract. Python pickle round trips are runtime
+compatibility conveniences only and are not a cross-version or crash-recovery
+checkpoint format.
 
 A checkpoint does not contain the optimizer configuration that gives its state
 meaning. Persist a
 [`CSAConfigurationManifest`][variopt.algorithms.population.CSAConfigurationManifest]
-beside the checkpoint and compare it before restoring state. See
-[Record CSA Configuration
-Provenance](../guides/csa-configuration-provenance.md#guard-a-checkpoint-restore)
-for the guard pattern and for provenance dimensions that remain caller-owned.
+beside the checkpoint and compare it before restoration. The manifest does not
+cover caller-owned problem, objective, data, evaluator, environment, or
+dependency identity.
 
-## Usage
+See [Record CSA Configuration Provenance](../guides/csa-configuration-provenance.md)
+for manifest creation and restore guards.
 
-```python
-import json
-import tempfile
-from pathlib import Path
-
-from variopt import IntegerSpace, Objective, Problem, Study
-from variopt.algorithms.population import CSAOptimizer
-from variopt.evaluators import SequentialEvaluator
-from typing_extensions import override
-
-
-class SquareObjective(Objective[int]):
-    @override
-    def evaluate(self, candidate: int) -> float:
-        return float(candidate * candidate)
-
-
-space = IntegerSpace(0, 20)
-optimizer = CSAOptimizer.from_space_defaults(
-    space=space,
-    bank_capacity=8,
-    random_state=0,
-)
-study = Study(
-    problem=Problem(space=space, objective=SquareObjective()),
-    run_method=optimizer,
-    evaluator=SequentialEvaluator[int, int](),
-)
-
-# Run partway to a checkpoint-safe boundary and save.
-result, state = study.optimize(
-    max_evaluations=20,
-    stop_at_checkpoint_boundary=True,
-)
-checkpoint = optimizer.state_to_dict(state)
-
-checkpoint_path = Path("checkpoint.json")
-with tempfile.NamedTemporaryFile(
-    "w",
-    dir=checkpoint_path.parent,
-    prefix=f"{checkpoint_path.name}.",
-    suffix=".tmp",
-    delete=False,
-) as checkpoint_file:
-    temporary_path = Path(checkpoint_file.name)
-    json.dump(checkpoint, checkpoint_file)
-    checkpoint_file.write("\n")
-temporary_path.replace(checkpoint_path)
-
-# Later: restore and continue.
-with checkpoint_path.open() as f:
-    loaded = json.load(f)
-
-restored_state = optimizer.state_from_dict(loaded)
-result, _ = study.optimize(max_evaluations=20, initial_state=restored_state)
-```
-
-Write a checkpoint to a temporary path on the same filesystem and then replace
-the destination. Avoid overwriting an existing checkpoint file in place; a crash
-or interrupted write could otherwise leave neither the old nor the new snapshot
-usable.
-
-If a reported logical evaluation cost exhausts the hard budget while the run is
-inside an unsafe segment, `stop_at_checkpoint_boundary=True` returns the latest
-checkpoint-safe report and state instead of assimilating the over-budget
-attempts. If no safe snapshot has been reached, the budget exhaustion is still
-reported as `EvaluationBudgetExhausted`.
-
-For structured spaces the built-in recursive candidate codec handles
-serialization automatically. For non-structured spaces, pass explicit
-`candidate_to_dict` and `candidate_from_dict` callbacks.
-
-## Safe Boundary Requirement
+## Safe boundary
 
 !!! warning "Safe boundary only"
 
-    `state_to_dict()` only accepts states that are between CSA generation
-    batches. Concretely, checkpointing requires:
+    `state_to_dict()` only accepts states between CSA generation batches. A
+    checkpoint state has:
 
     - no pending proposals
     - no active generation queue
@@ -113,13 +42,13 @@ serialization automatically. For non-structured spaces, pass explicit
     - no reference-refresh pool in progress
     - no pending proposal attributions
 
-    If any of those runtime domains is active, checkpointing raises
-    `ValueError` instead of serializing a partial state.
+    If one of these runtime domains is active, checkpointing raises `ValueError`
+    instead of serializing a partial state.
 
-## What Is Persisted
+## Persisted state
 
 The checkpoint captures the authoritative optimizer memory needed for exact
-continuation, including:
+continuation:
 
 - RNG state
 - bank and reference-bank contents
@@ -130,9 +59,9 @@ continuation, including:
 - scoring state
 - monotone proposal-id counter
 
-## What Is Not Persisted
+## Excluded state
 
-The checkpoint intentionally does not capture:
+The checkpoint does not capture:
 
 - live evaluator or worker state
 - exact-async suspended sessions
@@ -143,50 +72,42 @@ The checkpoint intentionally does not capture:
 - derived caches that can be recomputed from authoritative state
 
 Evaluator-owned request-local local-search episodes fall under the live-worker
-and in-flight-batch exclusions above. Resuming creates fresh evaluator runtime
-state and derives later proposal-local random streams from the restored
-optimizer state. See
-[Evaluator-Owned Local-Search Episodes](../guides/request-local-episodes.md).
+and in-flight-batch exclusions. Resuming creates fresh evaluator runtime state
+and derives later proposal-local random streams from restored optimizer state.
 
-When a CSA checkpoint is restored, the optimizer state resumes with no
-accumulated CSA trace reducer state. This does not affect exact optimization
-continuation: tracing is diagnostic, while the checkpoint stores the
-authoritative state that determines future proposals and acceptance decisions.
-Payloads that attempt to include CSA `trace_state` are rejected rather than
-silently dropping that data. Collect trace or report data separately if you
-need a complete external telemetry record across a checkpoint boundary.
+Restored CSA state has no accumulated CSA trace reducer state. This does not
+affect exact optimization continuation because tracing is diagnostic and the
+checkpoint stores the authoritative state that determines future proposals and
+acceptance decisions. Payloads that include CSA `trace_state` are rejected
+rather than silently dropping the data.
 
-## Candidate Encoding
+## Candidate encoding
 
-For CSA optimizers built over `StructuredSearchSpace`, the optimizer provides a
-built-in recursive candidate codec. For non-structured spaces, callers must
-pass explicit candidate serialization callbacks.
+For CSA optimizers over `StructuredSearchSpace`, the optimizer supplies a
+built-in recursive candidate codec. Other spaces require explicit candidate
+serialization callbacks.
 
-The built-in structured candidate codec is JSON-safe and deliberately bounded:
-candidate payloads must be acyclic and must not exceed the codec nesting-depth
-limit. This keeps malformed in-memory payloads from falling through to
-interpreter recursion failures.
+The structured codec is JSON-safe and bounded. Candidate payloads must be
+acyclic and must not exceed the codec nesting-depth limit. Malformed in-memory
+payloads are rejected before interpreter recursion failures occur.
 
-## Terminal Results
+## Terminal results
 
 `RunReport`, `RunResult`, and `NondominatedRunSurface` are terminal result
 objects, not optimizer checkpoints. They may carry candidate-refinement
-provenance, but `variopt` does not currently define `to_dict()` / `from_dict()`
-serialization for those terminal surfaces. Persisting reports, traces, or
-result summaries is caller-owned for now.
+provenance, but `variopt` does not define `to_dict()` / `from_dict()`
+serialization for those terminal surfaces. Persistence of reports, traces, and
+result summaries is caller-owned.
 
-## Non-Goals for v1
+## Unsupported checkpoint modes
 
-!!! note "Out of scope for the initial checkpointing contract"
+The current contract does not support:
 
-    The current contract does **not** support:
+- mid-step checkpoint and resume
+- exact-async suspended-session checkpointing
+- exact-async resume-handle crash recovery
+- terminal report or result serialization
+- generic `Study`-level persistence across arbitrary run methods
 
-    - mid-step checkpoint/resume
-    - exact-async suspended-session checkpointing
-    - exact-async resume-handle crash recovery
-    - terminal report/result serialization
-    - generic `Study`-level persistence across arbitrary run methods
-
-    Those require restoring evaluator-owned lifecycle state in addition to
-    the optimizer memory and are intentionally out of scope for this first
-    slice.
+These modes require restoring evaluator-owned lifecycle state in addition to
+optimizer memory.

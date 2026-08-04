@@ -1,10 +1,13 @@
-# Canonical Usage Patterns
+# Advanced Usage Recipes
 
-This guide shows the concrete caller-facing paths that became canonical as
+This recipe collection shows the concrete caller-facing paths that became canonical as
 `variopt` moved to request-first evaluation, sibling interaction semantics, and
 explicit execution reports. Problem protocols should prefer request-free
 payloads; execution artifacts own request identity, success/failure attempt
 slots, and terminal report projections.
+
+Each section addresses an independent task. Start at the recipe that matches
+the result you need; the examples are not one sequential tutorial.
 
 Use [`Study.optimize`][variopt.Study.optimize]
 when the run should materialize scalar

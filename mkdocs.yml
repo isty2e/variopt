@@ -85,11 +85,15 @@ nav:
       - Overview: guides/index.md
       - Choose an Optimizer: guides/choose-an-optimizer.md
       - Choose an Evaluator: guides/choose-an-evaluator.md
-      - Canonical Usage Patterns: guides/canonical-usage-patterns.md
+      - Run Exact-Async Evaluations: guides/run-exact-async.md
+      - Reuse a Problem in Joblib Workers: guides/reuse-a-problem-in-joblib-workers.md
+      - Choose a Local Optimization Method: guides/local-optimization-methods.md
+      - Run Local Search in Evaluator Workers: guides/request-local-episodes.md
+      - Checkpoint and Resume CSA: guides/checkpoint-and-resume-csa.md
+      - Optimize a Permutation: guides/optimize-a-permutation.md
+      - Advanced Usage Recipes: guides/canonical-usage-patterns.md
       - Customize an Optimizer Profile: guides/customize-optimizer-profile.md
       - Record CSA Configuration Provenance: guides/csa-configuration-provenance.md
-      - Local Optimization Methods: guides/local-optimization-methods.md
-      - Evaluator-Owned Local Search: guides/request-local-episodes.md
   - Concepts:
       - Overview: concepts/index.md
       - Optimization Model: concepts/optimization-model.md
@@ -99,6 +103,7 @@ nav:
       - CSA: concepts/csa.md
       - Population Algorithms: concepts/population-algorithms.md
       - Local Search: concepts/local-search.md
+      - Evaluator-Owned Local Search: concepts/evaluator-owned-local-search.md
   - Reference:
       - Overview: reference/index.md
       - API Surface:
@@ -114,6 +119,7 @@ nav:
           - variopt.algorithms.population.csa: reference/api/csa.md
           - variopt.algorithms.local_search: reference/api/local-search.md
       - Checkpointing: reference/checkpointing.md
+      - Evaluator Contracts: reference/evaluator-contracts.md
       - Presets and Contracts: reference/presets-and-contracts.md
       - Glossary: reference/glossary.md
       - Stability Policy: reference/stability.md

@@ -51,8 +51,9 @@ print(result.best_observation.candidate.as_dict())  # {'x': ..., 'y': ...}
 | One runnable example | [Quickstart](getting-started/quickstart.md) |
 | End-to-end walkthrough | [First Optimization Run](tutorials/first-optimization.md) |
 | Structured spaces tutorial | [Structured Spaces](tutorials/structured-spaces.md) |
-| Multi-objective / non-scalar problems | [Canonical Usage Patterns](guides/canonical-usage-patterns.md) |
-| Parallel bounded local search | [Evaluator-Owned Local-Search Episodes](guides/request-local-episodes.md) |
+| Multi-objective / non-scalar problems | [Advanced Usage Recipes](guides/canonical-usage-patterns.md) |
+| Parallel bounded local search | [Run Local Search in Evaluator Workers](guides/request-local-episodes.md) |
+| Stop and continue a CSA run | [Checkpoint and Resume CSA](guides/checkpoint-and-resume-csa.md) |
 | Public API reference | [Reference](reference/index.md) |
 
 ## What's Included
@@ -73,9 +74,9 @@ print(result.best_observation.candidate.as_dict())  # {'x': ..., 'y': ...}
 
 - **[Getting Started](getting-started/introduction.md)** — install, intro,
   and quickstart
-- **[Tutorials](tutorials/index.md)** — worked end-to-end examples
-- **[How-To Guides](guides/index.md)** — task-oriented guidance (choosing
-  optimizers, evaluators, profiles, local-search methods)
+- **[Tutorials](tutorials/index.md)** — guided, reproducible learning paths
+- **[How-To Guides](guides/index.md)** — task-oriented procedures and decision
+  guides
 - **[Concepts](concepts/index.md)** — the model behind the API
 - **[Reference](reference/index.md)** — API surface, presets, glossary,
   stability policy

@@ -1,16 +1,28 @@
 # How-To Guides
 
-These guides are task-oriented.
+Use these guides when you know the result you need and want a concrete path to
+it.
 
-Use them when you already understand the basics and need to make a concrete
-choice about optimizers, evaluators, or configuration patterns.
-
-## Guide Set
+## Choose an execution path
 
 - [Choose an Optimizer](choose-an-optimizer.md)
 - [Choose an Evaluator](choose-an-evaluator.md)
-- [Canonical Usage Patterns](canonical-usage-patterns.md)
+- [Run Exact-Async Evaluations](run-exact-async.md)
+- [Reuse a Problem in Joblib Workers](reuse-a-problem-in-joblib-workers.md)
+
+## Add bounded local optimization
+
+- [Choose a Local Optimization Method](local-optimization-methods.md)
+- [Run Local Search in Evaluator Workers](request-local-episodes.md)
+
+## Preserve and reproduce a CSA run
+
+- [Checkpoint and Resume a CSA Run](checkpoint-and-resume-csa.md)
 - [Customize an Optimizer Profile](customize-optimizer-profile.md)
 - [Record CSA Configuration Provenance](csa-configuration-provenance.md)
-- [Local Optimization Methods](local-optimization-methods.md)
-- [Evaluator-Owned Local-Search Episodes](request-local-episodes.md)
+
+## Apply domain-specific patterns
+
+- [Optimize a Permutation](optimize-a-permutation.md)
+- [Advanced Usage Recipes](canonical-usage-patterns.md) for custom evaluation
+  protocols, non-scalar reports, multi-objective surfaces, and interactions

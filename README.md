@@ -85,8 +85,10 @@ For MPI-backed batch execution, install the optional mpi extra
 
 Synchronous `SequentialEvaluator` and `JoblibEvaluator` can also execute
 eligible bounded local-search episodes per proposal. See
-[Evaluator-Owned Local-Search Episodes](docs/guides/request-local-episodes.md)
-for dispatch, hard-budget, failure, reproducibility, and performance guidance.
+[Run Local Search in Evaluator Workers](docs/guides/request-local-episodes.md)
+for setup and
+[Evaluator Contracts](docs/reference/evaluator-contracts.md) for dispatch,
+budget, failure, and reproducibility guarantees.
 
 ## Documentation
 
@@ -94,7 +96,7 @@ The full documentation is organized as:
 
 - **[Getting Started](docs/getting-started/introduction.md)** — installation,
   introduction, and quickstart
-- **[Tutorials](docs/tutorials/index.md)** — worked end-to-end examples
+- **[Tutorials](docs/tutorials/index.md)** — guided, reproducible learning paths
 - **[How-To Guides](docs/guides/index.md)** — task-oriented guidance for
   choosing optimizers, evaluators, presets, and local-search methods
 - **[Concepts](docs/concepts/index.md)** — the model behind the API:
@@ -111,8 +113,9 @@ The full documentation is organized as:
 | Structured (record/tuple/array) spaces | [Structured Spaces](docs/tutorials/structured-spaces.md) |
 | Pick an optimizer family | [Choose an Optimizer](docs/guides/choose-an-optimizer.md) |
 | CSA preset and profile customization | [Customize an Optimizer Profile](docs/guides/customize-optimizer-profile.md) |
-| Local-search kernel guidance | [Local Optimization Methods](docs/guides/local-optimization-methods.md) |
-| Parallel bounded local search | [Evaluator-Owned Local-Search Episodes](docs/guides/request-local-episodes.md) |
+| Local-search kernel guidance | [Choose a Local Optimization Method](docs/guides/local-optimization-methods.md) |
+| Parallel bounded local search | [Run Local Search in Evaluator Workers](docs/guides/request-local-episodes.md) |
+| Stop and continue a CSA run | [Checkpoint and Resume CSA](docs/guides/checkpoint-and-resume-csa.md) |
 | Candidate refinement provenance | [Candidate Refinement](docs/concepts/candidate-refinement.md) |
-| Non-scalar / multi-objective patterns | [Canonical Usage Patterns](docs/guides/canonical-usage-patterns.md) |
+| Non-scalar / multi-objective patterns | [Advanced Usage Recipes](docs/guides/canonical-usage-patterns.md) |
 | Public API reference | [API Surface](docs/reference/api.md) |
