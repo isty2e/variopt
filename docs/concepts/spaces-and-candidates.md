@@ -48,6 +48,13 @@ validated the whole candidate before scanning or replacing many leaves. Public
 leaf methods remain the safe boundary for ordinary caller code, and replacement
 values still flow through their owning leaf-space validation rules.
 
+For built-in composite spaces, CSA can batch distance calculations without
+changing leaf geometry or the order in which distances are accumulated.
+Small batches and numeric ranges that cannot use fixed-width arrays safely,
+including very large integers, keep the scalar calculation path. This does not
+change candidate or checkpoint formats, and custom spaces and metric overrides
+keep their own distance implementations.
+
 ## Custom Spaces
 
 Any class that implements the [`SearchSpace`][variopt.SearchSpace] protocol

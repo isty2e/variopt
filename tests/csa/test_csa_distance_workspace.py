@@ -1,6 +1,7 @@
 """Snapshot and mutation contracts for operation-local CSA distance caches."""
 
 import gc
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from itertools import combinations
 from weakref import ref
@@ -9,9 +10,10 @@ import numpy as np
 import pytest
 from typing_extensions import override
 
+from variopt import ArraySpace, RealSpace
 from variopt.algorithms.population.csa.banking.bank import BankEntry
 from variopt.algorithms.population.csa.banking.queries import BankDistanceWorkspace
-from variopt.diversity import DiversityMetric
+from variopt.diversity import DiversityMetric, StructuredSpaceDiversityMetric
 
 
 @dataclass
@@ -44,6 +46,14 @@ class HostileDistance(DiversityMetric[EqualityHostileCandidate]):
         return float(abs(left.value - right.value))
 
 
+class FixedStructuredDistance(
+    StructuredSpaceDiversityMetric[Sequence[float | int], tuple[float, ...]]
+):
+    @override
+    def distance(self, left: tuple[float, ...], right: tuple[float, ...]) -> float:
+        return 0.75
+
+
 def _workspace(*candidates: int) -> BankDistanceWorkspace[int]:
     return BankDistanceWorkspace(
         entries=tuple(
@@ -60,6 +70,59 @@ def _assert_distances(workspace: BankDistanceWorkspace[int]) -> None:
         )
         assert workspace.distance(left, right) == expected
         assert workspace.distance(right, left) == expected
+
+
+def test_compiled_candidate_batch_preserves_ties_cutoffs_and_rebase() -> None:
+    space = ArraySpace(RealSpace(0.0, 1.0), length=4)
+    metric = StructuredSpaceDiversityMetric(space=space)
+    entries = tuple(
+        BankEntry(candidate=(value,) * 4, value=float(index))
+        for index, value in enumerate((0.0, 0.5, 1.0, 0.5) * 32)
+    )
+    workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+    candidate = (0.25,) * 4
+    expected = tuple(metric.distance(candidate, entry.candidate) for entry in entries)
+
+    distances = workspace.distances_to_candidate(candidate)
+    assert distances == expected
+    assert min(range(len(distances)), key=distances.__getitem__) == 0
+    assert tuple(distance < 0.25 for distance in distances) == (False,) * 128
+    assert (
+        sum(distance < float(np.nextafter(0.25, 1.0)) for distance in distances) == 96
+    )
+
+    original_counts = workspace.crowding_counts(distance_cutoff=0.25)
+    updated_entries = (BankEntry(candidate=candidate, value=-1.0), *entries[1:])
+    updated = workspace.rebase(
+        entries=updated_entries, invalidated_indices=frozenset({0})
+    )
+    updated.seed_entry_distances(entry_index=0, distances=distances)
+    assert tuple(updated.distance(0, index) for index in range(1, 128)) == distances[1:]
+    for cutoff in (0.25, float(np.nextafter(0.25, 1.0))):
+        assert updated.crowding_counts(distance_cutoff=cutoff) == tuple(
+            sum(
+                metric.distance(entry.candidate, other.candidate) < cutoff
+                for other_index, other in enumerate(updated_entries)
+                if index != other_index
+            )
+            for index, entry in enumerate(updated_entries)
+        )
+    assert workspace.distances_to_candidate(candidate) == expected
+    assert workspace.crowding_counts(distance_cutoff=0.25) == original_counts
+    assert workspace.distance(0, 1) == 0.5
+
+
+def test_candidate_batch_preserves_custom_structured_metric_override() -> None:
+    space = ArraySpace(RealSpace(0.0, 128.0), length=4)
+    metric = FixedStructuredDistance(space=space)
+    workspace = BankDistanceWorkspace(
+        entries=tuple(
+            BankEntry(candidate=(float(index),) * 4, value=0.0) for index in range(128)
+        ),
+        diversity_metric=metric,
+    )
+
+    assert workspace.distances_to_candidate((64.0,) * 4) == (0.75,) * 128
 
 
 def test_rebase_preserves_old_and_new_answers_after_late_cache_misses() -> None:
