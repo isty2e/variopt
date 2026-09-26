@@ -57,11 +57,14 @@ execution uses the coordinator-owned kernel path.
 
 ## Supported request-local placement
 
+The table describes the development version. The `0.2.0` limitation is noted
+below.
+
 | Evaluator and execution model | Placement |
 | --- | --- |
 | `SequentialEvaluator`, `sequential` or `sync_batch` | Episode runs inline in the evaluator |
 | `JoblibEvaluator` with threading, `sequential` or `sync_batch` | Episode may run in a Joblib worker |
-| `JoblibEvaluator` with loky, `sequential` or `sync_batch` | 0.2.0 cannot return refinement-bearing episode successes |
+| `JoblibEvaluator` with loky, `sequential` or `sync_batch` | Episode may run in a Joblib process, including refinement-bearing results |
 | `MpiEvaluator`, `sync_batch` | Coordinator fallback |
 | `AsyncJoblibEvaluator`, `exact_async` | Unsupported; study-level exact async requires `DirectKernel` |
 | `stale_async` | Unsupported; the current study path requires `DirectKernel` |
@@ -70,9 +73,17 @@ The Joblib threading backend shares the exact `Problem` instance across
 workers, so the evaluation protocol must be thread-safe. The loky backend
 crosses a process serialization boundary. The problem, objective, kernel,
 candidate, proposal-local context, and returned payload must be serializable.
-In 0.2.0, loky result transport also fails when a request-local success carries
-`CandidateRefinement`; use threading for built-in episodes that may refine a
-candidate.
+
+Both `problem_transport="per_request"` and `"worker_session"` support
+refinement-bearing results in the development version.
+
+!!! warning "0.2.0 process-result limitation"
+
+    The refinement transport fix is not yet released. In `0.2.0`, `loky` can
+    fail to deserialize request-local successes carrying `CandidateRefinement`,
+    including results with large integer or floating-point candidates. Use
+    threading for these episodes on `0.2.0`; ordinary objective evaluation with
+    `loky` is unaffected.
 
 ## Hard-budget accounting
 
@@ -111,6 +122,12 @@ Moving an eligible episode to an evaluator preserves:
 - inner failure summaries and terminal status in `KernelDiagnostics`
 - original proposal identity
 
+After worker execution, the coordinator independently validates request and
+refinement alignment with the problem space's candidate-equality contract,
+then rebinds that predicate before materialization and assimilation. Process
+transport preserves prior alignment evidence but does not replace this check
+or serialize the equality callable with each success.
+
 An objective exception that is successfully recorded is data, not a backend
 failure. An episode may return a successful top-level attempt with failed inner
 trials summarized in diagnostics, or an `EvaluationFailure` when no trial
@@ -121,9 +138,7 @@ remain hard execution failures.
 
 Stochastic built-in episodes use a deterministic proposal-local
 `RandomStateSnapshot` derived by the run method. Worker scheduling and
-completion order do not select the random stream. The coordinator rebinds
-candidate-equality validation after worker execution so process transport does
-not weaken refinement checks.
+completion order do not select the random stream.
 
 Durable checkpointing currently serializes CSA run-method state only. It does
 not serialize reports, evaluator workers, live episode reservations, or async

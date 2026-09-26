@@ -72,12 +72,44 @@ result, final_state = study.optimize(
 
 `batch_size=1` is supported but exposes no proposal-level parallelism.
 
-!!! warning "Process-backend limitation in 0.2.0"
+### Use process workers in the development version
 
-    Use the threading backend for built-in local-search episodes that can return
-    `CandidateRefinement`. In 0.2.0, loky cannot deserialize a refinement-bearing
-    request-local success. This limitation concerns episode result transport;
-    ordinary Joblib objective evaluation remains available with loky.
+The development version supports refinement-bearing episodes with `loky` in
+both `problem_transport="per_request"` and `"worker_session"` modes. For example,
+replace the threading study above with:
+
+```python
+study = Study(
+    problem=problem,
+    run_method=optimizer,
+    kernel=StructuredHillClimbKernel(max_steps=8),
+    evaluator=JoblibEvaluator(
+        n_jobs=4,
+        backend="loky",
+        problem_transport="worker_session",
+    ),
+)
+
+result, final_state = study.optimize(
+    max_evaluations=200,
+    batch_size=8,
+    execution_model=SYNC_BATCH_EXECUTION_MODEL,
+)
+```
+
+Omit `problem_transport` to use the default `"per_request"` mode. See
+[Reuse a Problem in Joblib Workers](reuse-a-problem-in-joblib-workers.md) for
+the lifetime and mutability constraints of `"worker_session"`.
+
+!!! warning "0.2.0 requires a workaround"
+
+    The fix above has not yet been released. In `0.2.0`, `loky` can fail to
+    deserialize episode results carrying `CandidateRefinement`, including
+    results with large integer or floating-point candidates. Use
+    `backend="threading"` for these episodes on `0.2.0`. Ordinary Joblib objective
+    evaluation with `loky` is unaffected.
+
+## Limit SciPy objective calls
 
 For SciPy local search, cap objective calls separately from optimizer
 iterations:
