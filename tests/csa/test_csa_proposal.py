@@ -2036,6 +2036,38 @@ class CSAProposalStateTests:
             mutated_leaf_paths=(("x",),),
         )
 
+    @pytest.mark.parametrize("adaptation_enabled", [False, True])
+    def test_mutation_family_weights_reject_empty_distribution(
+        self, adaptation_enabled: bool
+    ) -> None:
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(enabled=adaptation_enabled)
+        )
+
+        with pytest.raises(ValueError, match="family must not be empty"):
+            mutation_family_weights(state=state, family=())
+
+    @pytest.mark.parametrize("adaptation_enabled", [False, True])
+    def test_empty_mutation_schedule_does_not_consume_randomness(
+        self, adaptation_enabled: bool
+    ) -> None:
+        state = CSAProposalState.from_policy(
+            CSAProposalPolicy(enabled=adaptation_enabled)
+        )
+        sampled_random_state = np.random.RandomState(31)
+        control_random_state = np.random.RandomState(31)
+
+        assert (
+            sample_mutation_family_indices(
+                state=state, family=(), random_state=sampled_random_state
+            )
+            == ()
+        )
+        np.testing.assert_array_equal(
+            sampled_random_state.random_sample(16),
+            control_random_state.random_sample(16),
+        )
+
     def test_mutation_family_weights_prefer_successful_family(self) -> None:
         family = (
             CSAPerturbationSpec(IdentityMutation(), count=1),

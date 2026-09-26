@@ -8,6 +8,12 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
+### Fixed
+
+- CSA generation tracing no longer fails when a perturbation schedule has no
+  mutation family. Regular-only, initial-only, and combined regular/initial
+  schedules can now be traced without changing their proposals or RNG state.
+
 ## [0.2.0] - 2026-07-29
 
 ### Breaking
