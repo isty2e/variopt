@@ -8,6 +8,12 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
+### Changed
+
+- CSA bank updates reuse unchanged distance-cache rows instead of copying all
+  cached pairs after each admission. Retained bank snapshots, search decisions,
+  and checkpoint formats are unchanged.
+
 ### Breaking
 
 - Replaced `CSAOptimizer.propose_candidate(state)` with `emit_proposal(state)`.

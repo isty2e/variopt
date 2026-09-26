@@ -466,8 +466,8 @@ def admit_full_bank_observation(
         admitted_distances = entry_distances
         if len(next_bank.entries) == len(entry_distances) + 1:
             admitted_distances = (*entry_distances, 0.0)
-        # The workspace already stores symmetric pair keys; these validated
-        # trial-to-bank distances become bank-pair distances after admission.
+        # Validated trial-to-bank distances become symmetric bank-pair
+        # distances after admission, without another metric evaluation.
         rebased_workspace.seed_entry_distances(
             entry_index=admitted_index,
             distances=admitted_distances,
