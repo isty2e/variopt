@@ -64,7 +64,6 @@ from .engine import (
     apply_pending_boundary_action,
     apply_tell,
     commit_materialized_generation,
-    dequeue_generation_candidate,
     materialize_generation,
     plan_next_ask,
 )
@@ -642,21 +641,17 @@ class CSAOptimizer(
         issued_provenance: list[ProposalProvenance] = []
         for _ in range(batch_size):
             (
-                candidate,
+                proposal,
                 tracks_generation,
                 planned_attribution,
                 engine_state,
-            ) = self.propose_candidate(engine_state)
-            proposal_id, engine_state = engine_state.allocate_proposal_id()
-            proposal = Proposal(candidate=candidate, proposal_id=proposal_id)
-            engine_state = engine_state.issue_proposal(
-                proposal,
-                tracks_generation=tracks_generation,
-            )
+            ) = self.emit_proposal(engine_state)
             if engine_state.proposal_state.policy.enabled:
                 if planned_attribution is None:
                     msg = "enabled proposal adaptation requires explicit provenance"
                     raise RuntimeError(msg)
+                proposal_id = proposal.proposal_id
+                assert proposal_id is not None
                 issued_provenance.append(
                     bind_proposal_provenance(
                         proposal_id=proposal_id,
@@ -1020,16 +1015,16 @@ class CSAOptimizer(
             return None
         return tuple(contexts)
 
-    def propose_candidate(
+    def emit_proposal(
         self,
         state: CSAEngineState[CandidateT],
     ) -> tuple[
-        CandidateT,
+        Proposal[CandidateT],
         bool,
         PlannedProposalProvenance | None,
         CSAEngineState[CandidateT],
     ]:
-        """Produce one CSA candidate and the advanced engine state.
+        """Issue one proposal and return the state that already tracks it.
 
         Parameters
         ----------
@@ -1038,15 +1033,25 @@ class CSAOptimizer(
 
         Returns
         -------
-        tuple[CandidateT, bool, PlannedProposalProvenance | None, CSAEngineState[CandidateT]]
-            Candidate, generation-tracking flag, planned provenance when
+        tuple[Proposal[CandidateT], bool, PlannedProposalProvenance | None, CSAEngineState[CandidateT]]
+            Issued proposal, generation-tracking flag, planned provenance when
             adaptation is enabled, and the advanced immutable engine state.
+            The flag tells ``ask`` to stop at the end of a generated child pool.
 
         Raises
         ------
         RuntimeError
             Raised when the engine is exhausted or blocked on a pending
             lifecycle boundary action.
+
+        Notes
+        -----
+        Overrides must allocate a unique proposal ID and register the returned
+        proposal in the returned state's pending registry. Generated proposals
+        must also advance the queue and register their ID in generation runtime.
+        Keep the input state immutable and preserve its RNG snapshot. Return
+        planned provenance without binding it: ``ask`` registers provenance
+        only after the whole batch has been assembled.
         """
         engine_state = state
         if self.is_exhausted(engine_state):
@@ -1091,8 +1096,12 @@ class CSAOptimizer(
                 self.sample_candidate,
             )
             self.space.validate(candidate)
-            return (
+            proposal, next_engine_state = engine_state.issue_sampled_proposal(
                 candidate,
+                random_state=next_random_state,
+            )
+            return (
+                proposal,
                 False,
                 (
                     PlannedNonAdaptiveProposalAttribution(
@@ -1101,7 +1110,7 @@ class CSAOptimizer(
                     if engine_state.proposal_state.policy.enabled
                     else None
                 ),
-                engine_state.replace_random_state(next_random_state),
+                next_engine_state,
             )
 
         if ask_plan.kind == "materialize_generation":
@@ -1116,24 +1125,19 @@ class CSAOptimizer(
                     ),
                 )
             )
-            generated_candidate, next_engine_state = commit_materialized_generation(
-                engine_state.replace_random_state(next_random_state),
+            engine_state = commit_materialized_generation(
+                engine_state,
                 materialized_generation,
-            )
-            return (
-                generated_candidate.candidate,
-                True,
-                generated_candidate.planned_attribution,
-                next_engine_state,
+                random_state=next_random_state,
             )
 
-        generated_candidate, next_engine_state = dequeue_generation_candidate(
-            engine_state
+        proposal, planned_attribution, next_engine_state = (
+            engine_state.issue_generation_proposal()
         )
         return (
-            generated_candidate.candidate,
+            proposal,
             True,
-            generated_candidate.planned_attribution,
+            planned_attribution,
             next_engine_state,
         )
 

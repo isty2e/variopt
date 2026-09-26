@@ -1022,9 +1022,10 @@ class CSAEngineCheckpointTests:
         assert "refinement" not in repr(snapshot).lower()
 
     def test_rejects_checkpoint_when_pending_proposals_exist(self) -> None:
-        state = build_populated_engine_state().issue_proposal(
-            Proposal(candidate=7, proposal_id="csa-12"),
-            tracks_generation=False,
+        state = build_populated_engine_state()
+        _, state = state.issue_sampled_proposal(
+            7,
+            random_state=state.random_state,
         )
 
         with pytest.raises(ValueError, match="pending proposal registry"):

@@ -24,6 +24,7 @@ from ..banking.clustering.policy import CSAClusteringPolicy
 from ..banking.growth.policy import CSABankGrowthPolicy
 from ..generation.proposal.policy import CSAProposalPolicy
 from ..generation.proposal.state.aggregate import CSAProposalState
+from ..generation.proposal.state.attribution import PlannedProposalProvenance
 from ..generation.state import GenerationRuntimeState
 from ..progression.state import CSAProgressionState
 from ..scoring.acceptance import CSAAcceptancePolicy
@@ -363,23 +364,40 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
             proposal_index=proposal_index,
         )
 
-    def allocate_proposal_id(self, *, prefix: str = "csa-") -> tuple[str, Self]:
-        """Return one new proposal id together with the advanced engine state.
+    def issue_sampled_proposal(
+        self,
+        candidate: CandidateT,
+        *,
+        random_state: RandomStateSnapshot,
+    ) -> tuple[Proposal[CandidateT], Self]:
+        """Issue an initial-bank or refresh sample with its advanced RNG snapshot.
 
         Parameters
         ----------
-        prefix : str, default=\"csa-\"
-            Prefix used while formatting the proposal id.
+        candidate : CandidateT
+            Sample already validated by the optimizer's search space.
+        random_state : RandomStateSnapshot
+            RNG snapshot after sampling this candidate.
 
         Returns
         -------
-        tuple[str, Self]
-            Allocated proposal id and engine state with the counter advanced.
+        tuple[Proposal[CandidateT], Self]
+            Proposal and state with its ID allocated, pending entry registered,
+            and RNG snapshot replaced. Generation tracking is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If the next proposal ID is already pending.
         """
-        proposal_id = f"{prefix}{self.proposal_index}"
-        return proposal_id, replace(
+        proposal = Proposal(
+            candidate=candidate, proposal_id=f"csa-{self.proposal_index}"
+        )
+        return proposal, replace(
             self,
             proposal_index=self.proposal_index + 1,
+            pending_proposals=self.pending_proposals.add(proposal),
+            random_state=random_state,
         )
 
     def replace_random_state(self, random_state: RandomStateSnapshot) -> Self:
@@ -397,40 +415,38 @@ class CSAEngineState(FrozenGenericSlotsCompat, Generic[CandidateT]):
         """
         return replace(self, random_state=random_state)
 
-    def issue_proposal(
+    def issue_generation_proposal(
         self,
-        proposal: Proposal[CandidateT],
-        *,
-        tracks_generation: bool,
-    ) -> Self:
-        """Return an engine state that records one issued proposal.
-
-        Parameters
-        ----------
-        proposal : Proposal[CandidateT]
-            Proposal being issued to the evaluator boundary.
-        tracks_generation : bool
-            Whether the proposal should also be registered in generation
-            runtime state.
+    ) -> tuple[Proposal[CandidateT], PlannedProposalProvenance | None, Self]:
+        """Issue the next queued child without an intermediate untracked state.
 
         Returns
         -------
-        Self
-            Engine state with the proposal added to pending proposals and, when
-            requested, generation tracking.
+        tuple[Proposal[CandidateT], PlannedProposalProvenance | None, Self]
+            Proposal, planned provenance, and state with the queue advanced,
+            ID allocated, and both pending registries updated. The optimizer
+            binds provenance after assembling the whole ask batch.
+
+        Raises
+        ------
+        RuntimeError
+            If the generation queue is empty.
+        ValueError
+            If the next proposal ID is already pending.
         """
-        next_generation_state = self.generation_state
-        if tracks_generation:
-            proposal_id = proposal.proposal_id
-            assert proposal_id is not None
-            next_generation_state = self.generation_state.register_proposal(proposal_id)
+        proposal_id = f"csa-{self.proposal_index}"
+        generated, next_generation_state = self.generation_state.issue_next(proposal_id)
+        proposal = Proposal(candidate=generated.candidate, proposal_id=proposal_id)
 
-        next_pending_proposals = self.pending_proposals.add(proposal)
-
-        return replace(
-            self,
-            pending_proposals=next_pending_proposals,
-            generation_state=next_generation_state,
+        return (
+            proposal,
+            generated.planned_attribution,
+            replace(
+                self,
+                proposal_index=self.proposal_index + 1,
+                pending_proposals=self.pending_proposals.add(proposal),
+                generation_state=next_generation_state,
+            ),
         )
 
     def consume_pending_proposals(self, proposal_ids: AbstractSet[str]) -> Self:

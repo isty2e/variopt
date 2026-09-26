@@ -195,23 +195,10 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
         return type(self)(queue=queue)
 
-    def dequeue_candidate(self) -> tuple[GeneratedCandidate[CandidateT], Self]:
-        """Return the next queued candidate and the updated runtime.
-
-        Returns
-        -------
-        tuple[GeneratedCandidate[CandidateT], Self]
-            Head candidate and runtime state with the remaining queue.
-        """
-        candidate, next_queue = self.queue.dequeue()
-        return candidate, type(self)(
-            queue=next_queue,
-            pending_proposal_ids=self.pending_proposal_ids,
-            buffered_evaluations=self.buffered_evaluations,
-        )
-
-    def register_proposal(self, proposal_id: str) -> Self:
-        """Return a runtime that tracks an issued proposal from the queue.
+    def issue_next(
+        self, proposal_id: str
+    ) -> tuple[GeneratedCandidate[CandidateT], Self]:
+        """Dequeue one child and track its issued proposal in the same transition.
 
         Parameters
         ----------
@@ -220,11 +207,23 @@ class GenerationRuntimeState(FrozenGenericSlotsCompat, Generic[CandidateT]):
 
         Returns
         -------
-        Self
-            Runtime state with ``proposal_id`` added to the pending set.
+        tuple[GeneratedCandidate[CandidateT], Self]
+            Queued child and runtime with its queue advanced and proposal tracked.
+
+        Raises
+        ------
+        RuntimeError
+            If the queue is empty.
+        ValueError
+            If ``proposal_id`` is already pending in this generation.
         """
-        return type(self)(
-            queue=self.queue,
+        if proposal_id in self.pending_proposal_ids:
+            msg = "generation proposal id is already pending"
+            raise ValueError(msg)
+
+        candidate, next_queue = self.queue.dequeue()
+        return candidate, type(self)(
+            queue=next_queue,
             pending_proposal_ids=self.pending_proposal_ids | {proposal_id},
             buffered_evaluations=self.buffered_evaluations,
         )
