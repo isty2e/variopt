@@ -13,6 +13,9 @@ format. Stability guarantees for the public surface are documented in the
 - CSA bank updates reuse unchanged distance-cache rows instead of copying all
   cached pairs after each admission. Retained bank snapshots, search decisions,
   and checkpoint formats are unchanged.
+- CSA reuses crowding counts within a bank-update batch and updates only pairs
+  affected by changed slots when the cutoff is unchanged. Initial queries and
+  cutoff changes still scan all pairs; niche-score calculations are unchanged.
 
 ### Breaking
 

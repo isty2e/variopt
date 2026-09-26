@@ -85,6 +85,29 @@ class _DistanceRow:
     distances: dict[int, float] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class _CrowdingSnapshot:
+    """Complete counts and numeric pair facts at one cutoff and row alignment."""
+
+    distance_cutoff: float
+    rows: tuple[_DistanceRow, ...]
+    counts: tuple[int, ...]
+
+    def are_neighbors(self, left_index: int, right_index: int) -> bool:
+        """Read an old neighbor relation, excluding subsequently appended slots."""
+        if right_index >= len(self.rows):
+            return False
+
+        left_row = self.rows[left_index]
+        right_row = self.rows[right_index]
+        # Match distance(): the newer endpoint owns the canonical ordered pair.
+        if left_row.revision >= right_row.revision:
+            distance = left_row.distances[right_index]
+        else:
+            distance = right_row.distances[left_index]
+        return distance < self.distance_cutoff
+
+
 class BankDistanceWorkspace(Generic[CandidateT]):
     """Operation-local pairwise distance workspace for one bank snapshot.
 
@@ -108,17 +131,22 @@ class BankDistanceWorkspace(Generic[CandidateT]):
     endpoint row (the lower index breaks revision ties), so replacing one row
     invalidates its old pairs without scanning other rows. Shared rows only
     memoize missing distances for unchanged candidates; seeding replaces a row
-    rather than overwriting shared values. Each workspace retains at most one
-    row per entry, with no references to prior workspaces or retired candidates.
+    rather than overwriting shared values. Crowding counts retain one previous
+    numeric row alignment for lazy updates at the same cutoff, without retaining
+    prior workspaces or retired candidates. Cold queries and cutoff changes
+    still visit every pair. Counts are local to this workspace; niche-score
+    summaries are not cached because their trial-adjusted scores can change.
     """
 
     entries: tuple[CandidateEntry[CandidateT], ...]
     diversity_metric: DiversityMetric[CandidateT]
     _rows: list[_DistanceRow]
     _revision: int
+    _crowding_snapshot: _CrowdingSnapshot | None
     compiled_distance_view: CompiledStructuredDistanceView[CandidateT] | None
 
     __slots__: ClassVar[tuple[str, ...]] = (
+        "_crowding_snapshot",
         "_revision",
         "_rows",
         "compiled_distance_view",
@@ -138,6 +166,7 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         self.diversity_metric = diversity_metric
         self._rows = []
         self._revision = 0
+        self._crowding_snapshot = None
         candidates = tuple(entry.candidate for entry in self.entries)
         if compiled_distance_view is not None:
             if (
@@ -204,6 +233,7 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             else _DistanceRow(workspace._revision)
             for index, entry in enumerate(workspace.entries)
         ]
+        workspace._crowding_snapshot = self._crowding_snapshot
         return workspace
 
     def distance(self, left_index: int, right_index: int) -> float:
@@ -392,7 +422,7 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         self._rows[entry_index] = _DistanceRow(self._revision, seeded_distances)
 
     def crowding_counts(self, *, distance_cutoff: float) -> tuple[int, ...]:
-        """Count near neighbors for each entry using cached pair distances.
+        """Count near neighbors, updating only changed pairs at the same cutoff.
 
         Parameters
         ----------
@@ -414,14 +444,64 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             msg = "distance_cutoff must be non-negative"
             raise ValueError(msg)
 
-        counts = [0] * len(self.entries)
-        for left_index in range(len(self.entries) - 1):
-            for right_index in range(left_index + 1, len(self.entries)):
-                if self.distance(left_index, right_index) < distance_cutoff:
-                    counts[left_index] += 1
-                    counts[right_index] += 1
+        entry_count = len(self.entries)
+        if entry_count < 2:
+            return (0,) * entry_count
 
-        return tuple(counts)
+        snapshot = self._crowding_snapshot
+        if snapshot is not None and snapshot.distance_cutoff == distance_cutoff:
+            changed_indices = tuple(
+                index
+                for index, row in enumerate(self._rows)
+                if index >= len(snapshot.rows) or row is not snapshot.rows[index]
+            )
+            if not changed_indices:
+                return snapshot.counts
+            counts = self._updated_crowding_counts(snapshot, changed_indices)
+        else:
+            counts = [0] * entry_count
+            for left_index in range(entry_count - 1):
+                for right_index in range(left_index + 1, entry_count):
+                    if self.distance(left_index, right_index) < distance_cutoff:
+                        counts[left_index] += 1
+                        counts[right_index] += 1
+
+        # Publish only complete counts; a failed distance query is retryable.
+        result = tuple(counts)
+        self._crowding_snapshot = _CrowdingSnapshot(
+            distance_cutoff=distance_cutoff,
+            rows=tuple(self._rows),
+            counts=result,
+        )
+        return result
+
+    def _updated_crowding_counts(
+        self,
+        snapshot: _CrowdingSnapshot,
+        changed_indices: tuple[int, ...],
+    ) -> list[int]:
+        """Apply each changed pair once while preserving distance-query order."""
+        entry_count = len(self.entries)
+        counts = [*snapshot.counts, *([0] * (entry_count - len(snapshot.counts)))]
+        changed_set = frozenset(changed_indices)
+        for left_index in range(entry_count - 1):
+            right_indices = (
+                range(left_index + 1, entry_count)
+                if left_index in changed_set
+                else changed_indices
+            )
+            for right_index in right_indices:
+                if right_index <= left_index:
+                    continue
+                was_neighbor = snapshot.are_neighbors(left_index, right_index)
+                is_neighbor = (
+                    self.distance(left_index, right_index) < snapshot.distance_cutoff
+                )
+                change = int(is_neighbor) - int(was_neighbor)
+                counts[left_index] += change
+                counts[right_index] += change
+
+        return counts
 
 
 def nearest_entry(
