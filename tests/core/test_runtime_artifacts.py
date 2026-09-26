@@ -43,6 +43,8 @@ from variopt.artifacts import (
     materialize_success_record,
     materialize_success_records,
 )
+from variopt.artifacts.alignment import validate_aligned_attempts
+from variopt.artifacts.attempts import EvaluationSuccessPickleState
 from variopt.artifacts.records import RequestAlignedEvaluationRecord
 from variopt.kernel import DirectKernel
 
@@ -106,6 +108,20 @@ class EvaluationAttemptBatchSubclass(EvaluationAttemptBatch[int, ObservationPayl
         ],
     ) -> None:
         super().__init__(attempts=attempts)
+
+
+class IntRecordSuccessPickleHooks(Protocol):
+    """Dynamically installed hooks for request-aligned success transport tests."""
+
+    def __getstate__(self) -> EvaluationSuccessPickleState[int, LabelRecord]:
+        """Return the success's transport state."""
+        ...
+
+    def __setstate__(
+        self, state: EvaluationSuccessPickleState[int, LabelRecord]
+    ) -> None:
+        """Restore the success's transport state."""
+        ...
 
 
 class TerminalSurfacePickleHooks(Protocol):
@@ -948,6 +964,237 @@ class RuntimeArtifactsTests:
         assert projected.kernel_diagnostics is not None
         assert projected.kernel_diagnostics.failed_attempt_count == 1
         assert revalidated.refinement is not projected.refinement
+
+    @pytest.mark.parametrize("protocol", [4, 5])
+    @pytest.mark.parametrize("candidate", [2, 1000, 2.5])
+    def test_evaluation_success_pickle_preserves_scalar_refinement(
+        self, candidate: float, protocol: int
+    ) -> None:
+        success = EvaluationSuccess[float, ObservationPayload](
+            request=EvaluationRequest(
+                proposal=Proposal(candidate=candidate, proposal_id="p-1")
+            ),
+            payload=make_observation_payload(),
+            evaluation_count=3,
+            refinement=CandidateRefinement(
+                source_candidate=candidate + 1,
+                refined_candidate=candidate,
+                changed_leaf_paths=((),),
+            ),
+            candidate_equal=lambda left_candidate, right_candidate: (
+                left_candidate == right_candidate
+            ),
+        )
+
+        restored = cast(
+            EvaluationSuccess[float, ObservationPayload],
+            pickle.loads(pickle.dumps(success, protocol=protocol)),
+        )
+
+        assert restored == success
+        assert type(restored.candidate) is type(candidate)
+        assert replace(restored, evaluation_count=4).evaluation_count == 4
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = replace(
+                restored,
+                refinement=CandidateRefinement(
+                    source_candidate=candidate + 1,
+                    refined_candidate=candidate + 2,
+                ),
+            )
+
+        with pytest.raises(ValueError, match="refined_candidate"):
+            _ = replace(
+                restored,
+                refinement=CandidateRefinement(
+                    source_candidate=candidate + 1,
+                    refined_candidate=candidate + 2,
+                ),
+                candidate_equal=lambda left_candidate, right_candidate: (
+                    left_candidate == right_candidate
+                ),
+            )
+
+        result = RunResult.from_successes(successes=(success,))
+        restored_result = cast(
+            RunResult[float],
+            pickle.loads(pickle.dumps(result, protocol=protocol)),
+        )
+        assert restored_result == result
+        assert restored_result.refinements == (success.refinement,)
+
+    @pytest.mark.parametrize("protocol", [4, 5])
+    def test_evaluation_success_pickle_preserves_scalar_payload_source_alignment(
+        self, protocol: int
+    ) -> None:
+        source_request = make_int_request(candidate=1001, proposal_id="p-1")
+        refined_request = make_int_request(candidate=1000, proposal_id="p-1")
+        payload = LabelRecord(
+            request=source_request, candidate=refined_request.candidate, label="refined"
+        )
+        success = EvaluationSuccess(
+            request=refined_request,
+            payload=payload,
+            refinement=CandidateRefinement(
+                source_candidate=source_request.candidate,
+                refined_candidate=int("1000"),
+            ),
+            candidate_equal=lambda left_candidate, right_candidate: (
+                left_candidate == right_candidate
+            ),
+        )
+
+        restored = cast(
+            EvaluationSuccess[int, LabelRecord],
+            pickle.loads(pickle.dumps(success, protocol=protocol)),
+        )
+
+        assert restored == success
+        assert replace(restored, evaluation_count=2).payload == payload
+        replacement_payload = replace(
+            restored.payload,
+            request=make_int_request(candidate=1002, proposal_id="p-1"),
+        )
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            _ = restored.with_payload(replacement_payload)
+        with pytest.raises(ValueError, match="source candidate"):
+            _ = restored.with_payload(
+                replacement_payload,
+                candidate_equal=lambda left_candidate, right_candidate: (
+                    left_candidate == right_candidate
+                ),
+            )
+
+    @pytest.mark.parametrize(
+        "changed_field",
+        ["request", "refinement", "payload_request", "source_evidence"],
+    )
+    def test_evaluation_success_pickle_rejects_replaced_alignment_owners(
+        self, changed_field: str
+    ) -> None:
+        request = make_int_request(candidate=1000, proposal_id="p-1")
+        source_request = make_int_request(candidate=1001, proposal_id="p-1")
+        refinement = CandidateRefinement(
+            source_candidate=source_request.candidate,
+            refined_candidate=request.candidate,
+        )
+        payload = LabelRecord(
+            request=source_request, candidate=request.candidate, label="refined"
+        )
+        success = EvaluationSuccess(
+            request=request,
+            payload=payload,
+            refinement=refinement,
+            candidate_equal=lambda left_candidate, right_candidate: (
+                left_candidate == right_candidate
+            ),
+        )
+        hooks = cast(IntRecordSuccessPickleHooks, success)
+        state = hooks.__getstate__()
+        validated_source_refinement = state[9]
+
+        if changed_field == "request":
+            request = make_int_request(candidate=1002, proposal_id="p-1")
+        elif changed_field == "refinement":
+            refinement = replace(refinement, refined_candidate=1002)
+        elif changed_field == "payload_request":
+            payload = replace(
+                payload,
+                request=make_int_request(candidate=1002, proposal_id="p-1"),
+            )
+        else:
+            validated_source_refinement = replace(refinement, source_candidate=1002)
+
+        stale_state = (
+            request,
+            payload,
+            state[2],
+            refinement,
+            state[4],
+            state[5],
+            state[6],
+            state[7],
+            state[8],
+            validated_source_refinement,
+        )
+        with pytest.raises(TypeError, match="candidate_equal is required"):
+            hooks.__setstate__(stale_state)
+
+    @pytest.mark.parametrize("evaluation_count", [-1, True])
+    def test_evaluation_success_pickle_revalidates_accounting(
+        self, evaluation_count: int
+    ) -> None:
+        request = make_int_request(candidate=1000, proposal_id="p-1")
+        success = EvaluationSuccess(
+            request=request,
+            payload=LabelRecord(request=request, candidate=1000, label="same"),
+            refinement=CandidateRefinement(
+                source_candidate=1001, refined_candidate=request.candidate
+            ),
+            candidate_equal=lambda left_candidate, right_candidate: (
+                left_candidate == right_candidate
+            ),
+        )
+        hooks = cast(IntRecordSuccessPickleHooks, success)
+        state = hooks.__getstate__()
+        invalid_state = (
+            state[0],
+            state[1],
+            evaluation_count,
+            state[3],
+            state[4],
+            state[5],
+            state[6],
+            state[7],
+            state[8],
+            state[9],
+        )
+
+        expected_error = TypeError if isinstance(evaluation_count, bool) else ValueError
+        with pytest.raises(expected_error, match="evaluation_count"):
+            hooks.__setstate__(invalid_state)
+
+    @pytest.mark.parametrize("expected_candidate", [1, 2])
+    def test_coordinator_revalidates_mutated_refinement_after_pickle(
+        self, expected_candidate: int
+    ) -> None:
+        request = EvaluationRequest(
+            proposal=Proposal(
+                candidate=SpaceOwnedEqualityCandidate(2), proposal_id="p-1"
+            )
+        )
+        success = EvaluationSuccess(
+            request=request,
+            payload=make_observation_payload(),
+            refinement=CandidateRefinement(
+                source_candidate=SpaceOwnedEqualityCandidate(1),
+                refined_candidate=SpaceOwnedEqualityCandidate(2),
+            ),
+            candidate_equal=space_owned_candidates_equal,
+        )
+        restored = cast(
+            EvaluationSuccess[SpaceOwnedEqualityCandidate, ObservationPayload],
+            pickle.loads(pickle.dumps(success)),
+        )
+        assert restored.refinement is not None
+        restored.refinement.refined_candidate.stable_id = 3
+
+        mismatch = (
+            "input request order" if expected_candidate == 1 else "refined_candidate"
+        )
+        with pytest.raises(ValueError, match=mismatch):
+            validate_aligned_attempts(
+                requests=(
+                    EvaluationRequest(
+                        proposal=Proposal(
+                            candidate=SpaceOwnedEqualityCandidate(expected_candidate),
+                            proposal_id="p-1",
+                        )
+                    ),
+                ),
+                attempts=EvaluationAttemptBatch(attempts=(restored,)),
+                candidate_equal=space_owned_candidates_equal,
+            )
 
     def test_evaluation_success_pickle_preserves_refined_record_payload_cache(
         self,
