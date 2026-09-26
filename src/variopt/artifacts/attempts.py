@@ -96,12 +96,12 @@ class _RequestAlignedPayloadShape(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class _UnvalidatedRefinementCandidate:
+class UnvalidatedRefinementCandidate:
     """Sentinel for refinement pairs that have not been revalidated."""
 
 
-_UNVALIDATED_REFINEMENT_CANDIDATE = _UnvalidatedRefinementCandidate()
-ValidatedRefinementCandidate: TypeAlias = CandidateT | _UnvalidatedRefinementCandidate
+_UNVALIDATED_REFINEMENT_CANDIDATE = UnvalidatedRefinementCandidate()
+ValidatedRefinementCandidate: TypeAlias = CandidateT | UnvalidatedRefinementCandidate
 EvaluationSuccessPickleState: TypeAlias = tuple[
     EvaluationRequest[CandidateT],
     PayloadT_co,
@@ -109,10 +109,10 @@ EvaluationSuccessPickleState: TypeAlias = tuple[
     CandidateRefinement[CandidateT] | None,
     KernelDiagnostics | None,
     bool,
-    ValidatedRefinementCandidate[CandidateT],
-    ValidatedRefinementCandidate[CandidateT],
-    ValidatedRefinementCandidate[CandidateT],
-    ValidatedRefinementCandidate[CandidateT],
+    EvaluationRequest[CandidateT] | None,
+    CandidateRefinement[CandidateT] | None,
+    EvaluationRequest[CandidateT] | None,
+    CandidateRefinement[CandidateT] | None,
 ]
 
 
@@ -1029,6 +1029,15 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT_c
 
     def _pickle_state(self) -> EvaluationSuccessPickleState[CandidateT, PayloadT_co]:
         """Return pickle state without serializing candidate equality callables."""
+        refinement_is_prevalidated = self._refinement_alignment_is_prevalidated()
+        validated_payload_request: EvaluationRequest[CandidateT] | None = None
+        if _is_request_aligned_payload_in_candidate_domain(
+            self.payload, self.request.candidate
+        ) and self._payload_source_alignment_is_prevalidated(self.payload.request):
+            validated_payload_request = self.payload.request
+
+        # Pickle memoizes the owners, but not every scalar candidate occurrence.
+        # Carry evidence for these owners, not scalar identity across processes.
         return (
             self.request,
             self.payload,
@@ -1036,10 +1045,10 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT_c
             self.refinement,
             self.kernel_diagnostics,
             self._candidate_equal_required,
-            self._validated_request_candidate,
-            self._validated_refined_candidate,
-            self._validated_payload_request_candidate,
-            self._validated_refinement_source_candidate,
+            self.request if refinement_is_prevalidated else None,
+            self.refinement if refinement_is_prevalidated else None,
+            validated_payload_request,
+            self.refinement if validated_payload_request is not None else None,
         )
 
     def _restore_pickle_state(
@@ -1054,40 +1063,50 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT_c
             refinement,
             kernel_diagnostics,
             candidate_equal_required,
-            validated_request_candidate,
-            validated_refined_candidate,
-            validated_payload_request_candidate,
-            validated_refinement_source_candidate,
+            validated_request,
+            validated_refinement,
+            validated_payload_request,
+            validated_source_refinement,
         ) = state
-        object.__setattr__(self, "__orig_class__", None)
-        object.__setattr__(self, "request", request)
-        object.__setattr__(self, "payload", payload)
-        object.__setattr__(self, "evaluation_count", evaluation_count)
-        object.__setattr__(self, "refinement", refinement)
-        object.__setattr__(self, "kernel_diagnostics", kernel_diagnostics)
-        object.__setattr__(self, "_candidate_equal", None)
-        object.__setattr__(self, "_candidate_equal_required", candidate_equal_required)
-        object.__setattr__(
-            self,
-            "_validated_request_candidate",
-            validated_request_candidate,
+        request_candidate: ValidatedRefinementCandidate[CandidateT] = (
+            _UNVALIDATED_REFINEMENT_CANDIDATE
         )
-        object.__setattr__(
-            self,
-            "_validated_refined_candidate",
-            validated_refined_candidate,
+        refined_candidate: ValidatedRefinementCandidate[CandidateT] = (
+            _UNVALIDATED_REFINEMENT_CANDIDATE
         )
-        object.__setattr__(
-            self,
-            "_validated_payload_request_candidate",
-            validated_payload_request_candidate,
+        payload_request_candidate: ValidatedRefinementCandidate[CandidateT] = (
+            _UNVALIDATED_REFINEMENT_CANDIDATE
         )
-        object.__setattr__(
-            self,
-            "_validated_refinement_source_candidate",
-            validated_refinement_source_candidate,
+        source_candidate: ValidatedRefinementCandidate[CandidateT] = (
+            _UNVALIDATED_REFINEMENT_CANDIDATE
         )
-        self._validate(candidate_equal=None)
+        if type(request) is EvaluationRequest and _is_candidate_refinement(refinement):
+            if validated_request is request and validated_refinement is refinement:
+                request_candidate = request.candidate
+                refined_candidate = refinement.refined_candidate
+
+            if (
+                _is_request_aligned_payload_in_candidate_domain(
+                    payload, request.candidate
+                )
+                and validated_payload_request is payload.request
+                and validated_source_refinement is refinement
+            ):
+                payload_request_candidate = payload.request.candidate
+                source_candidate = refinement.source_candidate
+
+        self.__init__(
+            request=request,
+            payload=payload,
+            evaluation_count=evaluation_count,
+            refinement=refinement,
+            kernel_diagnostics=kernel_diagnostics,
+            _candidate_equal_required=candidate_equal_required,
+            _validated_request_candidate=request_candidate,
+            _validated_refined_candidate=refined_candidate,
+            _validated_payload_request_candidate=payload_request_candidate,
+            _validated_refinement_source_candidate=source_candidate,
+        )
 
 
 def _success_from_scalar_observation(

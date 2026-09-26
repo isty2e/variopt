@@ -21,6 +21,16 @@ format. Stability guarantees for the public surface are documented in the
   hook makes issuance one operation. The `ask()`/`tell()` and checkpoint formats
   are unchanged.
 
+### Fixed
+
+- Joblib's `loky` backend can now return local-search refinements with large
+  integer or floating-point candidates without failing to deserialize them.
+  Restored successes retain alignment evidence without serializing candidate
+  equality callables; the coordinator still validates them before assimilation.
+- CSA generation tracing no longer fails when a perturbation schedule has no
+  mutation family. Regular-only, initial-only, and combined regular/initial
+  schedules can now be traced without changing their proposals or RNG state.
+
 ## [0.2.0] - 2026-07-29
 
 ### Breaking

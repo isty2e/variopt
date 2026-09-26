@@ -314,14 +314,17 @@ def materialize_generation(
 
     def snapshot_proposal_families_before() -> tuple[CSAProposalFamilyTrace, ...]:
         mutation_family = resolved_profile.perturbation_schedule.mutation_family
+        mutation_weights = (
+            mutation_family_weights(
+                state=engine_state.proposal_state,
+                family=mutation_family,
+            )
+            if mutation_family
+            else ()
+        )
         mutation_weights_by_key = {
             mutation_family_key(index): weight
-            for index, weight in enumerate(
-                mutation_family_weights(
-                    state=engine_state.proposal_state,
-                    family=mutation_family,
-                )
-            )
+            for index, weight in enumerate(mutation_weights)
         }
         family_stats_by_key = {
             family_stat.family_key: family_stat
