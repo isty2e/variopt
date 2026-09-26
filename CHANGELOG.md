@@ -8,6 +8,19 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
+### Breaking
+
+- Replaced `CSAOptimizer.propose_candidate(state)` with `emit_proposal(state)`.
+  Overrides now return `(proposal, tracks_generation, planned_provenance, state)`:
+  the first item is an issued `Proposal`, not a raw candidate. The returned state
+  must already contain its allocated ID and pending registration, plus queue
+  advancement and generation tracking for generated children. Leave provenance
+  binding to `ask()`, which still registers it at the end of the batch.
+  No compatibility shim is retained: the old hook exposed a dequeued but unissued
+  state and required separate ID-allocation and registration transitions. The new
+  hook makes issuance one operation. The `ask()`/`tell()` and checkpoint formats
+  are unchanged.
+
 ## [0.2.0] - 2026-07-29
 
 ### Breaking

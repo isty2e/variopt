@@ -264,30 +264,128 @@ class GenerationQueueTests:
         ) == [1, 2, 3]
 
 
+class GenerationIssuanceTests:
+    def test_issue_preserves_candidate_identity_and_buffered_feedback(self) -> None:
+        child = EqualityHostileCandidate()
+        generated = GeneratedCandidate(candidate=child, planned_attribution=None)
+        observation = Observation(
+            proposal=Proposal(candidate=child, proposal_id="csa-0"),
+            candidate=child,
+            value=1.0,
+            score=1.0,
+        )
+        feedback = (CSAProposalEvaluation.from_observation(observation),)
+        runtime = GenerationRuntimeState(
+            queue=GenerationQueue(candidates=(generated, generated)),
+            pending_proposal_ids=frozenset({"csa-1"}),
+            buffered_evaluations=feedback,
+        )
+
+        candidate, next_runtime = runtime.issue_next("csa-2")
+
+        assert candidate is generated
+        assert candidate.candidate is child
+        assert next_runtime.queue.candidates is runtime.queue.candidates
+        assert next_runtime.queue.head_index == 1
+        assert next_runtime.pending_proposal_ids == frozenset({"csa-1", "csa-2"})
+        assert next_runtime.buffered_evaluations is feedback
+        assert runtime.queue.head_index == 0
+        assert runtime.pending_proposal_ids == frozenset({"csa-1"})
+
+    def test_duplicate_id_does_not_consume_queue(self) -> None:
+        runtime = GenerationRuntimeState(
+            queue=GenerationQueue(candidates=(generated_candidate(7),)),
+            pending_proposal_ids=frozenset({"csa-0"}),
+        )
+
+        with pytest.raises(ValueError, match="already pending"):
+            runtime.issue_next("csa-0")
+
+        assert runtime.queue.head_index == 0
+        assert runtime.pending_proposal_ids == frozenset({"csa-0"})
+
+    def test_empty_queue_does_not_register_an_id(self) -> None:
+        runtime = GenerationRuntimeState[int](
+            pending_proposal_ids=frozenset({"csa-0"}),
+        )
+
+        with pytest.raises(RuntimeError, match="empty generation queue"):
+            runtime.issue_next("csa-1")
+
+        assert runtime.pending_proposal_ids == frozenset({"csa-0"})
+
+
 class CSAEngineStateTests:
     """Regression tests for CSAEngineState invariants and helpers."""
 
-    def test_allocate_proposal_id_advances_index(self) -> None:
+    def test_sample_issuance_commits_id_pending_and_rng_together(self) -> None:
         state = build_engine_state()
+        next_random_state = RandomStateSnapshot.from_seed(1)
 
-        proposal_id, next_state = state.allocate_proposal_id()
+        proposal, next_state = state.issue_sampled_proposal(
+            7,
+            random_state=next_random_state,
+        )
 
-        assert proposal_id == "csa-0"
+        assert proposal == Proposal(candidate=7, proposal_id="csa-0")
+        assert next_state.pending_proposals.get("csa-0") is proposal
+        assert next_state.random_state is next_random_state
+        assert next_state.generation_state is state.generation_state
         assert next_state.proposal_index == 1
         assert state.proposal_index == 0
+        assert state.pending_proposals.is_empty
+        assert state.random_state == RandomStateSnapshot.from_seed(0)
 
-    def test_issue_proposal_registers_pending_and_generation(self) -> None:
-        state = build_engine_state()
-        proposal = Proposal(candidate=7, proposal_id="csa-0")
+    def test_generation_issuance_advances_queue_and_both_registries(self) -> None:
+        generated = generated_candidate(7)
+        state = replace(
+            build_engine_state(),
+            proposal_index=41,
+            generation_state=GenerationRuntimeState(
+                queue=GenerationQueue(candidates=(generated,)),
+            ),
+        )
 
-        next_state = state.issue_proposal(proposal, tracks_generation=True)
+        proposal, planned, next_state = state.issue_generation_proposal()
 
-        assert next_state.pending_proposals.get("csa-0") == proposal
-        assert next_state.generation_state.pending_proposal_ids == frozenset({"csa-0"})
+        assert proposal.candidate is generated.candidate
+        assert proposal.proposal_id == "csa-41"
+        assert planned is generated.planned_attribution
+        assert next_state.proposal_index == 42
+        assert next_state.pending_proposals.get("csa-41") is proposal
+        assert next_state.generation_state.pending_proposal_ids == frozenset({"csa-41"})
+        assert next_state.generation_state.queue.is_empty
+        assert next_state.random_state is state.random_state
+        assert next_state.selection_state is state.selection_state
+        assert next_state.proposal_state is state.proposal_state
+        assert state.generation_state.queue.head_index == 0
+        assert state.pending_proposals.is_empty
+        assert state.proposal_index == 41
+
+    def test_pending_collision_leaves_generation_and_counter_unchanged(self) -> None:
+        state = replace(
+            build_engine_state(),
+            pending_proposals=CSAPendingProposals(
+                proposals=(Proposal(candidate=1, proposal_id="csa-0"),),
+            ),
+            generation_state=GenerationRuntimeState(
+                queue=GenerationQueue(candidates=(generated_candidate(7),)),
+            ),
+        )
+
+        with pytest.raises(ValueError, match="distinct proposal ids"):
+            state.issue_generation_proposal()
+
+        assert state.generation_state.queue.head_index == 0
+        assert state.generation_state.pending_proposal_ids == frozenset()
+        assert state.proposal_index == 0
+        assert len(state.pending_proposals.proposals) == 1
 
     def test_consume_pending_proposals_removes_registered_ids(self) -> None:
-        proposal = Proposal(candidate=7, proposal_id="csa-0")
-        state = build_engine_state().issue_proposal(proposal, tracks_generation=False)
+        initial_state = build_engine_state()
+        proposal, state = initial_state.issue_sampled_proposal(
+            7, random_state=initial_state.random_state
+        )
 
         next_state = state.consume_pending_proposals({"csa-0"})
 
@@ -297,17 +395,20 @@ class CSAEngineStateTests:
     def test_consume_failed_pending_proposals_removes_all_inflight_registries(
         self,
     ) -> None:
-        proposal = Proposal(candidate=7, proposal_id="csa-0")
         state = build_engine_state()
         state = replace(
             state,
+            generation_state=GenerationRuntimeState(
+                queue=GenerationQueue(candidates=(generated_candidate(7),)),
+            ),
             proposal_state=state.proposal_state.register_pending_attribution(
                 ProposalAttribution(
                     proposal_id="csa-0",
                     proposal_family_key="regular",
                 ),
             ),
-        ).issue_proposal(proposal, tracks_generation=True)
+        )
+        _, _, state = state.issue_generation_proposal()
 
         next_state = state.consume_failed_pending_proposals({"csa-0"})
 
@@ -405,7 +506,7 @@ class CSAAskEngineTests:
 
         assert plan == CSAAskPlan(kind="dequeue_generation")
 
-    def test_commit_materialized_generation_begins_pool_and_dequeues_first_candidate(
+    def test_commit_materialized_generation_preserves_first_child_until_issuance(
         self,
     ) -> None:
         state = build_engine_state()
@@ -420,17 +521,28 @@ class CSAAskEngineTests:
             trace_state=None,
         )
 
-        candidate, next_state = commit_materialized_generation(
+        random_state = RandomStateSnapshot.from_seed(5)
+        next_state = commit_materialized_generation(
             state,
             materialized_generation,
+            random_state=random_state,
         )
 
-        assert candidate.candidate == 11
-        assert next_state.generation_state.queue.candidates == (
-            generated_candidate(11),
-            generated_candidate(12),
+        assert (
+            next_state.generation_state.queue
+            is materialized_generation.generation_queue
         )
-        assert next_state.generation_state.queue.head_index == 1
+        assert next_state.generation_state.queue.head_index == 0
+        assert next_state.selection_state is materialized_generation.selection_state
+        assert next_state.random_state is random_state
+        assert next_state.pending_proposals is state.pending_proposals
+        assert next_state.proposal_index == state.proposal_index
+        assert not state.generation_state.is_active
+
+        proposal, _, issued_state = next_state.issue_generation_proposal()
+
+        assert proposal.candidate == 11
+        assert issued_state.generation_state.queue.head_index == 1
 
 
 def build_engine_state() -> CSAEngineState[int]:

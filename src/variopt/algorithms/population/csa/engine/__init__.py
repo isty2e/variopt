@@ -4,7 +4,6 @@ from .ask import (
     CSAAskPlan,
     CSAMaterializedGeneration,
     commit_materialized_generation,
-    dequeue_generation_candidate,
     materialize_generation,
     plan_next_ask,
 )
@@ -25,7 +24,6 @@ __all__ = [
     "apply_tell",
     "begin_stage_transition",
     "commit_materialized_generation",
-    "dequeue_generation_candidate",
     "materialize_generation",
     "plan_next_ask",
 ]

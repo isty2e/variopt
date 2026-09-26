@@ -10,6 +10,7 @@ from variopt.generic_runtime import FrozenGenericSlotsCompat
 from .....distance import require_valid_distance
 from .....diversity import DiversityMetric
 from .....operators import VariationOperator
+from .....randomness import RandomStateSnapshot
 from .....spaces import SearchSpace
 from .....spaces.projections import compile_homogeneous_numeric_subspace
 from .....spaces.structured import require_space_candidate_value
@@ -637,8 +638,10 @@ def materialize_generation(
 def commit_materialized_generation(
     engine_state: CSAEngineState[CandidateT],
     materialized_generation: CSAMaterializedGeneration[CandidateT],
-) -> tuple[GeneratedCandidate[CandidateT], CSAEngineState[CandidateT]]:
-    """Commit one materialized child pool and dequeue its first candidate.
+    *,
+    random_state: RandomStateSnapshot,
+) -> CSAEngineState[CandidateT]:
+    """Commit a child pool and its RNG snapshot before issuing any proposals.
 
     Parameters
     ----------
@@ -646,40 +649,28 @@ def commit_materialized_generation(
         Current CSA engine state.
     materialized_generation : CSAMaterializedGeneration[CandidateT]
         Materialized child pool ready for commit.
+    random_state : RandomStateSnapshot
+        RNG snapshot after materializing the child pool.
 
     Returns
     -------
-    tuple[GeneratedCandidate[CandidateT], CSAEngineState[CandidateT]]
-        First generated candidate together with the committed engine state.
+    CSAEngineState[CandidateT]
+        State with selection, generation queue, trace, and RNG committed.
+        Proposal IDs and pending registries are unchanged until issuance.
+
+    Raises
+    ------
+    RuntimeError
+        If another child pool is still active.
+    ValueError
+        If the materialized queue is empty.
     """
-    next_engine_state = replace(
+    return replace(
         engine_state,
+        random_state=random_state,
         selection_state=materialized_generation.selection_state,
         generation_state=engine_state.generation_state.begin(
             materialized_generation.generation_queue,
         ),
         trace_state=materialized_generation.trace_state,
-    )
-    return dequeue_generation_candidate(next_engine_state)
-
-
-def dequeue_generation_candidate(
-    engine_state: CSAEngineState[CandidateT],
-) -> tuple[GeneratedCandidate[CandidateT], CSAEngineState[CandidateT]]:
-    """Purely dequeue one already-generated candidate from the active pool.
-
-    Parameters
-    ----------
-    engine_state : CSAEngineState[CandidateT]
-        Current CSA engine state with an active generation queue.
-
-    Returns
-    -------
-    tuple[GeneratedCandidate[CandidateT], CSAEngineState[CandidateT]]
-        Next generated candidate and the updated engine state.
-    """
-    candidate, next_generation_state = engine_state.generation_state.dequeue_candidate()
-    return candidate, replace(
-        engine_state,
-        generation_state=next_generation_state,
     )
