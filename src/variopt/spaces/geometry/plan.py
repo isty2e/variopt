@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from math import isfinite, log
+from operator import index as integer_index
 from typing import Generic, Protocol, TypeVar
 
 import numpy as np
@@ -47,7 +48,7 @@ class EncodedStructuredCandidate:
 
 @dataclass(frozen=True, slots=True)
 class _EncodedCandidateBatch:
-    """Call-local matrices, each shaped (reference count, coordinate count)."""
+    """Matrices shaped (reference count, coordinate count), grouped by dtype."""
 
     real_values: NDArray[np.float64]
     integer_values: NDArray[np.int64]
@@ -79,6 +80,85 @@ class _EncodedCandidateBatch:
     @property
     def reference_count(self) -> int:
         return self.real_values.shape[0]
+
+    def as_readonly(self) -> "_EncodedCandidateBatch":
+        # Immutable backing prevents setflags(write=True), including on base views.
+        return type(self)(
+            real_values=np.frombuffer(
+                self.real_values.tobytes(), dtype=np.float64
+            ).reshape(self.real_values.shape),
+            integer_values=np.frombuffer(
+                self.integer_values.tobytes(), dtype=np.int64
+            ).reshape(self.integer_values.shape),
+            discrete_values=np.frombuffer(
+                self.discrete_values.tobytes(), dtype=np.int64
+            ).reshape(self.discrete_values.shape),
+        )
+
+    def take(self, rows: slice | NDArray[np.intp]) -> "_EncodedCandidateBatch":
+        return type(self)(
+            real_values=self.real_values[rows],
+            integer_values=self.integer_values[rows],
+            discrete_values=self.discrete_values[rows],
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class PackedStructuredReferences:
+    """Read-only coordinate matrices for one ordered encoding snapshot.
+
+    Parameters
+    ----------
+    encodings : tuple[EncodedStructuredCandidate, ...]
+        Nonempty encodings from one plan whose numeric range supports packing.
+        Use ``BuiltinStructuredGeometryPlan.pack_references`` to apply that gate.
+
+    Notes
+    -----
+    Arrays are derived from these encodings, never from a previous snapshot.
+    Pickle reconstructs them from the encodings to preserve immutable backing.
+    This projection is not an optimizer checkpoint format.
+    """
+
+    encodings: tuple[EncodedStructuredCandidate, ...] = field(repr=False)
+    _batch: _EncodedCandidateBatch = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        """Check plan alignment and materialize immutable coordinate arrays."""
+        if not self.encodings:
+            msg = "packed references must contain at least one encoding"
+            raise ValueError(msg)
+        if any(
+            encoding.plan_identity is not self.plan_identity
+            for encoding in self.encodings
+        ):
+            msg = "packed references must belong to one geometry plan"
+            raise ValueError(msg)
+        object.__setattr__(
+            self,
+            "_batch",
+            _EncodedCandidateBatch.from_encodings(self.encodings).as_readonly(),
+        )
+
+    @property
+    def plan_identity(self) -> StructuredGeometryPlanIdentity:
+        """Return the identity shared by every packed reference.
+
+        Returns
+        -------
+        StructuredGeometryPlanIdentity
+            Owning plan identity, retained from the encodings.
+        """
+        return self.encodings[0].plan_identity
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        type["PackedStructuredReferences"],
+        tuple[tuple[EncodedStructuredCandidate, ...]],
+    ]:
+        """Rebuild immutable arrays rather than restore writable ndarray state."""
+        return type(self), (self.encodings,)
 
 
 @dataclass(slots=True)
@@ -529,6 +609,112 @@ class BuiltinStructuredGeometryPlan(
             self._validate_encoding_alignment(reference)
         return self._squared_distances_to_many(candidate, references)
 
+    def pack_references(
+        self,
+        references: Sequence[EncodedStructuredCandidate],
+    ) -> PackedStructuredReferences | None:
+        """Pack a reusable snapshot when its size and numeric range admit batching.
+
+        Parameters
+        ----------
+        references : Sequence[EncodedStructuredCandidate]
+            Encodings produced by this plan, in snapshot order.
+
+        Returns
+        -------
+        PackedStructuredReferences or None
+            Immutable coordinate arrays, or None when scalar evaluation remains
+            preferable or array arithmetic cannot preserve the plan's semantics.
+
+        Raises
+        ------
+        ValueError
+            If any reference belongs to another geometry plan.
+        """
+        for reference in references:
+            self._validate_encoding_alignment(reference)
+        if not self.prefers_batched_distances(len(references)):
+            return None
+        return PackedStructuredReferences(tuple(references))
+
+    def squared_distances_to_packed(
+        self,
+        candidate: EncodedStructuredCandidate,
+        references: PackedStructuredReferences,
+        *,
+        reference_indices: Sequence[int] | None = None,
+    ) -> tuple[float, ...]:
+        """Query a packed snapshot without rebuilding its coordinate matrices.
+
+        Parameters
+        ----------
+        candidate : EncodedStructuredCandidate
+            Query encoding produced by this plan.
+        references : PackedStructuredReferences
+            Snapshot packed by this plan.
+        reference_indices : Sequence[int] or None, default=None
+            Ordered row selection, including duplicates. None selects every row.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Squared distances in selection order, using the same arithmetic as
+            ``squared_distances_to_many``. Small selections use scalar kernels.
+
+        Raises
+        ------
+        ValueError
+            If the candidate or packed snapshot belongs to another plan.
+        IndexError
+            If a selected row is outside the snapshot.
+        """
+        self._validate_encoding_alignment(candidate)
+        if references.plan_identity is not self.plan_identity:
+            msg = "packed references belong to a different geometry plan"
+            raise ValueError(msg)
+
+        indices = (
+            None
+            if reference_indices is None
+            else tuple(integer_index(index) for index in reference_indices)
+        )
+        reference_count = len(references.encodings)
+        if indices is not None and any(
+            index < 0 or index >= reference_count for index in indices
+        ):
+            msg = "distance indices must reference packed snapshot candidates"
+            raise IndexError(msg)
+        selected_count = reference_count if indices is None else len(indices)
+        if not self.prefers_batched_distances(selected_count):
+            return tuple(
+                self._kernel.squared_distance(candidate, references.encodings[index])
+                for index in (range(reference_count) if indices is None else indices)
+            )
+
+        distances: list[float] = []
+        batch_size = self._array_batch_size
+        with np.errstate(all="ignore"):
+            for start in range(0, selected_count, batch_size):
+                rows: slice | NDArray[np.intp]
+                if indices is None:
+                    rows = slice(start, start + batch_size)
+                else:
+                    selected = indices[start : start + batch_size]
+                    if all(
+                        index == selected[0] + offset
+                        for offset, index in enumerate(selected)
+                    ):
+                        rows = slice(selected[0], selected[-1] + 1)
+                    else:
+                        rows = np.asarray(selected, dtype=np.intp)
+                distances.extend(
+                    float(distance)
+                    for distance in self._kernel.squared_distances_to_batch(
+                        candidate, references._batch.take(rows)
+                    )
+                )
+        return tuple(distances)
+
     def pairwise_squared_distances(
         self,
         candidates: Sequence[EncodedStructuredCandidate],
@@ -574,12 +760,7 @@ class BuiltinStructuredGeometryPlan(
                 for reference in references
             )
 
-        value_count = (
-            self._real_value_count
-            + self._integer_value_count
-            + self._discrete_value_count
-        )
-        batch_size = max(1, min(256, 8192 // max(1, value_count)))
+        batch_size = self._array_batch_size
         reference_tuple = tuple(references)
         distances: list[float] = []
         # Match Python float arithmetic even when a caller enables NumPy warnings.
@@ -595,6 +776,15 @@ class BuiltinStructuredGeometryPlan(
                     )
                 )
         return tuple(distances)
+
+    @property
+    def _array_batch_size(self) -> int:
+        value_count = (
+            self._real_value_count
+            + self._integer_value_count
+            + self._discrete_value_count
+        )
+        return max(1, min(256, 8192 // max(1, value_count)))
 
     def _validate_encoding_alignment(
         self,

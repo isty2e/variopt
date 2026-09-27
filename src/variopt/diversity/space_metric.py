@@ -26,6 +26,7 @@ from ..spaces.geometry.contracts import StructuredSpaceGeometry
 from ..spaces.geometry.plan import (
     BuiltinStructuredGeometryPlan,
     EncodedStructuredCandidate,
+    PackedStructuredReferences,
     StructuredGeometryPlanIdentity,
     compile_builtin_geometry_plan,
 )
@@ -159,6 +160,49 @@ class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
         """
         ...
 
+    def pack_references(
+        self,
+        references: Sequence[EncodedStructuredCandidate],
+    ) -> PackedStructuredReferences | None:
+        """Build a read-only projection for a reusable reference snapshot.
+
+        Parameters
+        ----------
+        references : Sequence[EncodedStructuredCandidate]
+            Ordered encodings owned by this plan.
+
+        Returns
+        -------
+        PackedStructuredReferences or None
+            Packed snapshot, or None when scalar kernels remain preferable.
+        """
+        ...
+
+    def squared_distances_to_packed(
+        self,
+        candidate: EncodedStructuredCandidate,
+        references: PackedStructuredReferences,
+        *,
+        reference_indices: Sequence[int] | None = None,
+    ) -> tuple[float, ...]:
+        """Query aligned packed references in the supplied row order.
+
+        Parameters
+        ----------
+        candidate : EncodedStructuredCandidate
+            Query encoding owned by this plan.
+        references : PackedStructuredReferences
+            Packed snapshot owned by this plan.
+        reference_indices : Sequence[int] or None, default=None
+            Reference indices, allowing duplicates. None selects every row.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Squared distances in selection order.
+        """
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
@@ -177,14 +221,19 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
     -----
     The view is derived acceleration state. It must not be persisted as
     optimizer truth or shared across metrics with distinct geometry plans.
+    Eligible snapshots pack read-only coordinates once for repeated queries;
+    a changed candidate snapshot owns new arrays rather than retaining history.
     """
 
     plan: CandidateGeometryPlan[MetricCandidateT] = field(repr=False)
     candidates: tuple[MetricCandidateT, ...] = field(repr=False)
     encodings: tuple[EncodedStructuredCandidate, ...] = field(repr=False)
+    _packed_references: PackedStructuredReferences | None = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
-        """Validate candidate, encoding, and plan alignment.
+        """Validate alignment and prepare eligible snapshot-local packed arrays.
 
         Raises
         ------
@@ -201,6 +250,13 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
         ):
             msg = "compiled distance encodings must belong to the view plan"
             raise ValueError(msg)
+        object.__setattr__(
+            self,
+            "_packed_references",
+            self.plan.pack_references(self.encodings)
+            if self.plan.prefers_batched_distances(len(self.encodings))
+            else None,
+        )
 
     @classmethod
     def from_candidates(
@@ -252,7 +308,8 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
         -------
         CompiledStructuredDistanceView[MetricCandidateT]
             View aligned to ``candidates``. Encodings are retained only when the
-            index is not invalidated and candidate identity is unchanged.
+            index is not invalidated and candidate identity is unchanged. An
+            entirely unchanged candidate snapshot retains the existing view.
         """
         candidate_tuple = tuple(candidates)
         invalidated_index_set = frozenset(
@@ -268,6 +325,11 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
             )
             for index, candidate in enumerate(candidate_tuple)
         )
+        if len(encodings) == len(self.encodings) and all(
+            encoding is self.encodings[index]
+            for index, encoding in enumerate(encodings)
+        ):
+            return self
         return type(self)(
             plan=self.plan,
             candidates=candidate_tuple,
@@ -371,10 +433,19 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
         )
         distances = [0.0] * len(indices)
         if positions:
-            squared_distances = self.plan.squared_distances_to_many(
-                self.encodings[left_index],
-                tuple(self.encodings[indices[position]] for position in positions),
-            )
+            if self._packed_references is None:
+                squared_distances = self.plan.squared_distances_to_many(
+                    self.encodings[left_index],
+                    tuple(self.encodings[indices[position]] for position in positions),
+                )
+            else:
+                squared_distances = self.plan.squared_distances_to_packed(
+                    self.encodings[left_index],
+                    self._packed_references,
+                    reference_indices=tuple(
+                        indices[position] for position in positions
+                    ),
+                )
             for position, squared_distance in zip(
                 positions, squared_distances, strict=True
             ):
@@ -401,15 +472,19 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
             Distances aligned to :attr:`candidates`.
         """
         encoded_candidate = self.plan.encode_validated(candidate)
+        squared_distances = (
+            self.plan.squared_distances_to_many(encoded_candidate, self.encodings)
+            if self._packed_references is None
+            else self.plan.squared_distances_to_packed(
+                encoded_candidate, self._packed_references
+            )
+        )
         return tuple(
             _distance_from_compiled_squared_distance(
                 squared_distance=squared_distance,
                 leaf_count=self.plan.leaf_count,
             )
-            for squared_distance in self.plan.squared_distances_to_many(
-                encoded_candidate,
-                self.encodings,
-            )
+            for squared_distance in squared_distances
         )
 
 

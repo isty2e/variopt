@@ -10,6 +10,10 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- Large structured bank snapshots reuse read-only coordinate arrays across
+  distance queries instead of repacking references each time. Candidate changes
+  rebuild the arrays; small banks and unsupported numeric ranges keep their
+  existing paths. Distance arithmetic and checkpoint formats are unchanged.
 - Built-in structured distance plans batch larger queries with bounded NumPy
   arrays while preserving scalar arithmetic and composite sum order. Small
   queries and numeric ranges that cannot be represented safely retain the
