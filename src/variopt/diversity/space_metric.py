@@ -29,6 +29,11 @@ from ..spaces.geometry.plan import (
     StructuredGeometryPlanIdentity,
     compile_builtin_geometry_plan,
 )
+from ..spaces.geometry.scalar import (
+    CategoricalSpaceGeometry,
+    IntegerSpaceGeometry,
+    RealSpaceGeometry,
+)
 from ..spaces.types import SpaceBoundaryValue, SpaceCandidateValue
 from .base import DiversityMetric
 
@@ -36,6 +41,12 @@ BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
 MetricCandidateT = TypeVar("MetricCandidateT")
 PlanCandidateT_contra = TypeVar("PlanCandidateT_contra", contravariant=True)
+
+_SCALAR_QUERY_GEOMETRY_TYPES = (
+    RealSpaceGeometry,
+    IntegerSpaceGeometry,
+    CategoricalSpaceGeometry,
+)
 
 
 class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
@@ -564,6 +575,21 @@ class StructuredSpaceDiversityMetric(
         if geometry is None:
             return tuple(
                 self.distance(candidate, reference) for reference in references
+            )
+
+        # Subclasses may override the distance-parts contract independently.
+        if isinstance(geometry, _SCALAR_QUERY_GEOMETRY_TYPES) and (
+            type(geometry) in _SCALAR_QUERY_GEOMETRY_TYPES
+        ):
+            return tuple(
+                _distance_from_part_values(
+                    overlap_squared_distance=squared_distance,
+                    shared_leaf_count=1,
+                    topology_mismatch_leaf_count=0,
+                )
+                for squared_distance in geometry.iter_squared_distances_for_validated_candidates(
+                    candidate, references
+                )
             )
 
         distance_part_values = geometry.distance_part_values_for_validated_candidates

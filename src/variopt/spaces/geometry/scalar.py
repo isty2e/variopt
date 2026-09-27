@@ -1,6 +1,8 @@
 """Built-in scalar structured-space geometry implementations."""
 
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from itertools import chain
 from math import log
 
 from ..scalar import (
@@ -141,6 +143,73 @@ class RealSpaceGeometry:
 
         return leaf_distance * leaf_distance
 
+    def iter_squared_distances_for_validated_candidates(
+        self,
+        candidate: SpaceCandidateValue,
+        references: Iterable[SpaceCandidateValue],
+    ) -> Iterator[float]:
+        """Yield squared real distances with query-local coordinate preparation.
+
+        Parameters
+        ----------
+        candidate : SpaceCandidateValue
+            Canonical real candidate already validated by the owning space.
+        references : Iterable[SpaceCandidateValue]
+            Canonical references, consumed once in input order.
+
+        Yields
+        ------
+        float
+            Squared normalized distance to the next reference. Results are
+            lazy so consumers can reject a distance before advancing input.
+
+        Raises
+        ------
+        TypeError
+            If a candidate does not use the canonical real type.
+        ZeroDivisionError
+            If distinct logarithmic bounds round to the same coordinate.
+        """
+        iterator = iter(references)
+        try:
+            first_reference = next(iterator)
+        except StopIteration:
+            return
+        references = chain((first_reference,), iterator)
+
+        if type(candidate) is not float:
+            for reference in references:
+                yield self.squared_distance(candidate, reference)
+            return
+
+        if self.space.low == self.space.high:
+            for reference in references:
+                yield (
+                    0.0
+                    if type(reference) is float
+                    else self.squared_distance(candidate, reference)
+                )
+            return
+
+        if self.space.scale == "log":
+            coordinate_span = log(self.space.high) - log(self.space.low)
+            coordinate = log(candidate)
+            for reference in references:
+                if type(reference) is not float:
+                    yield self.squared_distance(candidate, reference)
+                    continue
+                leaf_distance = abs(coordinate - log(reference)) / coordinate_span
+                yield leaf_distance * leaf_distance
+            return
+
+        coordinate_span = self.space.high - self.space.low
+        for reference in references:
+            if type(reference) is not float:
+                yield self.squared_distance(candidate, reference)
+                continue
+            leaf_distance = abs(candidate - reference) / coordinate_span
+            yield leaf_distance * leaf_distance
+
 
 @dataclass(frozen=True, slots=True)
 class IntegerSpaceGeometry:
@@ -251,6 +320,77 @@ class IntegerSpaceGeometry:
             leaf_distance = abs(float(left - right)) / coordinate_span
 
         return leaf_distance * leaf_distance
+
+    def iter_squared_distances_for_validated_candidates(
+        self,
+        candidate: SpaceCandidateValue,
+        references: Iterable[SpaceCandidateValue],
+    ) -> Iterator[float]:
+        """Yield squared integer distances with query-local scale preparation.
+
+        Parameters
+        ----------
+        candidate : SpaceCandidateValue
+            Canonical integer candidate already validated by the owning space.
+        references : Iterable[SpaceCandidateValue]
+            Canonical references, consumed once in input order.
+
+        Yields
+        ------
+        float
+            Squared normalized distance. Linear distances subtract integers
+            before conversion to float, preserving adjacent large integers.
+
+        Raises
+        ------
+        TypeError
+            If a candidate does not use the canonical integer type.
+        OverflowError
+            If an integer coordinate or span cannot be converted to float.
+        ZeroDivisionError
+            If distinct logarithmic bounds round to the same coordinate.
+        """
+        iterator = iter(references)
+        try:
+            first_reference = next(iterator)
+        except StopIteration:
+            return
+        references = chain((first_reference,), iterator)
+
+        if type(candidate) is not int:
+            for reference in references:
+                yield self.squared_distance(candidate, reference)
+            return
+
+        if self.space.low == self.space.high:
+            for reference in references:
+                yield (
+                    0.0
+                    if type(reference) is int
+                    else self.squared_distance(candidate, reference)
+                )
+            return
+
+        if self.space.scale == "log":
+            coordinate_span = log(float(self.space.high)) - log(float(self.space.low))
+            coordinate = log(float(candidate))
+            for reference in references:
+                if type(reference) is not int:
+                    yield self.squared_distance(candidate, reference)
+                    continue
+                leaf_distance = (
+                    abs(coordinate - log(float(reference))) / coordinate_span
+                )
+                yield leaf_distance * leaf_distance
+            return
+
+        coordinate_span = float(self.space.high - self.space.low)
+        for reference in references:
+            if type(reference) is not int:
+                yield self.squared_distance(candidate, reference)
+                continue
+            leaf_distance = abs(float(candidate - reference)) / coordinate_span
+            yield leaf_distance * leaf_distance
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +524,28 @@ class CategoricalSpaceGeometry:
     ) -> tuple[float, int, int]:
         """Return raw part values for canonical categorical choices."""
         return (self.squared_distance_for_validated_candidates(left, right), 1, 0)
+
+    def iter_squared_distances_for_validated_candidates(
+        self,
+        candidate: SpaceCandidateValue,
+        references: Iterable[SpaceCandidateValue],
+    ) -> Iterator[float]:
+        """Yield mismatch distances for an ordered canonical choice query.
+
+        Parameters
+        ----------
+        candidate : SpaceCandidateValue
+            Canonical choice already validated by the owning space.
+        references : Iterable[SpaceCandidateValue]
+            Canonical choices, consumed once in input order.
+
+        Yields
+        ------
+        float
+            Zero for an equal choice, otherwise one.
+        """
+        for reference in references:
+            yield 0.0 if candidate == reference else 1.0
 
 
 def categorical_choice_key(value: SpaceCandidateValue) -> CategoricalChoiceKey | None:
