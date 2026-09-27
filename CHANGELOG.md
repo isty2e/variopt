@@ -14,6 +14,9 @@ format. Stability guarantees for the public surface are documented in the
   arrays while preserving scalar arithmetic and composite sum order. Small
   queries and numeric ranges that cannot be represented safely retain the
   scalar path. Candidate, RNG, and checkpoint formats are unchanged.
+- CSA binds structured geometry once per trial-to-bank distance query on the
+  scalar path instead of redispatching each candidate pair. Distance arithmetic,
+  candidate order, and custom metric callbacks are unchanged.
 - CSA bank updates reuse unchanged distance-cache rows instead of copying all
   cached pairs after each admission. Retained bank snapshots, search decisions,
   and checkpoint formats are unchanged.

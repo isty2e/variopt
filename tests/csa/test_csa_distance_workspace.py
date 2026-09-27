@@ -12,7 +12,10 @@ from typing_extensions import override
 
 from variopt import ArraySpace, RealSpace
 from variopt.algorithms.population.csa.banking.bank import BankEntry
-from variopt.algorithms.population.csa.banking.queries import BankDistanceWorkspace
+from variopt.algorithms.population.csa.banking.queries import (
+    BankDistanceWorkspace,
+    distances_to_candidate,
+)
 from variopt.diversity import DiversityMetric, StructuredSpaceDiversityMetric
 
 
@@ -52,6 +55,17 @@ class FixedStructuredDistance(
     @override
     def distance(self, left: tuple[float, ...], right: tuple[float, ...]) -> float:
         return 0.75
+
+
+@dataclass
+class FixedInvalidDistance(DiversityMetric[int]):
+    result: float
+    calls: list[tuple[int, int]] = field(default_factory=list)
+
+    @override
+    def distance(self, left: int, right: int) -> float:
+        self.calls.append((left, right))
+        return self.result if right == 2 else float(abs(left - right))
 
 
 def _workspace(*candidates: int) -> BankDistanceWorkspace[int]:
@@ -123,6 +137,105 @@ def test_candidate_batch_preserves_custom_structured_metric_override() -> None:
     )
 
     assert workspace.distances_to_candidate((64.0,) * 4) == (0.75,) * 128
+    assert (
+        distances_to_candidate(
+            entries=workspace.entries,
+            diversity_metric=metric,
+            candidate=(64.0,) * 4,
+        )
+        == (0.75,) * 128
+    )
+
+
+def test_plain_candidate_batch_preserves_order_duplicates_and_empty_bank() -> None:
+    metric = RecordingDistance()
+    entries = tuple(BankEntry(candidate=value, value=0.0) for value in (3, 1, 3, 0))
+
+    assert distances_to_candidate(
+        entries=entries, diversity_metric=metric, candidate=1
+    ) == (2.0, 0.0, 2.0, 1.0)
+    assert metric.calls == [(1, 3), (1, 1), (1, 3), (1, 0)]
+    metric.calls.clear()
+    assert (
+        distances_to_candidate(entries=(), diversity_metric=metric, candidate=1) == ()
+    )
+    assert metric.calls == []
+
+
+@pytest.mark.parametrize("invalid", [-1.0, float("nan"), float("inf")])
+def test_candidate_batch_rejects_invalid_custom_distance_after_valid_prefix(
+    invalid: float,
+) -> None:
+    metric = FixedInvalidDistance(result=invalid)
+    entries = tuple(BankEntry(candidate=value, value=0.0) for value in (1, 2, 3))
+    workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+    for query in (
+        lambda: distances_to_candidate(
+            entries=entries, diversity_metric=metric, candidate=0
+        ),
+        lambda: workspace.distances_to_candidate(0),
+    ):
+        metric.calls.clear()
+        with pytest.raises(ValueError, match="distance must be"):
+            query()
+        assert metric.calls == [(0, 1), (0, 2)]
+
+
+def test_candidate_batch_failure_does_not_poison_retry_or_cached_pairs() -> None:
+    metric = RecordingDistance()
+    entries = tuple(BankEntry(candidate=value, value=0.0) for value in (3, 1, 5))
+    workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+    assert workspace.distance(0, 1) == 2.0
+    metric.calls.clear()
+    metric.fail_next = True
+
+    with pytest.raises(RuntimeError, match="metric failure"):
+        workspace.distances_to_candidate(2)
+    assert metric.calls == [(2, 3)]
+    assert workspace.distances_to_candidate(2) == (1.0, 1.0, 3.0)
+    assert workspace.distance(0, 1) == 2.0
+    assert metric.calls == [(2, 3), (2, 3), (2, 1), (2, 5)]
+
+
+def test_candidate_batch_never_compares_candidate_equality() -> None:
+    candidate = EqualityHostileCandidate(2)
+    entries = tuple(
+        BankEntry(candidate=value, value=0.0)
+        for value in (
+            EqualityHostileCandidate(1),
+            candidate,
+            EqualityHostileCandidate(1),
+        )
+    )
+    metric = HostileDistance()
+    workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+
+    assert distances_to_candidate(
+        entries=entries, diversity_metric=metric, candidate=candidate
+    ) == (1.0, 0.0, 1.0)
+    assert workspace.distances_to_candidate(candidate) == (1.0, 0.0, 1.0)
+
+
+def test_scalar_candidate_batch_preserves_cutoff_ulps_and_retained_workspace() -> None:
+    metric = StructuredSpaceDiversityMetric(space=RealSpace(0.0, 1.0))
+    entries = tuple(BankEntry(candidate=value, value=0.0) for value in (0.0, 0.5, 0.0))
+    workspace = BankDistanceWorkspace(entries=entries, diversity_metric=metric)
+    candidate = 0.25
+    distances = workspace.distances_to_candidate(candidate)
+
+    assert distances == (0.25, 0.25, 0.25)
+    assert min(range(len(distances)), key=distances.__getitem__) == 0
+    assert not any(distance < 0.25 for distance in distances)
+    assert all(distance < float(np.nextafter(0.25, 1.0)) for distance in distances)
+    updated = workspace.rebase(
+        entries=(BankEntry(candidate=candidate, value=-1.0), *entries[1:]),
+        invalidated_indices=frozenset({0}),
+    )
+    updated.seed_entry_distances(entry_index=0, distances=distances)
+    assert updated.distance(0, 1) == 0.25
+    assert workspace.distance(0, 1) == 0.5
+    assert workspace.distances_to_candidate(candidate) == distances
 
 
 def test_rebase_preserves_old_and_new_answers_after_late_cache_misses() -> None:

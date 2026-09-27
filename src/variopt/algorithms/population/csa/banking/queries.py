@@ -11,6 +11,7 @@ from .....diversity import DiversityMetric
 from .....diversity.space_metric import (
     CompiledStructuredDistanceView,
     structured_distance_between_validated_candidates,
+    structured_distances_to_validated_candidates,
     supports_candidate_typed_structured_distance,
 )
 from .....typevars import CandidateT
@@ -322,15 +323,10 @@ class BankDistanceWorkspace(Generic[CandidateT]):
                 require_valid_distance(distance)
                 for distance in compiled_distance_view.distances_to(candidate)
             )
-        return tuple(
-            require_valid_distance(
-                validated_candidate_distance(
-                    self.diversity_metric,
-                    candidate,
-                    entry.candidate,
-                )
-            )
-            for entry in self.entries
+        return distances_to_candidate(
+            entries=self.entries,
+            diversity_metric=self.diversity_metric,
+            candidate=candidate,
         )
 
     def is_aligned_with_entries(
@@ -711,6 +707,45 @@ def crowding_counts(
                 counts[right_index] += 1
 
     return tuple(counts)
+
+
+def distances_to_candidate(
+    *,
+    entries: Sequence[CandidateEntry[CandidateT]],
+    diversity_metric: DiversityMetric[CandidateT],
+    candidate: CandidateT,
+) -> tuple[float, ...]:
+    """Return validated candidate-to-bank distances in entry order.
+
+    Parameters
+    ----------
+    entries : Sequence[CandidateEntry[CandidateT]]
+        Bank entries admitted through the owning space's validation boundary.
+    diversity_metric : DiversityMetric[CandidateT]
+        Metric whose public distance contract applies to custom implementations.
+    candidate : CandidateT
+        Query candidate already validated by the same space as the bank entries.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Finite non-negative distances aligned with ``entries``.
+
+    Raises
+    ------
+    ValueError
+        If a metric returns a non-finite or negative distance.
+    """
+    if supports_candidate_typed_structured_distance(diversity_metric):
+        return structured_distances_to_validated_candidates(
+            diversity_metric,
+            candidate,
+            (entry.candidate for entry in entries),
+        )
+    return tuple(
+        require_valid_distance(diversity_metric.distance(candidate, entry.candidate))
+        for entry in entries
+    )
 
 
 def validated_candidate_distance(

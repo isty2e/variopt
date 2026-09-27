@@ -1,7 +1,7 @@
 """Structured search-space diversity metrics derived from space semantics."""
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeGuard, TypeVar
@@ -432,6 +432,14 @@ class ValidatedStructuredDistanceMetric(Protocol[MetricCandidateT]):
         """Return distance without repeating candidate-shape validation."""
         ...
 
+    def _distances_to_validated_candidates(
+        self,
+        candidate: MetricCandidateT,
+        references: Iterable[MetricCandidateT],
+    ) -> tuple[float, ...]:
+        """Return ordered distances without repeating geometry dispatch."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class StructuredSpaceDiversityMetric(
@@ -546,6 +554,31 @@ class StructuredSpaceDiversityMetric(
 
         return self.distance(left, right)
 
+    def _distances_to_validated_candidates(
+        self,
+        candidate: CandidateT,
+        references: Iterable[CandidateT],
+    ) -> tuple[float, ...]:
+        """Bind validated geometry once for an ordered candidate query."""
+        geometry = self.validated_part_values_geometry
+        if geometry is None:
+            return tuple(
+                self.distance(candidate, reference) for reference in references
+            )
+
+        distance_part_values = geometry.distance_part_values_for_validated_candidates
+        distances: list[float] = []
+        for reference in references:
+            overlap, shared, mismatched = distance_part_values(candidate, reference)
+            distances.append(
+                _distance_from_part_values(
+                    overlap_squared_distance=overlap,
+                    shared_leaf_count=shared,
+                    topology_mismatch_leaf_count=mismatched,
+                )
+            )
+        return tuple(distances)
+
     @override
     def distance(self, left: CandidateT, right: CandidateT) -> float:
         """Return the RMS normalized leaf distance between two candidates.
@@ -635,6 +668,41 @@ def structured_distance_between_validated_candidates(
     already crossed the matching space validation boundary.
     """
     return metric._distance_between_validated_candidates(left, right)
+
+
+def structured_distances_to_validated_candidates(
+    metric: ValidatedStructuredDistanceMetric[MetricCandidateT],
+    candidate: MetricCandidateT,
+    references: Iterable[MetricCandidateT],
+) -> tuple[float, ...]:
+    """Return ordered distances for candidates admitted by the metric's space.
+
+    Parameters
+    ----------
+    metric : ValidatedStructuredDistanceMetric[MetricCandidateT]
+        Exact structured metric selected at the calling boundary.
+    candidate : MetricCandidateT
+        Canonical query candidate already validated by the owning space.
+    references : Iterable[MetricCandidateT]
+        Canonical reference candidates, consumed once in input order.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Finite non-negative distances aligned with the reference candidates.
+        Empty references produce an empty tuple.
+
+    Raises
+    ------
+    ValueError
+        If geometry produces an invalid distance or a pair has no leaf paths.
+
+    Notes
+    -----
+    This internal algebra shares the scalar RMS calculation and its numerical
+    checks. It does not replace the public candidate-validation boundary.
+    """
+    return metric._distances_to_validated_candidates(candidate, references)
 
 
 def _distance_from_compiled_squared_distance(

@@ -4,6 +4,7 @@ import math
 import pickle
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -23,6 +24,7 @@ from variopt.diversity import StructuredSpaceDiversityMetric
 from variopt.diversity.space_metric import (
     CompiledStructuredDistanceView,
     structured_distance_between_validated_candidates,
+    structured_distances_to_validated_candidates,
     supports_compiled_structured_distance_view,
 )
 from variopt.spaces import (
@@ -258,6 +260,127 @@ class ProviderWrappedPairSpace(
 
 class StructuredSpaceDiversityMetricTests:
     """Regression tests for generic space-derived diversity metrics."""
+
+    @pytest.mark.parametrize(
+        ("space", "candidate", "references"),
+        [
+            (RealSpace(-5.0, 5.0), -0.0, (5.0, -0.0, -5.0, 5.0)),
+            (RealSpace(1e-200, 1e200, scale="log"), 1.0, (1e-200, 1.0, 1e200)),
+            (RealSpace(0.0, 1e200), 0.0, (1e-200, 1.0, 1e200)),
+            (RealSpace(2.0, 2.0), 2.0, (2.0, 2.0)),
+        ],
+    )
+    def test_ordered_real_distances_preserve_scalar_arithmetic(
+        self, space: RealSpace, candidate: float, references: tuple[float, ...]
+    ) -> None:
+        metric = StructuredSpaceDiversityMetric(space=space)
+        expected = tuple(
+            metric.distance(candidate, other).hex() for other in references
+        )
+        reference_iterator = iter(references)
+
+        actual = structured_distances_to_validated_candidates(
+            metric, candidate, reference_iterator
+        )
+
+        assert tuple(distance.hex() for distance in actual) == expected
+        assert tuple(reference_iterator) == ()
+        assert structured_distances_to_validated_candidates(metric, candidate, ()) == ()
+        assert structured_distances_to_validated_candidates(
+            metric, candidate, (candidate,)
+        ) == (0.0,)
+
+    @pytest.mark.parametrize("scale", ["linear", "log"])
+    def test_ordered_integer_distances_preserve_scalar_arithmetic(
+        self, scale: Literal["linear", "log"]
+    ) -> None:
+        space = IntegerSpace(1, 2**62, scale=scale)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        candidate = 2**61
+        references = (1, candidate + 1, 2**62, candidate, 1)
+
+        assert structured_distances_to_validated_candidates(
+            metric, candidate, iter(references)
+        ) == tuple(metric.distance(candidate, other) for other in references)
+
+    def test_ordered_distances_preserve_nested_leaf_and_permutation_semantics(
+        self,
+    ) -> None:
+        space = ArraySpace(
+            RecordSpace(
+                order=PermutationSpace(3),
+                parameters=TupleSpace(
+                    CategoricalSpace((b"\x00", b"\xff")),
+                    RealSpace(1.0, 100.0, scale="log"),
+                ),
+            ),
+            length=2,
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        left = space.normalize(
+            (
+                {"order": (0, 1, 2), "parameters": (b"\x00", 1.0)},
+                {"order": (1, 2, 0), "parameters": (b"\xff", 10.0)},
+            )
+        )
+        right = space.normalize(
+            (
+                {"order": (2, 0, 1), "parameters": (b"\xff", 10.0)},
+                {"order": (1, 2, 0), "parameters": (b"\x00", 100.0)},
+            )
+        )
+        references = (right, left, right)
+
+        assert structured_distances_to_validated_candidates(
+            metric, left, iter(references)
+        ) == tuple(metric.distance(left, other) for other in references)
+
+    def test_ordered_distances_preserve_variable_topology(self) -> None:
+        space = ConditionalBranchSpace(
+            mode_space=CategoricalSpace(("tree", "linear")),
+            depth_space=IntegerSpace(1, 5),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        candidates: tuple[ConditionalBranchCandidate, ...] = (
+            ("tree", 1),
+            ("linear", 5),
+            ("tree", 5),
+            ("linear", 1),
+        )
+
+        for candidate in candidates:
+            assert structured_distances_to_validated_candidates(
+                metric, candidate, iter(candidates)
+            ) == tuple(metric.distance(candidate, other) for other in candidates)
+
+    @pytest.mark.parametrize("leaf_count", [0, 2])
+    def test_ordered_distances_honor_custom_geometry_provider(
+        self, leaf_count: int
+    ) -> None:
+        space = ProviderWrappedPairSpace(
+            depth_space=IntegerSpace(1, 5),
+            mode_space=CategoricalSpace(("a", "b")),
+            compiled_parts=StructuredDistanceParts(
+                overlap_squared_distance=0.0,
+                shared_leaf_count=leaf_count,
+                topology_mismatch_leaf_count=0,
+            ),
+        )
+        metric = StructuredSpaceDiversityMetric(space=space)
+        candidate = (1, "a")
+        reference = (5, "b")
+
+        if leaf_count == 0:
+            with pytest.raises(ValueError, match="at least one leaf path"):
+                metric.distance(candidate, reference)
+            with pytest.raises(ValueError, match="at least one leaf path"):
+                structured_distances_to_validated_candidates(
+                    metric, candidate, (reference,)
+                )
+        else:
+            assert structured_distances_to_validated_candidates(
+                metric, candidate, (reference, candidate)
+            ) == (0.0, 0.0)
 
     def test_direct_geometry_metrics_keep_validated_distance_path(self) -> None:
         real_metric = StructuredSpaceDiversityMetric(space=RealSpace(-5.0, 5.0))
