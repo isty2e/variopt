@@ -149,22 +149,31 @@ def apply_tell(
         consumed_ids.add(proposal_id)
         validated_evaluations.append(evaluation)
 
-    engine_state = engine_state.consume_pending_proposals(consumed_ids)
-
-    if engine_state.generation_state.is_active:
-        next_generation_state = engine_state.generation_state.buffer_evaluations(
+    next_pending_proposals = engine_state.pending_proposals.remove_many(consumed_ids)
+    next_generation_state = engine_state.generation_state
+    if next_generation_state.is_active:
+        next_generation_state = next_generation_state.buffer_evaluations(
             validated_evaluations,
         )
-        engine_state = replace(engine_state, generation_state=next_generation_state)
-        if not engine_state.generation_state.ready_to_commit:
-            return engine_state
+        if not next_generation_state.ready_to_commit:
+            return replace(
+                engine_state,
+                pending_proposals=next_pending_proposals,
+                generation_state=next_generation_state,
+            )
 
         generation_evaluations, next_generation_state = (
-            engine_state.generation_state.release_buffer()
+            next_generation_state.release_buffer()
         )
         validated_evaluations = list(generation_evaluations)
-        engine_state = replace(engine_state, generation_state=next_generation_state)
         committed_generation = True
+
+    # Materialize both registries together before bank updates or callbacks run.
+    engine_state = replace(
+        engine_state,
+        pending_proposals=next_pending_proposals,
+        generation_state=next_generation_state,
+    )
 
     validated_observations = tuple(
         evaluation.observation for evaluation in validated_evaluations

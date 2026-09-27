@@ -10,6 +10,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- CSA `tell()` combines pending-proposal removal and generation buffering in one
+  engine snapshot. Completed generations also avoid intermediate snapshots before
+  bank updates. Feedback order, failure handling, and checkpoint formats are unchanged.
 - Large structured bank snapshots reuse read-only coordinate arrays across
   distance queries instead of repacking references each time. Candidate changes
   rebuild the arrays; small banks and unsupported numeric ranges keep their
