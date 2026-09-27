@@ -437,6 +437,23 @@ class BuiltinStructuredGeometryPlan(
     _discrete_value_count: int = field(repr=False)
     _array_batch_minimum_size: int | None = field(repr=False)
 
+    def prefers_batched_distances(self, reference_count: int) -> bool:
+        """Return whether array batches amortize this plan's packing cost.
+
+        Parameters
+        ----------
+        reference_count : int
+            Number of reference encodings in one distance query.
+
+        Returns
+        -------
+        bool
+            Whether this plan supports array batches and the query reaches its
+            packing crossover. False keeps scalar evaluation preferable.
+        """
+        minimum_size = self._array_batch_minimum_size
+        return minimum_size is not None and reference_count >= minimum_size
+
     def encode(self, candidate: CandidateT) -> EncodedStructuredCandidate:
         """Validate and encode one canonical candidate."""
         self.space.validate(candidate)

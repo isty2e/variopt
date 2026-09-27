@@ -18,8 +18,11 @@ format. Stability guarantees for the public surface are documented in the
   cached pairs after each admission. Retained bank snapshots, search decisions,
   and checkpoint formats are unchanged.
 - CSA reuses crowding counts within a bank-update batch and updates only pairs
-  affected by changed slots when the cutoff is unchanged. Initial queries and
-  cutoff changes still scan all pairs; niche-score calculations are unchanged.
+  affected by changed slots when the cutoff is unchanged. Eligible cold queries
+  batch missing distances for exact built-in structured spaces without
+  overwriting seeded distances or bypassing custom metric callbacks. Initial
+  queries and cutoff changes still scan all pairs, so their complexity remains
+  quadratic in bank size. Niche-score calculations are unchanged.
 
 ### Breaking
 

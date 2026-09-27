@@ -73,6 +73,21 @@ class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
         """Return whether encoding avoids repeated candidate-structure traversal."""
         ...
 
+    def prefers_batched_distances(self, reference_count: int) -> bool:
+        """Return whether a query amortizes this plan's array-packing cost.
+
+        Parameters
+        ----------
+        reference_count : int
+            Number of reference encodings in the query.
+
+        Returns
+        -------
+        bool
+            Whether batching is preferable to scalar distance evaluation.
+        """
+        ...
+
     def encode_validated(
         self,
         candidate: PlanCandidateT_contra,
@@ -303,6 +318,60 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
             ),
             leaf_count=self.plan.leaf_count,
         )
+
+    def distances_from(
+        self,
+        left_index: int,
+        right_indices: Sequence[int],
+    ) -> tuple[float, ...]:
+        """Return ordered RMS distances between existing snapshot encodings.
+
+        Parameters
+        ----------
+        left_index : int
+            Index of the source candidate in this snapshot.
+        right_indices : Sequence[int]
+            Reference indices, allowing duplicates and the source index.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Distances aligned to ``right_indices``. Self-distance is zero.
+
+        Raises
+        ------
+        IndexError
+            If any index lies outside the represented snapshot.
+        ValueError
+            If a computed distance is negative or non-finite.
+        """
+        indices = tuple(right_indices)
+        entry_count = len(self.encodings)
+        if (
+            left_index < 0
+            or left_index >= entry_count
+            or any(index < 0 or index >= entry_count for index in indices)
+        ):
+            msg = "distance indices must reference compiled snapshot candidates"
+            raise IndexError(msg)
+
+        positions = tuple(
+            position for position, index in enumerate(indices) if index != left_index
+        )
+        distances = [0.0] * len(indices)
+        if positions:
+            squared_distances = self.plan.squared_distances_to_many(
+                self.encodings[left_index],
+                tuple(self.encodings[indices[position]] for position in positions),
+            )
+            for position, squared_distance in zip(
+                positions, squared_distances, strict=True
+            ):
+                distances[position] = _distance_from_compiled_squared_distance(
+                    squared_distance=squared_distance,
+                    leaf_count=self.plan.leaf_count,
+                )
+        return tuple(distances)
 
     def distances_to(
         self,

@@ -309,6 +309,42 @@ class StructuredSpaceDiversityMetricTests:
         assert view is not None
         assert view.distance(0, 1) == metric.distance(left, right)
 
+    def test_indexed_batch_preserves_order_duplicates_and_self_distance(self) -> None:
+        space = ArraySpace(RealSpace(0.0, 1.0), length=8)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        candidates = tuple((float(index) / 63,) * 8 for index in range(64))
+        view = metric._compile_distance_view(candidates)
+        assert view is not None
+        indices = (0, 63, 0, 32, *reversed(range(64)))
+        expected = tuple(view.distance(0, index) for index in indices)
+        with np.errstate(all="raise"):
+            assert view.distances_from(0, indices) == expected
+        assert view.distances_from(0, ()) == ()
+        assert view.distances_from(0, (0, 0)) == (0.0, 0.0)
+
+    @pytest.mark.parametrize(
+        ("left", "right"),
+        [(-1, (0,)), (2, (0,)), (0, (-1,)), (0, (0, 2)), (-1, ())],
+    )
+    def test_indexed_batch_rejects_out_of_bounds_indices(
+        self, left: int, right: tuple[int, ...]
+    ) -> None:
+        space = ArraySpace(IntegerSpace(0, 9), length=2)
+        metric = StructuredSpaceDiversityMetric(space=space)
+        view = metric._compile_distance_view(((1, 2), (3, 4)))
+        assert view is not None
+        with pytest.raises(IndexError, match="compiled snapshot candidates"):
+            view.distances_from(left, right)
+
+    def test_indexed_batch_rejects_empty_snapshot_source(self) -> None:
+        metric = StructuredSpaceDiversityMetric(
+            space=ArraySpace(IntegerSpace(0, 9), length=2)
+        )
+        view = metric._compile_distance_view(())
+        assert view is not None
+        with pytest.raises(IndexError, match="compiled snapshot candidates"):
+            view.distances_from(0, ())
+
     def test_real_space_distance_is_linearly_normalized(self) -> None:
         metric = StructuredSpaceDiversityMetric(space=RealSpace(0.0, 10.0))
 

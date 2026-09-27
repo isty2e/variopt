@@ -460,7 +460,17 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             counts = self._updated_crowding_counts(snapshot, changed_indices)
         else:
             counts = [0] * entry_count
+            compiled_view = self.compiled_distance_view
             for left_index in range(entry_count - 1):
+                if (
+                    snapshot is None
+                    and type(self) is BankDistanceWorkspace
+                    and compiled_view is not None
+                    and compiled_view.plan.prefers_batched_distances(
+                        entry_count - left_index - 1
+                    )
+                ):
+                    self._seed_missing_crowding_row(left_index, compiled_view)
                 for right_index in range(left_index + 1, entry_count):
                     if self.distance(left_index, right_index) < distance_cutoff:
                         counts[left_index] += 1
@@ -474,6 +484,36 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             counts=result,
         )
         return result
+
+    def _seed_missing_crowding_row(
+        self,
+        left_index: int,
+        compiled_view: CompiledStructuredDistanceView[CandidateT],
+    ) -> None:
+        """Batch only missing pairs, preserving seeded and shared row facts."""
+        if not self._rows:
+            self._rows = [_DistanceRow(self._revision) for _ in self.entries]
+
+        left_row = self._rows[left_index]
+        missing_indices: list[int] = []
+        destinations: list[tuple[_DistanceRow, int]] = []
+        for right_index in range(left_index + 1, len(self.entries)):
+            right_row = self._rows[right_index]
+            # Use the same newer-endpoint ownership as distance(), including ties.
+            if left_row.revision >= right_row.revision:
+                row, other_index = left_row, right_index
+            else:
+                row, other_index = right_row, left_index
+            if other_index not in row.distances:
+                missing_indices.append(right_index)
+                destinations.append((row, other_index))
+
+        if not compiled_view.plan.prefers_batched_distances(len(missing_indices)):
+            return
+
+        distances = compiled_view.distances_from(left_index, missing_indices)
+        for (row, other_index), distance in zip(destinations, distances, strict=True):
+            row.distances[other_index] = distance
 
     def _updated_crowding_counts(
         self,
