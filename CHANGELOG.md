@@ -10,6 +10,9 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- CSA batches local-search RNG snapshot construction, reducing repeated generator
+  initialization for built-in and custom kernels. Hint hooks, derived streams,
+  and checkpoint formats are unchanged.
 - Study avoids a second alignment pass when the exact built-in `DirectKernel`
   returns an already-validated evaluator batch. Kernel subclasses retain separate
   output validation. Built-in evaluation payloads and records also avoid repeated

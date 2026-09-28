@@ -121,8 +121,11 @@ def sequential_study(
 
 
 def fail_if_rng_hint_is_derived(
-    snapshot: RandomStateSnapshot, *, namespace: str, keys: Sequence[str | int] = ()
-) -> RandomStateSnapshot:
+    snapshot: RandomStateSnapshot,
+    *,
+    namespace: str,
+    key_groups: Sequence[Sequence[str]],
+) -> tuple[RandomStateSnapshot, ...]:
     raise AssertionError("unused direct-kernel RNG hint was derived")
 
 
@@ -133,7 +136,7 @@ def test_builtin_direct_execution_skips_unused_rng_hints(
     optimizer = builtin_optimizer()
     study = sequential_study(optimizer)
     monkeypatch.setattr(
-        "variopt.algorithms.population.csa.optimizer.derive_random_state_snapshot",
+        "variopt.algorithms.population.csa.optimizer.derive_random_state_snapshots",
         fail_if_rng_hint_is_derived,
     )
 

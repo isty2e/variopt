@@ -33,7 +33,7 @@ from ....methods import RunMethod
 from ....randomness import (
     RandomSeed,
     RandomStateSnapshot,
-    derive_random_state_snapshot,
+    derive_random_state_snapshots,
 )
 from ....sampling import CandidateSampler
 from ....spaces import LeafPath, SearchSpace
@@ -981,6 +981,17 @@ class CSAOptimizer(
             provenance.proposal_id: provenance
             for provenance in proposal_state.pending_attributions
         }
+        random_state_snapshots = iter(
+            derive_random_state_snapshots(
+                state.random_state,
+                namespace="variopt.csa.local_search",
+                key_groups=tuple(
+                    (proposal.proposal_id,)
+                    for proposal in proposals
+                    if proposal.proposal_id is not None
+                ),
+            ),
+        )
         contexts: list[ProposalLocalSearchContext | None] = []
         for proposal in proposals:
             proposal_id = proposal.proposal_id
@@ -999,13 +1010,7 @@ class CSAOptimizer(
             # that case so checkpoint resume does not fall back to kernel-local
             # RNG state.
             random_state_snapshot = (
-                None
-                if proposal_id is None
-                else derive_random_state_snapshot(
-                    state.random_state,
-                    namespace="variopt.csa.local_search",
-                    keys=(proposal_id,),
-                )
+                None if proposal_id is None else next(random_state_snapshots)
             )
             context = proposal_local_search_context(
                 state=proposal_state,
