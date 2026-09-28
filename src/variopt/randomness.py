@@ -24,6 +24,7 @@ ResultT = TypeVar("ResultT")
 _RANDOM_STATE_ALGORITHM = "MT19937"
 _MT19937_KEY_COUNT = 624
 _UINT32_BYTE_COUNT = np.dtype(np.uint32).itemsize
+_DERIVED_SEED_LIMIT = int(np.iinfo(np.int32).max)
 
 
 class TypedRandomState(Protocol):
@@ -476,30 +477,84 @@ def derive_random_state_snapshot(
     ValueError
         Raised when ``namespace`` is empty.
     """
+    prefix = _random_state_derivation_prefix(snapshot, namespace)
+    return RandomStateSnapshot.from_seed(_derived_random_seed(prefix, keys))
+
+
+def derive_random_state_snapshots(
+    snapshot: RandomStateSnapshot,
+    *,
+    namespace: str,
+    key_groups: Sequence[Sequence[str]],
+) -> tuple[RandomStateSnapshot, ...]:
+    """Derive ordered child snapshots without advancing the parent stream.
+
+    Parameters
+    ----------
+    snapshot : RandomStateSnapshot
+        Parent snapshot shared by all derived streams.
+    namespace : str
+        Nonempty domain separator for the child stream family.
+    key_groups : Sequence[Sequence[str]]
+        One sequence of stable key components per child. Order and duplicates
+        are preserved. An empty outer sequence produces no children; an empty
+        key group still identifies one child stream.
+
+    Returns
+    -------
+    tuple[RandomStateSnapshot, ...]
+        The same snapshots as independent calls to
+        :func:`derive_random_state_snapshot`. Each snapshot owns its key bytes;
+        no mutable generator is retained or shared between calls.
+
+    Raises
+    ------
+    ValueError
+        If ``namespace`` is empty, including when no children are requested.
+    """
+    prefix = _random_state_derivation_prefix(snapshot, namespace)
+    random_state: np.random.RandomState | None = None
+    snapshots: list[RandomStateSnapshot] = []
+    for keys in key_groups:
+        seed = _derived_random_seed(prefix, keys)
+        if random_state is None:
+            random_state = np.random.RandomState(seed)
+        else:
+            random_state.seed(seed)
+        snapshots.append(RandomStateSnapshot.from_random_state(random_state))
+    return tuple(snapshots)
+
+
+def _update_derivation_text(hasher: blake2b, value: str) -> None:
+    encoded_value = value.encode("utf-8")
+    hasher.update(len(encoded_value).to_bytes(8, "big"))
+    hasher.update(encoded_value)
+
+
+def _random_state_derivation_prefix(
+    snapshot: RandomStateSnapshot, namespace: str
+) -> blake2b:
     if namespace == "":
         msg = "namespace must not be empty"
         raise ValueError(msg)
 
     hasher = blake2b(digest_size=8)
 
-    def update_text(value: str) -> None:
-        encoded_value = value.encode("utf-8")
-        hasher.update(len(encoded_value).to_bytes(8, "big"))
-        hasher.update(encoded_value)
-
-    update_text(namespace)
-    update_text(snapshot.algorithm)
+    _update_derivation_text(hasher, namespace)
+    _update_derivation_text(hasher, snapshot.algorithm)
     hasher.update(len(snapshot.key_bytes).to_bytes(8, "big"))
     hasher.update(snapshot.key_bytes)
     hasher.update(snapshot.position.to_bytes(8, "big"))
     hasher.update(snapshot.has_gaussian.to_bytes(1, "big"))
-    update_text(repr(snapshot.cached_gaussian))
-    for key in keys:
-        update_text(key)
+    _update_derivation_text(hasher, repr(snapshot.cached_gaussian))
+    return hasher
 
-    seed_limit = int(np.iinfo(np.int32).max)
-    seed = int.from_bytes(hasher.digest(), "big") % seed_limit
-    return RandomStateSnapshot.from_seed(seed)
+
+def _derived_random_seed(prefix: blake2b, keys: Sequence[str]) -> int:
+    hasher = prefix.copy()
+    for key in keys:
+        _update_derivation_text(hasher, key)
+    return int.from_bytes(hasher.digest(), "big") % _DERIVED_SEED_LIMIT
 
 
 @overload
