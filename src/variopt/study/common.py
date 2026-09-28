@@ -21,7 +21,10 @@ from ..artifacts import (
     TraceEvent,
 )
 from ..artifacts.attempts import MaterializableEvaluationPayload
-from ..artifacts.records import RequestAlignedEvaluationRecord
+from ..artifacts.records import (
+    RequestAlignedEvaluationRecord,
+    is_request_aligned_record,
+)
 from ..evaluators.async_evaluator.artifacts import (
     CompletionGroup,
     EvaluationBatchResumeHandle,
@@ -450,7 +453,7 @@ def _validate_materialized_success_slot(
         msg = "materialized success metadata must preserve kernel_diagnostics"
         raise ValueError(msg)
 
-    if not _is_request_aligned_record_payload(materialized_attempt.payload):
+    if not is_request_aligned_record(materialized_attempt.payload):
         msg = "materialized success payload must be a request-aligned record"
         raise TypeError(msg)
 
@@ -462,15 +465,6 @@ def _validate_materialized_success_slot(
         kernel_diagnostics=materialized_attempt.kernel_diagnostics,
         candidate_equal=candidate_equal,
     )
-
-
-def _is_request_aligned_record_payload(
-    payload: object,
-) -> TypeGuard[RequestAlignedEvaluationRecord[object]]:
-    if not isinstance(payload, RequestAlignedEvaluationRecord):
-        return False
-
-    return type(payload.request) is EvaluationRequest
 
 
 def trace_value_for_records(

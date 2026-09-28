@@ -10,6 +10,10 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Changed
 
+- Study avoids a second alignment pass when the exact built-in `DirectKernel`
+  returns an already-validated evaluator batch. Kernel subclasses retain separate
+  output validation. Built-in evaluation payloads and records also avoid repeated
+  structural protocol inspection; custom record and refinement checks remain in place.
 - Generic Study execution skips unused local-search hints for the exact built-in
   `CSAOptimizer` and `DirectKernel` combination. Custom run-method hooks and
   kernel subclasses keep their existing behavior; local-search RNG streams and
