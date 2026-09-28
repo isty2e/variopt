@@ -230,6 +230,23 @@ class RunMethod(
 
         return self.tell(state, materialize_success_records(attempts.successes))
 
+    def _supports_unused_kernel_hint_elision(self) -> bool:
+        """Return whether a non-consuming kernel may skip hint construction.
+
+        Returns
+        -------
+        bool
+            Whether omitting :meth:`proposal_kernel_hints` preserves all
+            observable behavior when the kernel does not consume hints.
+
+        Notes
+        -----
+        Opt in only for hint producers without state transitions, required
+        side effects, or input validation needed outside hint consumption.
+        The default preserves custom hook calls and their errors.
+        """
+        return False
+
     def proposal_kernel_hints(
         self,
         state: RunMethodStateT,

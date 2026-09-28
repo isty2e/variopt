@@ -940,6 +940,18 @@ class CSAOptimizer(
         return next_engine_state.replace_random_state(next_random_state)
 
     @override
+    def _supports_unused_kernel_hint_elision(self) -> bool:
+        """Allow unused contexts to be omitted for the built-in optimizer.
+
+        Returns
+        -------
+        bool
+            ``True`` only for the exact built-in class. Subclasses retain
+            hint hook calls unless they explicitly establish safe elision.
+        """
+        return type(self) is CSAOptimizer
+
+    @override
     def proposal_kernel_hints(
         self,
         state: CSAEngineState[CandidateT],

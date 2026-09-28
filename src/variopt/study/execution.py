@@ -912,9 +912,12 @@ def _evaluate_step_feedback(
         msg = "run_method returned more proposals than requested"
         raise ValueError(msg)
 
-    proposal_kernel_hints = study.run_method.proposal_kernel_hints(
-        next_state,
-        proposals,
+    # A non-consuming kernel alone does not make a custom hint hook dispensable.
+    proposal_kernel_hints = (
+        None
+        if type(study.kernel) is DirectKernel
+        and study.run_method._supports_unused_kernel_hint_elision()
+        else study.run_method.proposal_kernel_hints(next_state, proposals)
     )
     proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
         next_state,
