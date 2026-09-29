@@ -3,7 +3,7 @@
 import pickle
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from math import isnan
+from sys import float_info
 from typing import TypeVar
 
 import numpy as np
@@ -147,13 +147,15 @@ def test_pairwise_batch_accepts_non_sliceable_sequences() -> None:
         (0, 2**63 - 1),
         (2**53, 2**53 + 100),
         (-(2**63), 2**63 - 1),
-        (-(10**30), 10**30),
-        (10**30, 10**30 + 100),
+        (-(2**62), 2**62),
+        (2**60, 2**60 + 100),
     ],
 )
 def test_batch_integer_subtraction_precedes_float_conversion(
     low: int, high: int
 ) -> None:
+    if low < np.iinfo("l").min or high > np.iinfo("l").max:
+        pytest.skip("requires a 64-bit C-long sampler")
     plan = compile_builtin_geometry_plan(ArraySpace(IntegerSpace(low, high), length=3))
     assert plan is not None
     left = plan.encode((low, low + 1, high))
@@ -164,13 +166,14 @@ def test_batch_integer_subtraction_precedes_float_conversion(
     assert plan.squared_distances_to_many(right, (left,) * 128) == (expected,) * 128
 
 
-def test_batch_mixed_plan_keeps_arbitrary_integer_precision() -> None:
+@pytest.mark.skipif(np.iinfo("l").bits < 64, reason="requires a 64-bit C-long sampler")
+def test_batch_mixed_plan_keeps_integer_differences_beyond_float_precision() -> None:
     plan = compile_builtin_geometry_plan(
-        TupleSpace(RealSpace(-2.0, 2.0), IntegerSpace(10**30, 10**30 + 2))
+        TupleSpace(RealSpace(-2.0, 2.0), IntegerSpace(2**60, 2**60 + 2))
     )
     assert plan is not None
-    left = plan.encode((1.0, 10**30 + 1))
-    right = plan.encode((-1.0, 10**30 + 2))
+    left = plan.encode((1.0, 2**60 + 1))
+    right = plan.encode((-1.0, 2**60 + 2))
 
     assert plan.squared_distance(left, right) == 0.5
     assert plan.squared_distances_to_many(left, (right,) * 128) == (0.5,) * 128
@@ -223,30 +226,28 @@ def test_batch_preserves_scalar_underflow_with_numpy_errors_enabled() -> None:
         assert np.geterr() == previous
 
 
-def test_batch_preserves_scalar_behavior_for_overflowed_real_span() -> None:
-    plan = compile_builtin_geometry_plan(RealSpace(-1e308, 1e308))
+def test_batch_preserves_scalar_behavior_for_largest_real_span() -> None:
+    plan = compile_builtin_geometry_plan(
+        ArraySpace(RealSpace(0.0, float_info.max), length=4)
+    )
     assert plan is not None
-    left = plan.encode(-1e308)
-    right = plan.encode(1e308)
-    assert isnan(plan.squared_distance(left, right))
+    left = plan.encode((0.0,) * 4)
+    right = plan.encode((float_info.max,) * 4)
+    assert plan.squared_distance(left, right) == 4.0
 
     with np.errstate(all="raise"):
-        assert all(
-            isnan(distance)
-            for distance in plan.squared_distances_to_many(left, (right,) * 128)
-        )
+        assert plan.squared_distances_to_many(left, (right,) * 128) == (4.0,) * 128
 
 
-def test_batch_preserves_scalar_failure_for_rounded_zero_log_span() -> None:
-    plan = compile_builtin_geometry_plan(IntegerSpace(2**53, 2**53 + 1, scale="log"))
+@pytest.mark.skipif(np.iinfo("l").bits < 64, reason="requires a 64-bit C-long sampler")
+def test_batch_preserves_small_positive_log_span() -> None:
+    plan = compile_builtin_geometry_plan(IntegerSpace(2**53, 2**53 + 1024, scale="log"))
     assert plan is not None
     left = plan.encode(2**53)
-    right = plan.encode(2**53 + 1)
+    right = plan.encode(2**53 + 1024)
 
-    with pytest.raises(ZeroDivisionError):
-        plan.squared_distance(left, right)
-    with pytest.raises(ZeroDivisionError):
-        plan.squared_distances_to_many(left, (right,) * 128)
+    assert plan.squared_distance(left, right) == 1.0
+    assert plan.squared_distances_to_many(left, (right,) * 128) == (1.0,) * 128
 
 
 def test_batch_constant_geometry_keeps_zero_subtotals() -> None:

@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from math import isfinite, log
+from math import log
 from operator import index as integer_index
 from typing import Generic, Protocol, TypeVar
 
@@ -911,8 +911,6 @@ def _compile_real_geometry(
     coordinate_span = (
         log(space.high) - log(space.low) if logarithmic else space.high - space.low
     )
-    if not isfinite(coordinate_span) or coordinate_span <= 0.0:
-        builder.supports_array_batches = False
     return _CompiledCandidateGeometry(
         encoder=_repeated_encoder(
             _RealValueEncoder(logarithmic=logarithmic), count, sequence=sequence
@@ -955,8 +953,6 @@ def _compile_integer_geometry(
     if space.scale == "log":
         start, stop = builder.reserve_real_values(count)
         coordinate_span = log(float(space.high)) - log(float(space.low))
-        if not isfinite(coordinate_span) or coordinate_span <= 0.0:
-            builder.supports_array_batches = False
         return _CompiledCandidateGeometry(
             encoder=_repeated_encoder(
                 _IntegerValueEncoder(logarithmic=True),

@@ -338,6 +338,7 @@ def test_cold_counts_cover_mixed_logarithmic_and_discrete_geometry() -> None:
     )
 
 
+@pytest.mark.skipif(np.iinfo("l").bits < 64, reason="requires a 64-bit C-long sampler")
 def test_large_integer_geometry_keeps_its_scalar_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -349,11 +350,11 @@ def test_large_integer_geometry_keeps_its_scalar_fallback(
         pytest.fail("integer geometry outside int64 batching must remain scalar")
 
     monkeypatch.setattr(CompiledStructuredDistanceView, "distances_from", unexpected)
-    space = ArraySpace(IntegerSpace(-(10**30), 10**30), length=8)
+    space = ArraySpace(IntegerSpace(-(2**63), 2**63 - 1), length=8)
     workspace = BankDistanceWorkspace(
         entries=tuple(
             BankEntry(candidate=space.normalize((value,) * 8), value=0.0)
-            for value in (-(10**30), -1, 0, 10**30) * 16
+            for value in (-(2**63), -1, 0, 2**63 - 1) * 16
         ),
         diversity_metric=StructuredSpaceDiversityMetric(space=space),
     )
@@ -362,14 +363,21 @@ def test_large_integer_geometry_keeps_its_scalar_fallback(
     )
 
 
-def test_nonfinite_geometry_rejects_counts_and_allows_rebased_recovery() -> None:
-    metric = StructuredSpaceDiversityMetric(
-        space=ArraySpace(RealSpace(-1e308, 1e308), length=8)
-    )
+@dataclass(frozen=True)
+class NonfiniteMetric(
+    StructuredSpaceDiversityMetric[Sequence[float | int], RealCandidate]
+):
+    @override
+    def distance(self, left: RealCandidate, right: RealCandidate) -> float:
+        return float("inf") if 1.0 in (left[0], right[0]) else 0.0
+
+
+def test_nonfinite_metric_rejects_counts_and_allows_rebased_recovery() -> None:
+    metric = NonfiniteMetric(space=ArraySpace(RealSpace(0.0, 1.0), length=8))
     workspace = BankDistanceWorkspace(
         entries=tuple(
             BankEntry(candidate=(value,) * 8, value=0.0)
-            for value in (-1e308, 1e308, *((0.0,) * 62))
+            for value in (0.0, 1.0, *((0.0,) * 62))
         ),
         diversity_metric=metric,
     )

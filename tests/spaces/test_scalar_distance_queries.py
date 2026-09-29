@@ -2,10 +2,11 @@
 
 import math
 import pickle
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import pytest
 from typing_extensions import override
 
@@ -50,17 +51,24 @@ def test_real_query_matches_pairwise_hex(
 
 
 @pytest.mark.parametrize(
-    ("space", "candidate", "references"),
+    ("low", "high", "scale", "candidate", "references"),
     [
-        (IntegerSpace(-(2**100), 2**100), 2**99, (2**99 + 1, -(2**100), 0)),
-        (IntegerSpace(1, 2**100, scale="log"), 2**99, (1, 2**99 + 1, 2**100)),
-        (IntegerSpace(3, 3), 3, (3, 3)),
-        (IntegerSpace(3, 3, scale="log"), 3, (3, 3)),
+        (-(2**62), 2**62, "linear", 2**61, (2**61 + 1, -(2**62), 0)),
+        (1, 2**62, "log", 2**61, (1, 2**61 + 1, 2**62)),
+        (3, 3, "linear", 3, (3, 3)),
+        (3, 3, "log", 3, (3, 3)),
     ],
 )
 def test_integer_query_matches_pairwise_hex(
-    space: IntegerSpace, candidate: int, references: tuple[int, ...]
+    low: int,
+    high: int,
+    scale: Literal["linear", "log"],
+    candidate: int,
+    references: tuple[int, ...],
 ) -> None:
+    if high > np.iinfo("l").max:
+        pytest.skip("requires a 64-bit C-long sampler")
+    space = IntegerSpace(low, high, scale=scale)
     metric = StructuredSpaceDiversityMetric(space)
     expected = tuple(metric.distance(candidate, value).hex() for value in references)
 
@@ -94,53 +102,57 @@ def test_query_preserves_squared_underflow_instead_of_absolute_distance() -> Non
     assert metric.distance(0.0, 1e-200) == 0.0
 
 
+@pytest.mark.skipif(np.iinfo("l").bits < 64, reason="requires a 64-bit C-long sampler")
 def test_large_integer_query_does_not_round_coordinates_before_subtraction() -> None:
-    metric = StructuredSpaceDiversityMetric(IntegerSpace(-(2**100), 2**100))
+    metric = StructuredSpaceDiversityMetric(IntegerSpace(-(2**62), 2**62))
 
     assert structured_distances_to_validated_candidates(
-        metric, 2**99, (2**99 + 1,)
-    ) == (2.0**-101,)
+        metric, 2**61, (2**61 + 1,)
+    ) == (2.0**-63,)
 
 
-def test_degenerate_huge_integer_query_needs_no_float_conversion() -> None:
-    metric = StructuredSpaceDiversityMetric(IntegerSpace(10**400, 10**400))
+def test_degenerate_large_integer_query_has_zero_distance() -> None:
+    value = int(np.iinfo("l").max)
+    metric = StructuredSpaceDiversityMetric(IntegerSpace(value, value))
 
     assert structured_distances_to_validated_candidates(
-        metric, 10**400, (10**400, 10**400)
+        metric, value, (value, value)
     ) == (0.0, 0.0)
 
 
-def test_numeric_failure_does_not_consume_later_references() -> None:
-    metric = StructuredSpaceDiversityMetric(RealSpace(-1e308, 1e308))
-    references = iter((0.0, 1e308, -1e308))
+def test_numeric_failure_does_not_consume_later_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def nonfinite_geometry(
+        self: RealSpaceGeometry,
+        candidate: SpaceCandidateValue,
+        references: Iterable[SpaceCandidateValue],
+    ) -> Iterator[float]:
+        for reference in references:
+            yield math.nan if reference == 1.0 else 0.0
+
+    monkeypatch.setattr(
+        RealSpaceGeometry,
+        "iter_squared_distances_for_validated_candidates",
+        nonfinite_geometry,
+    )
+    metric = StructuredSpaceDiversityMetric(RealSpace(0.0, 1.0))
+    references = iter((0.0, 1.0, 0.5))
 
     with pytest.raises(ValueError, match="finite"):
-        structured_distances_to_validated_candidates(metric, -1e308, references)
+        structured_distances_to_validated_candidates(metric, 0.0, references)
 
-    assert tuple(references) == (-1e308,)
+    assert tuple(references) == (0.5,)
 
 
 @pytest.mark.parametrize("scale", ["linear", "log"])
-def test_empty_query_does_not_evaluate_unrepresentable_integer_span(
+def test_empty_query_accepts_wide_integer_span(
     scale: Literal["linear", "log"],
 ) -> None:
-    space = IntegerSpace(1, 10**400, scale=scale)
+    space = IntegerSpace(1, int(np.iinfo("l").max), scale=scale)
     geometry = IntegerSpaceGeometry(space)
 
     assert tuple(geometry.iter_squared_distances_for_validated_candidates(1, ())) == ()
-    references: Iterator[SpaceCandidateValue] = iter((1, 2))
-    with pytest.raises(OverflowError):
-        tuple(geometry.iter_squared_distances_for_validated_candidates(1, references))
-    assert tuple(references) == (2,)
-
-
-def test_collapsed_log_span_preserves_error_and_consumption() -> None:
-    metric = StructuredSpaceDiversityMetric(IntegerSpace(2**60, 2**60 + 1, scale="log"))
-    references = iter((2**60, 2**60 + 1))
-
-    with pytest.raises(ZeroDivisionError):
-        structured_distances_to_validated_candidates(metric, 2**60, references)
-    assert tuple(references) == (2**60 + 1,)
 
 
 def test_iterator_failure_propagates_without_restarting_input() -> None:

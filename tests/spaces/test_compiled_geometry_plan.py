@@ -172,14 +172,14 @@ def test_plan_matches_single_element_array_geometry() -> None:
 
 
 def test_plan_preserves_large_integer_distance_arithmetic() -> None:
-    space = IntegerSpace(-(10**30), 10**30)
+    space = IntegerSpace(int(np.iinfo("l").min), int(np.iinfo("l").max))
     plan = compile_builtin_geometry_plan(space)
     geometry = compile_structured_geometry(space)
     assert plan is not None
     assert geometry is not None
 
-    left = -(10**30) + 1
-    right = 10**30 - 1
+    left = space.low + 1
+    right = space.high - 1
 
     assert plan.distance_parts(left, right) == geometry.distance_parts(left, right)
 

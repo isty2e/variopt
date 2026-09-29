@@ -167,8 +167,6 @@ class RealSpaceGeometry:
         ------
         TypeError
             If a candidate does not use the canonical real type.
-        ZeroDivisionError
-            If distinct logarithmic bounds round to the same coordinate.
         """
         iterator = iter(references)
         try:
@@ -345,10 +343,6 @@ class IntegerSpaceGeometry:
         ------
         TypeError
             If a candidate does not use the canonical integer type.
-        OverflowError
-            If an integer coordinate or span cannot be converted to float.
-        ZeroDivisionError
-            If distinct logarithmic bounds round to the same coordinate.
         """
         iterator = iter(references)
         try:

@@ -50,6 +50,15 @@ format. Stability guarantees for the public surface are documented in the
 
 ### Breaking
 
+- Numeric space constructors now reject unsupported bounds with `ValueError`.
+  Nonconstant `RealSpace` intervals must have a finite, positive coordinate
+  span. All `IntegerSpace` bounds must fit NumPy `RandomState`'s platform-dependent
+  C-long sampling dtype (`numpy.iinfo("l")`), and distinct log bounds must not
+  collapse after float/log conversion. Rescale unsupported intervals or use a
+  custom space for different arithmetic. No deprecation shim is provided:
+  retaining these declarations would preserve sampling failures, division by
+  zero, or non-finite distances. Arithmetic and RNG behavior within the supported
+  ranges are unchanged.
 - Replaced `CSAOptimizer.propose_candidate(state)` with `emit_proposal(state)`.
   Overrides now return `(proposal, tracks_generation, planned_provenance, state)`:
   the first item is an issued `Proposal`, not a raw candidate. The returned state

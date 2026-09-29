@@ -294,10 +294,11 @@ class StructuredSpaceDiversityMetricTests:
     def test_ordered_integer_distances_preserve_scalar_arithmetic(
         self, scale: Literal["linear", "log"]
     ) -> None:
-        space = IntegerSpace(1, 2**62, scale=scale)
+        high = int(np.iinfo("l").max)
+        space = IntegerSpace(1, high, scale=scale)
         metric = StructuredSpaceDiversityMetric(space=space)
-        candidate = 2**61
-        references = (1, candidate + 1, 2**62, candidate, 1)
+        candidate = high // 2
+        references = (1, candidate + 1, high, candidate, 1)
 
         assert structured_distances_to_validated_candidates(
             metric, candidate, iter(references)

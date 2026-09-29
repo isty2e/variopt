@@ -50,10 +50,30 @@ values still flow through their owning leaf-space validation rules.
 
 For built-in composite spaces, CSA can batch distance calculations without
 changing leaf geometry or the order in which distances are accumulated.
-Small batches and numeric ranges that cannot use fixed-width arrays safely,
-including very large integers, keep the scalar calculation path. This does not
+Small batches and admitted integer intervals whose differences exceed `int64`
+keep the scalar calculation path. This does not
 change candidate or checkpoint formats, and custom spaces and metric overrides
 keep their own distance implementations.
+
+## Numeric Limits
+
+Numeric space constructors reject bounds that their sampling or distance
+arithmetic cannot support. A nonconstant `RealSpace` needs a finite, positive
+coordinate span: `high - low` on the linear scale, or `log(high) - log(low)`
+on the log scale. Finite endpoints alone are not enough. For example,
+`RealSpace(-1e308, 1e308)` overflows on subtraction and raises `ValueError`.
+
+`IntegerSpace` bounds must fit NumPy `RandomState`'s default C-long sampling
+dtype, given by `numpy.iinfo("l")`. This platform-dependent limit applies to
+linear, log, and constant intervals. Distinct log bounds must also remain
+distinct after float conversion and taking logarithms. Linear integer distances
+subtract integers before converting to float, so values above `2**53` do not
+lose their integer differences. Float coordinate projections can still round
+large integers; they are not exact encodings of every candidate.
+
+Arbitrary-precision bounds are outside the built-in numeric contract. Rescale
+or reparameterize an unsupported interval, or provide a custom space with its
+own sampling and distance arithmetic.
 
 ## Custom Spaces
 

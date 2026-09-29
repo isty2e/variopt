@@ -14,6 +14,7 @@ from .types import SpaceCandidateValue, SpaceScalarValue
 
 CategoricalT = TypeVar("CategoricalT", bound=SpaceScalarValue)
 _CANONICAL_SCALAR_CHOICE_TYPES = frozenset((bool, int, float, str, bytes, bytearray))
+_INTEGER_SAMPLING_LIMITS = np.iinfo("l")
 
 
 def has_duplicate_choices(choices: Sequence[CategoricalT]) -> bool:
@@ -108,6 +109,12 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
         Coordinate system used for continuous transforms and local search.
         ``"log"`` means values are optimized in log coordinates while remaining
         positive in value space.
+
+    Notes
+    -----
+    Nonconstant bounds must have a finite, positive coordinate span in Python
+    floating-point arithmetic. Intervals that overflow on subtraction or
+    collapse after taking logarithms are unsupported and rejected at construction.
     """
 
     low: float
@@ -123,7 +130,8 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
             If bounds are not canonical floats.
         ValueError
             If bounds are non-finite, out of order, incompatible with the
-            declared scale, or if ``scale`` is not supported.
+            declared scale, have an unusable coordinate span, or if ``scale``
+            is not supported.
         """
         if type(self.low) is not float or type(self.high) is not float:
             msg = "RealSpace bounds must be canonical floats"
@@ -147,6 +155,12 @@ class RealSpace(StructuredSearchSpace[float | int, float]):
         if self.scale == "log" and (low <= 0.0 or high <= 0.0):
             msg = "log-scaled RealSpace bounds must both be positive"
             raise ValueError(msg)
+
+        if low != high:
+            span = log(high) - log(low) if self.scale == "log" else high - low
+            if not isfinite(span) or span <= 0.0:
+                msg = "RealSpace bounds must define a finite, positive coordinate span"
+                raise ValueError(msg)
 
         object.__setattr__(self, "low", low)
         object.__setattr__(self, "high", high)
@@ -443,6 +457,15 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
         Inclusive upper bound.
     scale : {"linear", "log"}, default="linear"
         Coordinate system used for scalar transforms and sampled moves.
+
+    Notes
+    -----
+    Bounds, including constant intervals, must fit NumPy ``RandomState``'s
+    default C-long sampling dtype (``np.iinfo("l")``). This limit is platform
+    dependent and applies to both scales. Arbitrary-size integer bounds are
+    unsupported. Distinct log bounds must remain distinct after float/log
+    conversion. Linear distances subtract integers before conversion to float;
+    coordinate projections can still round large integers.
     """
 
     low: int
@@ -457,7 +480,8 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
         TypeError
             If bounds are not canonical integers.
         ValueError
-            If bounds are out of order or incompatible with the declared scale.
+            If bounds are out of order, exceed the sampling range, are
+            incompatible with the declared scale, or collapse in log coordinates.
         """
         if type(self.low) is not int or type(self.high) is not int:
             msg = "IntegerSpace bounds must be canonical integers"
@@ -473,6 +497,24 @@ class IntegerSpace(StructuredSearchSpace[int, int]):
 
         if self.low > self.high:
             msg = "IntegerSpace low must be less than or equal to high"
+            raise ValueError(msg)
+
+        if (
+            self.low < _INTEGER_SAMPLING_LIMITS.min
+            or self.high > _INTEGER_SAMPLING_LIMITS.max
+        ):
+            msg = (
+                "IntegerSpace bounds must fit the RandomState C-long sampling range "
+                f"[{_INTEGER_SAMPLING_LIMITS.min}, {_INTEGER_SAMPLING_LIMITS.max}]"
+            )
+            raise ValueError(msg)
+
+        if (
+            self.scale == "log"
+            and self.low != self.high
+            and log(float(self.high)) <= log(float(self.low))
+        ):
+            msg = "IntegerSpace log bounds must define a positive coordinate span"
             raise ValueError(msg)
 
     @override
