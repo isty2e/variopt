@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from numbers import Real
-from typing import Generic, Protocol, runtime_checkable
+from typing import Generic, Protocol, TypeGuard, runtime_checkable
 
 import numpy as np
 from typing_extensions import TypeVar
@@ -298,6 +298,44 @@ class RequestAlignedEvaluationRecord(
     def candidate(self) -> RequestAlignedEvaluationRecordCandidateT_co:
         """Return the candidate evaluated for the request."""
         ...
+
+
+def is_request_aligned_record(
+    payload: object,
+) -> TypeGuard[RequestAlignedEvaluationRecord[object]]:
+    """Recognize a record-shaped payload with a canonical request slot.
+
+    Parameters
+    ----------
+    payload : object
+        Arbitrary evaluation payload at the record compatibility boundary.
+
+    Returns
+    -------
+    bool
+        Whether the payload exposes ``request`` and ``candidate`` and owns an
+        exact ``EvaluationRequest``. This checks shape, not candidate equality
+        or refinement alignment; those remain the success owner's responsibility.
+
+    Notes
+    -----
+    Built-in payload and record shapes are known without protocol inspection.
+    Subclasses and custom payloads still use the structural protocol, since they
+    may add or override request ownership.
+    """
+    if type(payload) is ObservationPayload or type(payload) is ObjectiveVectorPayload:
+        return False
+
+    if type(payload) is Observation or type(payload) is ObjectiveVectorRecord:
+        return (
+            hasattr(payload, "candidate")
+            and type(getattr(payload, "request", None)) is EvaluationRequest
+        )
+
+    if not isinstance(payload, RequestAlignedEvaluationRecord):
+        return False
+
+    return type(payload.request) is EvaluationRequest
 
 
 @dataclass(frozen=True, slots=True)

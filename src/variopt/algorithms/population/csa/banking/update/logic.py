@@ -5,7 +5,6 @@ from collections.abc import Callable, Sequence
 import numpy as np
 
 from ......artifacts import Observation
-from ......distance import require_valid_distance
 from ......diversity import DiversityMetric
 from ......diversity.space_metric import supports_compiled_structured_distance_view
 from ......typevars import CandidateT
@@ -27,7 +26,7 @@ from ..queries import (
     BankDistanceWorkspace,
     crowded_indices,
     crowding_aware_scores,
-    validated_candidate_distance,
+    distances_to_candidate,
 )
 from .admission import admit_observation, replace_bank_entry
 from .policy import CSABankUpdatePolicy
@@ -466,8 +465,8 @@ def admit_full_bank_observation(
         admitted_distances = entry_distances
         if len(next_bank.entries) == len(entry_distances) + 1:
             admitted_distances = (*entry_distances, 0.0)
-        # The workspace already stores symmetric pair keys; these validated
-        # trial-to-bank distances become bank-pair distances after admission.
+        # Validated trial-to-bank distances become symmetric bank-pair
+        # distances after admission, without another metric evaluation.
         rebased_workspace.seed_entry_distances(
             entry_index=admitted_index,
             distances=admitted_distances,
@@ -482,15 +481,10 @@ def admit_full_bank_observation(
             observation.candidate
         )
     else:
-        entry_distances = tuple(
-            require_valid_distance(
-                validated_candidate_distance(
-                    diversity_metric,
-                    observation.candidate,
-                    entry.candidate,
-                ),
-            )
-            for entry in bank.entries
+        entry_distances = distances_to_candidate(
+            entries=bank.entries,
+            diversity_metric=diversity_metric,
+            candidate=observation.candidate,
         )
     scored_bank, score_model_state = score_model_state.score_bank(
         entries=bank.entries,

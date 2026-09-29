@@ -33,7 +33,7 @@ from ....methods import RunMethod
 from ....randomness import (
     RandomSeed,
     RandomStateSnapshot,
-    derive_random_state_snapshot,
+    derive_random_state_snapshots,
 )
 from ....sampling import CandidateSampler
 from ....spaces import LeafPath, SearchSpace
@@ -940,6 +940,18 @@ class CSAOptimizer(
         return next_engine_state.replace_random_state(next_random_state)
 
     @override
+    def _supports_unused_kernel_hint_elision(self) -> bool:
+        """Allow unused contexts to be omitted for the built-in optimizer.
+
+        Returns
+        -------
+        bool
+            ``True`` only for the exact built-in class. Subclasses retain
+            hint hook calls unless they explicitly establish safe elision.
+        """
+        return type(self) is CSAOptimizer
+
+    @override
     def proposal_kernel_hints(
         self,
         state: CSAEngineState[CandidateT],
@@ -969,6 +981,17 @@ class CSAOptimizer(
             provenance.proposal_id: provenance
             for provenance in proposal_state.pending_attributions
         }
+        random_state_snapshots = iter(
+            derive_random_state_snapshots(
+                state.random_state,
+                namespace="variopt.csa.local_search",
+                key_groups=tuple(
+                    (proposal.proposal_id,)
+                    for proposal in proposals
+                    if proposal.proposal_id is not None
+                ),
+            ),
+        )
         contexts: list[ProposalLocalSearchContext | None] = []
         for proposal in proposals:
             proposal_id = proposal.proposal_id
@@ -987,13 +1010,7 @@ class CSAOptimizer(
             # that case so checkpoint resume does not fall back to kernel-local
             # RNG state.
             random_state_snapshot = (
-                None
-                if proposal_id is None
-                else derive_random_state_snapshot(
-                    state.random_state,
-                    namespace="variopt.csa.local_search",
-                    keys=(proposal_id,),
-                )
+                None if proposal_id is None else next(random_state_snapshots)
             )
             context = proposal_local_search_context(
                 state=proposal_state,

@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
 from math import isfinite
 from typing import ClassVar, Generic, Protocol, TypeVar
 
@@ -10,6 +11,7 @@ from .....diversity import DiversityMetric
 from .....diversity.space_metric import (
     CompiledStructuredDistanceView,
     structured_distance_between_validated_candidates,
+    structured_distances_to_validated_candidates,
     supports_candidate_typed_structured_distance,
 )
 from .....typevars import CandidateT
@@ -76,6 +78,37 @@ def infer_score_gap(
     return score_gap
 
 
+@dataclass(frozen=True, slots=True)
+class _DistanceRow:
+    """Memoized pairs owned by one slot revision, without candidate references."""
+
+    revision: int
+    distances: dict[int, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class _CrowdingSnapshot:
+    """Complete counts and numeric pair facts at one cutoff and row alignment."""
+
+    distance_cutoff: float
+    rows: tuple[_DistanceRow, ...]
+    counts: tuple[int, ...]
+
+    def are_neighbors(self, left_index: int, right_index: int) -> bool:
+        """Read an old neighbor relation, excluding subsequently appended slots."""
+        if right_index >= len(self.rows):
+            return False
+
+        left_row = self.rows[left_index]
+        right_row = self.rows[right_index]
+        # Match distance(): the newer endpoint owns the canonical ordered pair.
+        if left_row.revision >= right_row.revision:
+            distance = left_row.distances[right_index]
+        else:
+            distance = right_row.distances[left_index]
+        return distance < self.distance_cutoff
+
+
 class BankDistanceWorkspace(Generic[CandidateT]):
     """Operation-local pairwise distance workspace for one bank snapshot.
 
@@ -94,16 +127,30 @@ class BankDistanceWorkspace(Generic[CandidateT]):
     -----
     This workspace is intentionally mutable and request-local. It must not be
     stored in checkpoint state or persistent optimizer state.
+
+    Related snapshots share unchanged cache rows. A pair belongs to its newer
+    endpoint row (the lower index breaks revision ties), so replacing one row
+    invalidates its old pairs without scanning other rows. Shared rows only
+    memoize missing distances for unchanged candidates; seeding replaces a row
+    rather than overwriting shared values. Crowding counts retain one previous
+    numeric row alignment for lazy updates at the same cutoff, without retaining
+    prior workspaces or retired candidates. Cold queries and cutoff changes
+    still visit every pair. Counts are local to this workspace; niche-score
+    summaries are not cached because their trial-adjusted scores can change.
     """
 
     entries: tuple[CandidateEntry[CandidateT], ...]
     diversity_metric: DiversityMetric[CandidateT]
-    distances: dict[tuple[int, int], float]
+    _rows: list[_DistanceRow]
+    _revision: int
+    _crowding_snapshot: _CrowdingSnapshot | None
     compiled_distance_view: CompiledStructuredDistanceView[CandidateT] | None
 
     __slots__: ClassVar[tuple[str, ...]] = (
+        "_crowding_snapshot",
+        "_revision",
+        "_rows",
         "compiled_distance_view",
-        "distances",
         "diversity_metric",
         "entries",
     )
@@ -118,7 +165,9 @@ class BankDistanceWorkspace(Generic[CandidateT]):
     ) -> None:
         self.entries = tuple(entries)
         self.diversity_metric = diversity_metric
-        self.distances = {}
+        self._rows = []
+        self._revision = 0
+        self._crowding_snapshot = None
         candidates = tuple(entry.candidate for entry in self.entries)
         if compiled_distance_view is not None:
             if (
@@ -155,7 +204,8 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         -------
         BankDistanceWorkspace[CandidateT]
             Workspace aligned to ``entries`` with reusable pair distances
-            retained.
+            retained. The original workspace remains valid. Shrinking the bank
+            clears the cache because indices may have shifted.
         """
         if entries is self.entries and not invalidated_indices:
             return self
@@ -172,26 +222,19 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             diversity_metric=self.diversity_metric,
             compiled_distance_view=compiled_distance_view,
         )
-        if not self.distances or len(entries) < len(self.entries):
+        if not self._rows or len(entries) < len(self.entries):
             return workspace
 
-        common_entry_count = min(len(self.entries), len(entries))
-        invalidated_index_set = frozenset(
-            index for index in invalidated_indices if index >= 0
-        )
-        reusable_indices = frozenset(
-            index
-            for index in range(common_entry_count)
-            if index not in invalidated_index_set
-            and entries[index].candidate is self.entries[index].candidate
-        )
-        workspace.distances.update(
-            (key, distance)
-            for key, distance in self.distances.items()
-            if key[1] < common_entry_count
-            and key[0] in reusable_indices
-            and key[1] in reusable_indices
-        )
+        workspace._revision = self._revision + 1
+        workspace._rows = [
+            self._rows[index]
+            if index < len(self.entries)
+            and index not in invalidated_indices
+            and entry.candidate is self.entries[index].candidate
+            else _DistanceRow(workspace._revision)
+            for index, entry in enumerate(workspace.entries)
+        ]
+        workspace._crowding_snapshot = self._crowding_snapshot
         return workspace
 
     def distance(self, left_index: int, right_index: int) -> float:
@@ -225,19 +268,27 @@ class BankDistanceWorkspace(Generic[CandidateT]):
         if left_index == right_index:
             return 0.0
 
-        key = (
-            (left_index, right_index)
-            if left_index < right_index
-            else (right_index, left_index)
-        )
-        distance = self.distances.get(key)
+        if left_index > right_index:
+            left_index, right_index = right_index, left_index
+        if not self._rows:
+            self._rows = [_DistanceRow(self._revision) for _ in self.entries]
+
+        left_row = self._rows[left_index]
+        right_row = self._rows[right_index]
+        if left_row.revision >= right_row.revision:
+            row = left_row
+            other_index = right_index
+        else:
+            row = right_row
+            other_index = left_index
+        distance = row.distances.get(other_index)
         if distance is not None:
             return distance
 
         compiled_distance_view = self.compiled_distance_view
         if compiled_distance_view is None:
-            left_entry = self.entries[key[0]]
-            right_entry = self.entries[key[1]]
+            left_entry = self.entries[left_index]
+            right_entry = self.entries[right_index]
             distance = require_valid_distance(
                 validated_candidate_distance(
                     self.diversity_metric,
@@ -247,9 +298,9 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             )
         else:
             distance = require_valid_distance(
-                compiled_distance_view.distance(key[0], key[1])
+                compiled_distance_view.distance(left_index, right_index)
             )
-        self.distances[key] = distance
+        row.distances[other_index] = distance
         return distance
 
     def distances_to_candidate(self, candidate: CandidateT) -> tuple[float, ...]:
@@ -272,15 +323,10 @@ class BankDistanceWorkspace(Generic[CandidateT]):
                 require_valid_distance(distance)
                 for distance in compiled_distance_view.distances_to(candidate)
             )
-        return tuple(
-            require_valid_distance(
-                validated_candidate_distance(
-                    self.diversity_metric,
-                    candidate,
-                    entry.candidate,
-                )
-            )
-            for entry in self.entries
+        return distances_to_candidate(
+            entries=self.entries,
+            diversity_metric=self.diversity_metric,
+            candidate=candidate,
         )
 
     def is_aligned_with_entries(
@@ -349,7 +395,8 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             Raised when ``entry_index`` is outside the workspace entry range.
         ValueError
             Raised when ``distances`` is not aligned to :attr:`entries`, or when
-            a supplied non-self distance is invalid.
+            a supplied non-self distance is invalid. Invalid input leaves the
+            existing cache unchanged.
         """
         if entry_index < 0 or entry_index >= len(self.entries):
             msg = "entry_index must be a valid entry index"
@@ -359,19 +406,19 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             msg = "distances must align one-to-one with entries"
             raise ValueError(msg)
 
-        for other_index, distance in enumerate(distances):
-            if other_index == entry_index:
-                continue
+        seeded_distances = {
+            other_index: require_valid_distance(distance)
+            for other_index, distance in enumerate(distances)
+            if other_index != entry_index
+        }
+        if not self._rows:
+            self._rows = [_DistanceRow(self._revision) for _ in self.entries]
 
-            key = (
-                (entry_index, other_index)
-                if entry_index < other_index
-                else (other_index, entry_index)
-            )
-            self.distances[key] = require_valid_distance(distance)
+        self._revision += 1
+        self._rows[entry_index] = _DistanceRow(self._revision, seeded_distances)
 
     def crowding_counts(self, *, distance_cutoff: float) -> tuple[int, ...]:
-        """Count near neighbors for each entry using cached pair distances.
+        """Count near neighbors, updating only changed pairs at the same cutoff.
 
         Parameters
         ----------
@@ -393,14 +440,104 @@ class BankDistanceWorkspace(Generic[CandidateT]):
             msg = "distance_cutoff must be non-negative"
             raise ValueError(msg)
 
-        counts = [0] * len(self.entries)
-        for left_index in range(len(self.entries) - 1):
-            for right_index in range(left_index + 1, len(self.entries)):
-                if self.distance(left_index, right_index) < distance_cutoff:
-                    counts[left_index] += 1
-                    counts[right_index] += 1
+        entry_count = len(self.entries)
+        if entry_count < 2:
+            return (0,) * entry_count
 
-        return tuple(counts)
+        snapshot = self._crowding_snapshot
+        if snapshot is not None and snapshot.distance_cutoff == distance_cutoff:
+            changed_indices = tuple(
+                index
+                for index, row in enumerate(self._rows)
+                if index >= len(snapshot.rows) or row is not snapshot.rows[index]
+            )
+            if not changed_indices:
+                return snapshot.counts
+            counts = self._updated_crowding_counts(snapshot, changed_indices)
+        else:
+            counts = [0] * entry_count
+            compiled_view = self.compiled_distance_view
+            for left_index in range(entry_count - 1):
+                if (
+                    snapshot is None
+                    and type(self) is BankDistanceWorkspace
+                    and compiled_view is not None
+                    and compiled_view.plan.prefers_batched_distances(
+                        entry_count - left_index - 1
+                    )
+                ):
+                    self._seed_missing_crowding_row(left_index, compiled_view)
+                for right_index in range(left_index + 1, entry_count):
+                    if self.distance(left_index, right_index) < distance_cutoff:
+                        counts[left_index] += 1
+                        counts[right_index] += 1
+
+        # Publish only complete counts; a failed distance query is retryable.
+        result = tuple(counts)
+        self._crowding_snapshot = _CrowdingSnapshot(
+            distance_cutoff=distance_cutoff,
+            rows=tuple(self._rows),
+            counts=result,
+        )
+        return result
+
+    def _seed_missing_crowding_row(
+        self,
+        left_index: int,
+        compiled_view: CompiledStructuredDistanceView[CandidateT],
+    ) -> None:
+        """Batch only missing pairs, preserving seeded and shared row facts."""
+        if not self._rows:
+            self._rows = [_DistanceRow(self._revision) for _ in self.entries]
+
+        left_row = self._rows[left_index]
+        missing_indices: list[int] = []
+        destinations: list[tuple[_DistanceRow, int]] = []
+        for right_index in range(left_index + 1, len(self.entries)):
+            right_row = self._rows[right_index]
+            # Use the same newer-endpoint ownership as distance(), including ties.
+            if left_row.revision >= right_row.revision:
+                row, other_index = left_row, right_index
+            else:
+                row, other_index = right_row, left_index
+            if other_index not in row.distances:
+                missing_indices.append(right_index)
+                destinations.append((row, other_index))
+
+        if not compiled_view.plan.prefers_batched_distances(len(missing_indices)):
+            return
+
+        distances = compiled_view.distances_from(left_index, missing_indices)
+        for (row, other_index), distance in zip(destinations, distances, strict=True):
+            row.distances[other_index] = distance
+
+    def _updated_crowding_counts(
+        self,
+        snapshot: _CrowdingSnapshot,
+        changed_indices: tuple[int, ...],
+    ) -> list[int]:
+        """Apply each changed pair once while preserving distance-query order."""
+        entry_count = len(self.entries)
+        counts = [*snapshot.counts, *([0] * (entry_count - len(snapshot.counts)))]
+        changed_set = frozenset(changed_indices)
+        for left_index in range(entry_count - 1):
+            right_indices = (
+                range(left_index + 1, entry_count)
+                if left_index in changed_set
+                else changed_indices
+            )
+            for right_index in right_indices:
+                if right_index <= left_index:
+                    continue
+                was_neighbor = snapshot.are_neighbors(left_index, right_index)
+                is_neighbor = (
+                    self.distance(left_index, right_index) < snapshot.distance_cutoff
+                )
+                change = int(is_neighbor) - int(was_neighbor)
+                counts[left_index] += change
+                counts[right_index] += change
+
+        return counts
 
 
 def nearest_entry(
@@ -570,6 +707,45 @@ def crowding_counts(
                 counts[right_index] += 1
 
     return tuple(counts)
+
+
+def distances_to_candidate(
+    *,
+    entries: Sequence[CandidateEntry[CandidateT]],
+    diversity_metric: DiversityMetric[CandidateT],
+    candidate: CandidateT,
+) -> tuple[float, ...]:
+    """Return validated candidate-to-bank distances in entry order.
+
+    Parameters
+    ----------
+    entries : Sequence[CandidateEntry[CandidateT]]
+        Bank entries admitted through the owning space's validation boundary.
+    diversity_metric : DiversityMetric[CandidateT]
+        Metric whose public distance contract applies to custom implementations.
+    candidate : CandidateT
+        Query candidate already validated by the same space as the bank entries.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Finite non-negative distances aligned with ``entries``.
+
+    Raises
+    ------
+    ValueError
+        If a metric returns a non-finite or negative distance.
+    """
+    if supports_candidate_typed_structured_distance(diversity_metric):
+        return structured_distances_to_validated_candidates(
+            diversity_metric,
+            candidate,
+            (entry.candidate for entry in entries),
+        )
+    return tuple(
+        require_valid_distance(diversity_metric.distance(candidate, entry.candidate))
+        for entry in entries
+    )
 
 
 def validated_candidate_distance(

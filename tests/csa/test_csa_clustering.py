@@ -1085,12 +1085,11 @@ class CSAClusteringRuntimeTests:
             entries=entries,
             diversity_metric=RejectingDistance(),
         )
-        distance_workspace.distances.update(
-            {
-                (0, 1): 1.0,
-                (0, 2): 4.0,
-                (1, 2): 1.0,
-            }
+        distance_workspace.seed_entry_distances(
+            entry_index=0, distances=(0.0, 1.0, 4.0)
+        )
+        distance_workspace.seed_entry_distances(
+            entry_index=1, distances=(1.0, 0.0, 1.0)
         )
 
         scores = crowding_aware_scores(
@@ -1119,12 +1118,11 @@ class CSAClusteringRuntimeTests:
             entries=entries,
             diversity_metric=RejectingDistance(),
         )
-        distance_workspace.distances.update(
-            {
-                (0, 1): 1.0,
-                (0, 2): 4.0,
-                (1, 2): 1.0,
-            }
+        distance_workspace.seed_entry_distances(
+            entry_index=0, distances=(0.0, 1.0, 4.0)
+        )
+        distance_workspace.seed_entry_distances(
+            entry_index=1, distances=(1.0, 0.0, 1.0)
         )
 
         indices = crowded_indices(

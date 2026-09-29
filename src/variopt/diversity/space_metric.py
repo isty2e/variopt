@@ -1,7 +1,7 @@
 """Structured search-space diversity metrics derived from space semantics."""
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Generic, Protocol, TypeGuard, TypeVar
@@ -26,8 +26,14 @@ from ..spaces.geometry.contracts import StructuredSpaceGeometry
 from ..spaces.geometry.plan import (
     BuiltinStructuredGeometryPlan,
     EncodedStructuredCandidate,
+    PackedStructuredReferences,
     StructuredGeometryPlanIdentity,
     compile_builtin_geometry_plan,
+)
+from ..spaces.geometry.scalar import (
+    CategoricalSpaceGeometry,
+    IntegerSpaceGeometry,
+    RealSpaceGeometry,
 )
 from ..spaces.types import SpaceBoundaryValue, SpaceCandidateValue
 from .base import DiversityMetric
@@ -36,6 +42,12 @@ BoundaryT = TypeVar("BoundaryT")
 CandidateT = TypeVar("CandidateT", bound=SpaceCandidateValue)
 MetricCandidateT = TypeVar("MetricCandidateT")
 PlanCandidateT_contra = TypeVar("PlanCandidateT_contra", contravariant=True)
+
+_SCALAR_QUERY_GEOMETRY_TYPES = (
+    RealSpaceGeometry,
+    IntegerSpaceGeometry,
+    CategoricalSpaceGeometry,
+)
 
 
 class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
@@ -71,6 +83,21 @@ class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
     @property
     def reuses_candidate_structure(self) -> bool:
         """Return whether encoding avoids repeated candidate-structure traversal."""
+        ...
+
+    def prefers_batched_distances(self, reference_count: int) -> bool:
+        """Return whether a query amortizes this plan's array-packing cost.
+
+        Parameters
+        ----------
+        reference_count : int
+            Number of reference encodings in the query.
+
+        Returns
+        -------
+        bool
+            Whether batching is preferable to scalar distance evaluation.
+        """
         ...
 
     def encode_validated(
@@ -133,6 +160,49 @@ class CandidateGeometryPlan(Protocol[PlanCandidateT_contra]):
         """
         ...
 
+    def pack_references(
+        self,
+        references: Sequence[EncodedStructuredCandidate],
+    ) -> PackedStructuredReferences | None:
+        """Build a read-only projection for a reusable reference snapshot.
+
+        Parameters
+        ----------
+        references : Sequence[EncodedStructuredCandidate]
+            Ordered encodings owned by this plan.
+
+        Returns
+        -------
+        PackedStructuredReferences or None
+            Packed snapshot, or None when scalar kernels remain preferable.
+        """
+        ...
+
+    def squared_distances_to_packed(
+        self,
+        candidate: EncodedStructuredCandidate,
+        references: PackedStructuredReferences,
+        *,
+        reference_indices: Sequence[int] | None = None,
+    ) -> tuple[float, ...]:
+        """Query aligned packed references in the supplied row order.
+
+        Parameters
+        ----------
+        candidate : EncodedStructuredCandidate
+            Query encoding owned by this plan.
+        references : PackedStructuredReferences
+            Packed snapshot owned by this plan.
+        reference_indices : Sequence[int] or None, default=None
+            Reference indices, allowing duplicates. None selects every row.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Squared distances in selection order.
+        """
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
@@ -151,14 +221,19 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
     -----
     The view is derived acceleration state. It must not be persisted as
     optimizer truth or shared across metrics with distinct geometry plans.
+    Eligible snapshots pack read-only coordinates once for repeated queries;
+    a changed candidate snapshot owns new arrays rather than retaining history.
     """
 
     plan: CandidateGeometryPlan[MetricCandidateT] = field(repr=False)
     candidates: tuple[MetricCandidateT, ...] = field(repr=False)
     encodings: tuple[EncodedStructuredCandidate, ...] = field(repr=False)
+    _packed_references: PackedStructuredReferences | None = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
-        """Validate candidate, encoding, and plan alignment.
+        """Validate alignment and prepare eligible snapshot-local packed arrays.
 
         Raises
         ------
@@ -175,6 +250,13 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
         ):
             msg = "compiled distance encodings must belong to the view plan"
             raise ValueError(msg)
+        object.__setattr__(
+            self,
+            "_packed_references",
+            self.plan.pack_references(self.encodings)
+            if self.plan.prefers_batched_distances(len(self.encodings))
+            else None,
+        )
 
     @classmethod
     def from_candidates(
@@ -226,7 +308,8 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
         -------
         CompiledStructuredDistanceView[MetricCandidateT]
             View aligned to ``candidates``. Encodings are retained only when the
-            index is not invalidated and candidate identity is unchanged.
+            index is not invalidated and candidate identity is unchanged. An
+            entirely unchanged candidate snapshot retains the existing view.
         """
         candidate_tuple = tuple(candidates)
         invalidated_index_set = frozenset(
@@ -242,6 +325,11 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
             )
             for index, candidate in enumerate(candidate_tuple)
         )
+        if len(encodings) == len(self.encodings) and all(
+            encoding is self.encodings[index]
+            for index, encoding in enumerate(encodings)
+        ):
+            return self
         return type(self)(
             plan=self.plan,
             candidates=candidate_tuple,
@@ -304,6 +392,69 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
             leaf_count=self.plan.leaf_count,
         )
 
+    def distances_from(
+        self,
+        left_index: int,
+        right_indices: Sequence[int],
+    ) -> tuple[float, ...]:
+        """Return ordered RMS distances between existing snapshot encodings.
+
+        Parameters
+        ----------
+        left_index : int
+            Index of the source candidate in this snapshot.
+        right_indices : Sequence[int]
+            Reference indices, allowing duplicates and the source index.
+
+        Returns
+        -------
+        tuple[float, ...]
+            Distances aligned to ``right_indices``. Self-distance is zero.
+
+        Raises
+        ------
+        IndexError
+            If any index lies outside the represented snapshot.
+        ValueError
+            If a computed distance is negative or non-finite.
+        """
+        indices = tuple(right_indices)
+        entry_count = len(self.encodings)
+        if (
+            left_index < 0
+            or left_index >= entry_count
+            or any(index < 0 or index >= entry_count for index in indices)
+        ):
+            msg = "distance indices must reference compiled snapshot candidates"
+            raise IndexError(msg)
+
+        positions = tuple(
+            position for position, index in enumerate(indices) if index != left_index
+        )
+        distances = [0.0] * len(indices)
+        if positions:
+            if self._packed_references is None:
+                squared_distances = self.plan.squared_distances_to_many(
+                    self.encodings[left_index],
+                    tuple(self.encodings[indices[position]] for position in positions),
+                )
+            else:
+                squared_distances = self.plan.squared_distances_to_packed(
+                    self.encodings[left_index],
+                    self._packed_references,
+                    reference_indices=tuple(
+                        indices[position] for position in positions
+                    ),
+                )
+            for position, squared_distance in zip(
+                positions, squared_distances, strict=True
+            ):
+                distances[position] = _distance_from_compiled_squared_distance(
+                    squared_distance=squared_distance,
+                    leaf_count=self.plan.leaf_count,
+                )
+        return tuple(distances)
+
     def distances_to(
         self,
         candidate: MetricCandidateT,
@@ -321,15 +472,19 @@ class CompiledStructuredDistanceView(Generic[MetricCandidateT]):
             Distances aligned to :attr:`candidates`.
         """
         encoded_candidate = self.plan.encode_validated(candidate)
+        squared_distances = (
+            self.plan.squared_distances_to_many(encoded_candidate, self.encodings)
+            if self._packed_references is None
+            else self.plan.squared_distances_to_packed(
+                encoded_candidate, self._packed_references
+            )
+        )
         return tuple(
             _distance_from_compiled_squared_distance(
                 squared_distance=squared_distance,
                 leaf_count=self.plan.leaf_count,
             )
-            for squared_distance in self.plan.squared_distances_to_many(
-                encoded_candidate,
-                self.encodings,
-            )
+            for squared_distance in squared_distances
         )
 
 
@@ -361,6 +516,14 @@ class ValidatedStructuredDistanceMetric(Protocol[MetricCandidateT]):
         right: MetricCandidateT,
     ) -> float:
         """Return distance without repeating candidate-shape validation."""
+        ...
+
+    def _distances_to_validated_candidates(
+        self,
+        candidate: MetricCandidateT,
+        references: Iterable[MetricCandidateT],
+    ) -> tuple[float, ...]:
+        """Return ordered distances without repeating geometry dispatch."""
         ...
 
 
@@ -477,6 +640,46 @@ class StructuredSpaceDiversityMetric(
 
         return self.distance(left, right)
 
+    def _distances_to_validated_candidates(
+        self,
+        candidate: CandidateT,
+        references: Iterable[CandidateT],
+    ) -> tuple[float, ...]:
+        """Bind validated geometry once for an ordered candidate query."""
+        geometry = self.validated_part_values_geometry
+        if geometry is None:
+            return tuple(
+                self.distance(candidate, reference) for reference in references
+            )
+
+        # Subclasses may override the distance-parts contract independently.
+        if isinstance(geometry, _SCALAR_QUERY_GEOMETRY_TYPES) and (
+            type(geometry) in _SCALAR_QUERY_GEOMETRY_TYPES
+        ):
+            return tuple(
+                _distance_from_part_values(
+                    overlap_squared_distance=squared_distance,
+                    shared_leaf_count=1,
+                    topology_mismatch_leaf_count=0,
+                )
+                for squared_distance in geometry.iter_squared_distances_for_validated_candidates(
+                    candidate, references
+                )
+            )
+
+        distance_part_values = geometry.distance_part_values_for_validated_candidates
+        distances: list[float] = []
+        for reference in references:
+            overlap, shared, mismatched = distance_part_values(candidate, reference)
+            distances.append(
+                _distance_from_part_values(
+                    overlap_squared_distance=overlap,
+                    shared_leaf_count=shared,
+                    topology_mismatch_leaf_count=mismatched,
+                )
+            )
+        return tuple(distances)
+
     @override
     def distance(self, left: CandidateT, right: CandidateT) -> float:
         """Return the RMS normalized leaf distance between two candidates.
@@ -566,6 +769,41 @@ def structured_distance_between_validated_candidates(
     already crossed the matching space validation boundary.
     """
     return metric._distance_between_validated_candidates(left, right)
+
+
+def structured_distances_to_validated_candidates(
+    metric: ValidatedStructuredDistanceMetric[MetricCandidateT],
+    candidate: MetricCandidateT,
+    references: Iterable[MetricCandidateT],
+) -> tuple[float, ...]:
+    """Return ordered distances for candidates admitted by the metric's space.
+
+    Parameters
+    ----------
+    metric : ValidatedStructuredDistanceMetric[MetricCandidateT]
+        Exact structured metric selected at the calling boundary.
+    candidate : MetricCandidateT
+        Canonical query candidate already validated by the owning space.
+    references : Iterable[MetricCandidateT]
+        Canonical reference candidates, consumed once in input order.
+
+    Returns
+    -------
+    tuple[float, ...]
+        Finite non-negative distances aligned with the reference candidates.
+        Empty references produce an empty tuple.
+
+    Raises
+    ------
+    ValueError
+        If geometry produces an invalid distance or a pair has no leaf paths.
+
+    Notes
+    -----
+    This internal algebra shares the scalar RMS calculation and its numerical
+    checks. It does not replace the public candidate-validation boundary.
+    """
+    return metric._distances_to_validated_candidates(candidate, references)
 
 
 def _distance_from_compiled_squared_distance(

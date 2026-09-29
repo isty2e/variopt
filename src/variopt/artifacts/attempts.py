@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import InitVar, dataclass, field
-from typing import Generic, Protocol, TypeAlias, TypeGuard, overload, runtime_checkable
+from typing import Generic, Protocol, TypeAlias, TypeGuard, overload
 
 from typing_extensions import Self, TypeVar
 
@@ -17,6 +17,7 @@ from .records import (
     Observation,
     ObservationPayload,
     RequestAlignedEvaluationRecord,
+    is_request_aligned_record,
 )
 from .refinement import CandidateRefinement, require_matching_refined_candidate
 from .requests import EvaluationRequest, Proposal
@@ -69,29 +70,6 @@ class _ScalarObservationView(Protocol[_ScalarObservationViewCandidateT_co]):
     @property
     def elapsed_seconds(self) -> float | None:
         """Return the optional wall-clock runtime."""
-        ...
-
-
-@runtime_checkable
-class _RequestAlignedPayloadShape(Protocol):
-    """Runtime-checkable shape for request-aligned compatibility payloads.
-
-    Notes
-    -----
-    This is intentionally structural. ``EvaluationSuccess`` accepts arbitrary
-    request-free protocol payloads, but any payload exposing both ``request`` and
-    ``candidate`` is treated as a request-aligned compatibility payload and must
-    belong to the success request.
-    """
-
-    @property
-    def request(self) -> object:
-        """Return the payload's request slot."""
-        ...
-
-    @property
-    def candidate(self) -> object:
-        """Return the payload's evaluated candidate slot."""
         ...
 
 
@@ -559,7 +537,7 @@ class EvaluationSuccess(FrozenGenericSlotsCompat, Generic[CandidateT, PayloadT_c
                 raise TypeError(msg)
 
         payload = self.payload
-        if _is_request_aligned_payload(payload):
+        if is_request_aligned_record(payload):
             self._validate_record_payload_alignment(
                 payload,
                 candidate_equal=candidate_equal,
@@ -1195,22 +1173,13 @@ def _is_candidate_refinement(
     return type(refinement) is CandidateRefinement
 
 
-def _is_request_aligned_payload(
-    payload: object,
-) -> TypeGuard[RequestAlignedEvaluationRecord[object]]:
-    if not isinstance(payload, _RequestAlignedPayloadShape):
-        return False
-
-    return type(payload.request) is EvaluationRequest
-
-
 def _is_request_aligned_payload_in_candidate_domain(
     payload: object,
     candidate: CandidateT,
 ) -> TypeGuard[RequestAlignedEvaluationRecord[CandidateT]]:
     """Narrow an erased payload generic after caller-side candidate alignment."""
     _ = candidate
-    return _is_request_aligned_payload(payload)
+    return is_request_aligned_record(payload)
 
 
 def _is_materializable_record_payload(

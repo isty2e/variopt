@@ -912,9 +912,12 @@ def _evaluate_step_feedback(
         msg = "run_method returned more proposals than requested"
         raise ValueError(msg)
 
-    proposal_kernel_hints = study.run_method.proposal_kernel_hints(
-        next_state,
-        proposals,
+    # A non-consuming kernel alone does not make a custom hint hook dispensable.
+    proposal_kernel_hints = (
+        None
+        if type(study.kernel) is DirectKernel
+        and study.run_method._supports_unused_kernel_hint_elision()
+        else study.run_method.proposal_kernel_hints(next_state, proposals)
     )
     proposal_evaluation_specs = study.run_method.proposal_evaluation_specs(
         next_state,
@@ -1011,12 +1014,14 @@ def _evaluate_step_feedback(
             None if evaluation_budget is None else evaluation_budget.remaining
         )
         kernel_attempts = study.kernel.run(top_level_query, batch_executor)
-        requests = requests_for_query(top_level_query)
-        validate_aligned_attempts(
-            requests,
-            kernel_attempts,
-            candidate_equal=study.problem.space.candidates_equal,
-        )
+        # DirectKernel returns the runner's already-validated batch unchanged.
+        # Subclasses may replace it, so their output remains a separate boundary.
+        if type(study.kernel) is not DirectKernel:
+            validate_aligned_attempts(
+                top_level_requests,
+                kernel_attempts,
+                candidate_equal=study.problem.space.candidates_equal,
+            )
         reported_evaluation_count = kernel_attempts.evaluation_count
         step_evaluation_count = _consume_reported_evaluation_cost(
             evaluation_budget=evaluation_budget,
