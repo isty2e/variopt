@@ -57,8 +57,7 @@ execution uses the coordinator-owned kernel path.
 
 ## Supported request-local placement
 
-The table describes the development version. The `0.2.0` limitation is noted
-below.
+The table describes `0.3.0`. See below for the `0.2.0` limitation.
 
 | Evaluator and execution model | Placement |
 | --- | --- |
@@ -75,12 +74,12 @@ crosses a process serialization boundary. The problem, objective, kernel,
 candidate, proposal-local context, and returned payload must be serializable.
 
 Both `problem_transport="per_request"` and `"worker_session"` support
-refinement-bearing results in the development version.
+refinement-bearing results in `0.3.0`.
 
 !!! warning "0.2.0 process-result limitation"
 
-    The refinement transport fix is not yet released. In `0.2.0`, `loky` can
-    fail to deserialize request-local successes carrying `CandidateRefinement`,
+    In `0.2.0`, `loky` can fail to deserialize request-local successes carrying
+    `CandidateRefinement`,
     including results with large integer or floating-point candidates. Use
     threading for these episodes on `0.2.0`; ordinary objective evaluation with
     `loky` is unaffected.

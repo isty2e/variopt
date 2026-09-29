@@ -11,7 +11,7 @@ pip install .
 For the tagged GitHub release:
 
 ```bash
-pip install "variopt @ git+https://github.com/isty2e/variopt.git@v0.2.0"
+pip install "variopt @ git+https://github.com/isty2e/variopt.git@v0.3.0"
 ```
 
 The core install includes:
@@ -35,7 +35,7 @@ pip install ".[mpi]"
 For a GitHub tag install, use the direct URL form with extras, for example:
 
 ```bash
-pip install "variopt[docs] @ git+https://github.com/isty2e/variopt.git@v0.2.0"
+pip install "variopt[docs] @ git+https://github.com/isty2e/variopt.git@v0.3.0"
 ```
 
 Use them as follows:

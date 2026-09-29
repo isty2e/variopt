@@ -51,7 +51,7 @@ from variopt.study import RunExecutionFailed, Study
 
 
 class RootFacadeExportTests:
-    """Lock the 0.2.0 variopt root facade to direct-use and common contract nouns."""
+    """Keep the root facade focused on direct-use and common contract nouns."""
 
     def test_root_facade_reexports_common_direct_use_and_contract_nouns(self) -> None:
         assert variopt.CandidateRefinement is CandidateRefinement

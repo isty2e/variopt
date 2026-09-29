@@ -72,9 +72,9 @@ result, final_state = study.optimize(
 
 `batch_size=1` is supported but exposes no proposal-level parallelism.
 
-### Use process workers in the development version
+### Use process workers
 
-The development version supports refinement-bearing episodes with `loky` in
+Version `0.3.0` supports refinement-bearing episodes with `loky` in
 both `problem_transport="per_request"` and `"worker_session"` modes. For example,
 replace the threading study above with:
 
@@ -103,9 +103,9 @@ the lifetime and mutability constraints of `"worker_session"`.
 
 !!! warning "0.2.0 requires a workaround"
 
-    The fix above has not yet been released. In `0.2.0`, `loky` can fail to
-    deserialize episode results carrying `CandidateRefinement`, including
-    results with large integer or floating-point candidates. Use
+    In `0.2.0`, `loky` can fail to deserialize episode results carrying
+    `CandidateRefinement`, including results with large integer or floating-point
+    candidates. Use
     `backend="threading"` for these episodes on `0.2.0`. Ordinary Joblib objective
     evaluation with `loky` is unaffected.
 

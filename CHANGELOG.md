@@ -8,6 +8,8 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
 ### Breaking
 
 - Numeric space constructors now reject unsupported bounds with `ValueError`.
