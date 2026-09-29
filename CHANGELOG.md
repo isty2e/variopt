@@ -8,45 +8,7 @@ format. Stability guarantees for the public surface are documented in the
 
 ## [Unreleased]
 
-### Changed
-
-- CSA batches local-search RNG snapshot construction, reducing repeated generator
-  initialization for built-in and custom kernels. Hint hooks, derived streams,
-  and checkpoint formats are unchanged.
-- Study avoids a second alignment pass when the exact built-in `DirectKernel`
-  returns an already-validated evaluator batch. Kernel subclasses retain separate
-  output validation. Built-in evaluation payloads and records also avoid repeated
-  structural protocol inspection; custom record and refinement checks remain in place.
-- Generic Study execution skips unused local-search hints for the exact built-in
-  `CSAOptimizer` and `DirectKernel` combination. Custom run-method hooks and
-  kernel subclasses keep their existing behavior; local-search RNG streams and
-  checkpoint formats are unchanged.
-- CSA `tell()` combines pending-proposal removal and generation buffering in one
-  engine snapshot. Completed generations also avoid intermediate snapshots before
-  bank updates. Feedback order, failure handling, and checkpoint formats are unchanged.
-- Large structured bank snapshots reuse read-only coordinate arrays across
-  distance queries instead of repacking references each time. Candidate changes
-  rebuild the arrays; small banks and unsupported numeric ranges keep their
-  existing paths. Distance arithmetic and checkpoint formats are unchanged.
-- Built-in structured distance plans batch larger queries with bounded NumPy
-  arrays while preserving scalar arithmetic and composite sum order. Small
-  queries and numeric ranges that cannot be represented safely retain the
-  scalar path. Candidate, RNG, and checkpoint formats are unchanged.
-- CSA binds structured geometry once per trial-to-bank distance query on the
-  scalar path instead of redispatching each candidate pair. Distance arithmetic,
-  candidate order, and custom metric callbacks are unchanged.
-- Scalar distance queries prepare the numeric span and the query candidate's
-  logarithmic coordinate once, without per-pair distance-parts tuples. RMS
-  arithmetic and custom geometry overrides are unchanged.
-- CSA bank updates reuse unchanged distance-cache rows instead of copying all
-  cached pairs after each admission. Retained bank snapshots, search decisions,
-  and checkpoint formats are unchanged.
-- CSA reuses crowding counts within a bank-update batch and updates only pairs
-  affected by changed slots when the cutoff is unchanged. Eligible cold queries
-  batch missing distances for exact built-in structured spaces without
-  overwriting seeded distances or bypassing custom metric callbacks. Initial
-  queries and cutoff changes still scan all pairs, so their complexity remains
-  quadratic in bank size. Niche-score calculations are unchanged.
+## [0.3.0] - 2026-09-29
 
 ### Breaking
 
@@ -57,25 +19,36 @@ format. Stability guarantees for the public surface are documented in the
   collapse after float/log conversion. Rescale unsupported intervals or use a
   custom space for different arithmetic. No deprecation shim is provided:
   retaining these declarations would preserve sampling failures, division by
-  zero, or non-finite distances. Arithmetic and RNG behavior within the supported
-  ranges are unchanged.
+  zero, or non-finite distances.
 - Replaced `CSAOptimizer.propose_candidate(state)` with `emit_proposal(state)`.
   Overrides now return `(proposal, tracks_generation, planned_provenance, state)`:
   the first item is an issued `Proposal`, not a raw candidate. The returned state
   must already contain its allocated ID and pending registration, plus queue
   advancement and generation tracking for generated children. Leave provenance
   binding to `ask()`, which still registers it at the end of the batch.
-  No compatibility shim is retained: the old hook exposed a dequeued but unissued
-  state and required separate ID-allocation and registration transitions. The new
-  hook makes issuance one operation. The `ask()`/`tell()` and checkpoint formats
-  are unchanged.
+  No compatibility shim is retained: issuance must allocate the ID and register
+  the proposal in one state transition, which the old raw-candidate contract did
+  not guarantee. Ordinary `ask()`/`tell()` callers do not need to change.
+
+### Changed
+
+- Reduced framework overhead in CSA bank updates, structured distance queries,
+  proposal processing, and Study execution, including local-search setup for
+  custom kernels. For supported inputs, these optimizations preserve distance
+  arithmetic, search trajectories, RNG streams, evaluation budgets, tracing, and
+  checkpoint formats.
+  Custom metric and kernel hooks retain their behavior. Initial crowding queries
+  and cutoff changes still require quadratic work in bank size.
+- Reorganized the documentation around step-by-step tutorials and focused task
+  guides, with separate conceptual explanations and reference contracts.
+  Added guides for checkpoint/resume, exact-async evaluation, Joblib worker
+  problem reuse, and permutation optimization.
 
 ### Fixed
 
 - Joblib's `loky` backend can now return local-search refinements with large
   integer or floating-point candidates without failing to deserialize them.
-  Restored successes retain alignment evidence without serializing candidate
-  equality callables; the coordinator still validates them before assimilation.
+  Both `per_request` and `worker_session` problem transport modes are supported.
 - CSA generation tracing no longer fails when a perturbation schedule has no
   mutation family. Regular-only, initial-only, and combined regular/initial
   schedules can now be traced without changing their proposals or RNG state.

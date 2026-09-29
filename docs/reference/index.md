@@ -2,8 +2,7 @@
 
 Reference pages describe the supported public surface and stable import paths.
 
-This section is narrower than the full source tree. It should track the facade
-modules that `0.2.0` intends to support rather than every importable internal
+This section covers the supported facade modules, not every importable internal
 submodule.
 
 ## Current Reference Areas
